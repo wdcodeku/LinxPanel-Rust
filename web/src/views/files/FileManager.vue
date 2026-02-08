@@ -181,7 +181,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { listFiles, readFileContent, writeFileContent, mkdirApi, deletePathApi, renamePathApi, execCmd, fileInfo, chmodApi } from '@/api'
 import { useI18n } from '@/i18n'
 import { RefreshRight, FolderAdd, DocumentAdd, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select } from '@element-plus/icons-vue'
@@ -192,7 +193,12 @@ const { t } = useI18n()
 const props = defineProps<{ initPath?: string; pickerMode?: boolean }>()
 const emit = defineEmits<{ (e: 'select', path: string): void }>()
 
-const currentPath = ref(props.initPath || '/')
+const route = useRoute()
+const routePath = computed(() => {
+  const p = route.query.path
+  return typeof p === 'string' ? p : ''
+})
+const currentPath = ref(normPath(props.initPath || routePath.value || '/'))
 const files = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'list' | 'grid'>('list')
@@ -200,7 +206,7 @@ const viewMode = ref<'list' | 'grid'>('list')
 const selectedSet = reactive(new Set<string>())
 const lastClicked = ref('')
 
-const navHistory = ref<string[]>([props.initPath || '/'])
+const navHistory = ref<string[]>([currentPath.value])
 const navIndex = ref(0)
 const canGoBack = computed(() => navIndex.value > 0)
 const canGoForward = computed(() => navIndex.value < navHistory.value.length - 1)
@@ -556,6 +562,16 @@ function fmtSize(b: number) {
   const i = Math.floor(Math.log(b) / Math.log(1024))
   return (b / Math.pow(1024, i)).toFixed(1) + ' ' + u[i]
 }
+
+watch(
+  () => route.query.path,
+  (newPath) => {
+    if (props.initPath) return
+    if (typeof newPath !== 'string' || !newPath.trim()) return
+    const targetPath = normPath(newPath)
+    if (targetPath !== currentPath.value) navigate(targetPath)
+  },
+)
 
 onMounted(() => { loadFiles(); document.addEventListener('click', closeAllCtx) })
 onUnmounted(() => { document.removeEventListener('click', closeAllCtx) })

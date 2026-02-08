@@ -19,6 +19,10 @@ export const stopSite = (id: number) => request.post(`/sites/${id}/stop`)
 // Domains
 export const getDomains = (siteId: number) => request.get(`/sites/${siteId}/domains`)
 export const addDomain = (siteId: number, data: any) => request.post(`/sites/${siteId}/domains`, data)
+export const reorderDomains = (siteId: number, data: { ordered_ids: number[] }) =>
+  request.post(`/sites/${siteId}/domains/reorder`, data)
+export const updateDomain = (siteId: number, id: number, data: { domain: string }) =>
+  request.put(`/sites/${siteId}/domains/${id}`, data)
 export const removeDomain = (siteId: number, id: number) => request.delete(`/sites/${siteId}/domains/${id}`)
 
 // Settings

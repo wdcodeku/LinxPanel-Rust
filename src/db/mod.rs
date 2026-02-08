@@ -42,12 +42,43 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
             site_id INTEGER NOT NULL,
             domain TEXT NOT NULL,
             is_primary INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
         )",
     )
     .execute(pool)
     .await?;
+
+    let has_sort_order: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM pragma_table_info('domains') WHERE name = 'sort_order' LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
+    if has_sort_order.is_none() {
+        sqlx::query("ALTER TABLE domains ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+
+        let existing_domains: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT id, site_id FROM domains ORDER BY site_id ASC, is_primary DESC, id ASC",
+        )
+        .fetch_all(pool)
+        .await?;
+        let mut current_site_id = i64::MIN;
+        let mut index: i64 = 0;
+        for (domain_id, site_id) in existing_domains {
+            if site_id != current_site_id {
+                current_site_id = site_id;
+                index = 0;
+            }
+            sqlx::query("UPDATE domains SET sort_order = ? WHERE id = ?")
+                .bind(index)
+                .bind(domain_id)
+                .execute(pool)
+                .await?;
+            index += 1;
+        }
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS settings (

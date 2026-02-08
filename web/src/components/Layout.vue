@@ -54,7 +54,7 @@
           <el-button circle size="small" @click="toggleTheme" class="theme-toggle">
             <el-icon :size="16"><Sunny v-if="userStore.theme === 'dark'" /><Moon v-else /></el-icon>
           </el-button>
-          <el-dropdown trigger="click">
+          <el-dropdown trigger="click" popper-class="user-dropdown-popper">
             <span class="user-info">
               <el-avatar :size="28" :icon="UserFilled" />
               <span class="user-name">{{ userStore.username }}</span>

@@ -1,87 +1,222 @@
 <template>
   <div class="site-detail" v-loading="loading">
-    <div class="page-header">
-      <div class="page-title">
-        <el-button :icon="ArrowLeft" text @click="$router.push('/sites')" />
-        <h2>{{ site.name }}</h2>
-        <el-tag :type="site.status === 'running' ? 'success' : 'danger'" size="small" effect="dark">
-          {{ site.status === 'running' ? 'Running' : 'Stopped' }}
+    <div class="detail-header">
+      <div class="title-row">
+        <el-button :icon="ArrowLeft" text class="back-btn" @click="$router.push('/sites')" />
+        <h2 class="site-name">{{ site.name || '-' }}</h2>
+        <el-tag :type="site.status === 'running' ? 'success' : 'danger'" size="small" effect="light">
+          {{ site.status === 'running' ? t('si.running') : t('si.stopped') }}
         </el-tag>
       </div>
-      <div>
-        <el-button v-if="site.status==='stopped'" type="success" @click="handleStart">Start</el-button>
-        <el-button v-else type="warning" @click="handleStop">Stop</el-button>
+      <div class="header-actions">
+        <el-button v-if="site.status==='stopped'" type="success" @click="handleStart">{{ t('si.start') }}</el-button>
+        <el-button v-else type="warning" @click="handleStop">{{ t('si.stop') }}</el-button>
       </div>
     </div>
 
-    <el-tabs v-model="activeTab" type="border-card">
-      <el-tab-pane label="基本信息" name="info">
-        <el-form :model="editForm" label-width="100px" style="max-width:600px;margin-top:16px">
-          <el-form-item label="Site Name">
-            <el-input v-model="editForm.name" />
-          </el-form-item>
-          <el-form-item label="Type">
-            <el-radio-group v-model="editForm.site_type">
-              <el-radio value="static">静态</el-radio>
-              <el-radio value="proxy">反向代理</el-radio>
-              <el-radio value="php">PHP</el-radio>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item label="Root Dir">
-            <el-input v-model="editForm.doc_root" />
-          </el-form-item>
-          <el-form-item v-if="editForm.site_type==='proxy'" label="代理地址">
-            <el-input v-model="editForm.proxy_pass" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="handleSave">保存</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
+    <div class="section-nav">
+      <button
+        type="button"
+        class="section-item"
+        :class="{ active: activeTab === 'info' }"
+        @click="activeTab = 'info'"
+      >
+        {{ t('si.detailInfoTab') }}
+      </button>
+      <button
+        type="button"
+        class="section-item"
+        :class="{ active: activeTab === 'domains' }"
+        @click="activeTab = 'domains'"
+      >
+        {{ t('si.detailDomainTab') }}
+      </button>
+      <button
+        type="button"
+        class="section-item"
+        :class="{ active: activeTab === 'config' }"
+        @click="activeTab = 'config'"
+      >
+        {{ t('si.detailConfigTab') }}
+      </button>
+    </div>
 
-      <el-tab-pane label="Domain Management" name="domains">
-        <div style="margin-bottom:16px">
-          <el-input v-model="newDomain" placeholder="输入Domain" style="width:300px;margin-right:8px" @keyup.enter="handleAddDomain" />
-          <el-button type="primary" @click="handleAddDomain">添加</el-button>
-        </div>
-        <el-table :data="domains" stripe>
-          <el-table-column prop="domain" label="Domain" />
-          <el-table-column prop="is_primary" label="主Domain" width="100">
-            <template #default="{ row }">
-              <el-tag v-if="row.is_primary" type="success" size="small">主</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="created_at" label="添加时间" width="180" />
-          <el-table-column label="Actions" width="120">
-            <template #default="{ row }">
-              <el-button type="danger" size="small" text @click="handleRemoveDomain(row.id)">Delete</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+    <el-card v-if="activeTab === 'info'" shadow="hover" class="detail-card">
+      <el-form :model="editForm" label-width="100px" class="info-form">
+        <el-form-item :label="t('si.siteName')">
+          <el-input v-model="editForm.name" />
+        </el-form-item>
+        <el-form-item :label="t('si.siteType')">
+          <el-radio-group v-model="editForm.site_type">
+            <el-radio value="static">{{ t('si.typeStatic') }}</el-radio>
+            <el-radio value="proxy">{{ t('si.typeProxy') }}</el-radio>
+            <el-radio value="php">{{ t('si.typePhp') }}</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item :label="t('si.rootDir')">
+          <el-input v-model="editForm.doc_root" />
+        </el-form-item>
+        <el-form-item v-if="editForm.site_type==='proxy'" :label="t('si.proxyAddress')">
+          <el-input v-model="editForm.proxy_pass" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="handleSave">{{ t('save') }}</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
 
-      <el-tab-pane label="配置文件" name="config">
-        <el-input v-model="editForm.extra_config" type="textarea" :rows="16" placeholder="自定义 Nginx 配置..." />
-        <el-button type="primary" style="margin-top:12px" @click="handleSave">Save Config</el-button>
-      </el-tab-pane>
-    </el-tabs>
+    <el-card v-else-if="activeTab === 'domains'" shadow="hover" class="detail-card">
+      <div class="domain-toolbar">
+        <el-input
+          v-model="newDomain"
+          :placeholder="t('si.domainPlaceholderWithPort')"
+          class="domain-input"
+          @keyup.enter="handleAddDomain"
+        />
+        <el-button type="primary" @click="handleAddDomain">{{ t('create') }}</el-button>
+      </div>
+      <div class="domain-tip">{{ t('si.domainWithPortTip') }}</div>
+      <el-table :data="domains" stripe class="domain-table">
+        <el-table-column :label="t('si.domainOrder')" width="96" align="left" header-align="left">
+          <template #default="{ $index }">
+            <div
+              class="domain-order-cell"
+              :class="{
+                'is-dragging': draggingDomainIndex === $index,
+                'is-drop-target': draggingDomainIndex !== null && dragOverDomainIndex === $index && draggingDomainIndex !== $index,
+              }"
+              @dragover.prevent="handleDomainDragOver($index, $event)"
+              @drop="handleDomainDrop($index, $event)"
+            >
+              <button
+                type="button"
+                class="drag-handle-btn"
+                draggable="true"
+                :title="t('si.dragToSort')"
+                @dragstart="handleDomainDragStart($index, $event)"
+                @dragend="handleDomainDragEnd"
+              >
+                <span class="drag-grip">⋮⋮</span>
+              </button>
+              <span class="order-text">{{ $index + 1 }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('si.domain')"
+          min-width="220"
+          align="left"
+          header-align="left"
+          class-name="domain-col"
+          header-class-name="domain-col-header"
+        >
+          <template #default="{ row }">
+            <div v-if="editingDomainId === row.id" class="domain-edit-row">
+              <el-input
+                v-model="editingDomainValue"
+                size="small"
+                :placeholder="t('si.domainPlaceholderWithPort')"
+                @keydown.enter.prevent="handleSaveEditDomain(row)"
+                @blur="handleEditInputBlur"
+              />
+              <el-button
+                size="small"
+                circle
+                class="action-btn action-primary"
+                @mousedown.prevent="markEditActionMouseDown"
+                @click="handleSaveEditDomain(row)"
+              >
+                <el-icon><Check /></el-icon>
+              </el-button>
+              <el-button
+                size="small"
+                circle
+                class="action-btn"
+                @mousedown.prevent="markEditActionMouseDown"
+                @click="cancelEditDomain"
+              >
+                <el-icon><Close /></el-icon>
+              </el-button>
+            </div>
+            <div v-else class="domain-display-row">
+              <el-link
+                type="primary"
+                class="domain-link"
+                :href="toDomainUrl(row.domain)"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {{ getDomainHost(row.domain) }}
+              </el-link>
+              <el-tooltip :content="t('si.editDomain')" :show-after="250">
+                <el-button size="small" circle class="action-btn domain-edit-btn" @click="startEditDomain(row)">
+                  <el-icon><Edit /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('si.domainPort')" width="120" align="center">
+          <template #default="{ row }">
+            <span class="port-text">{{ getDomainPort(row.domain) || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" :label="t('si.domainAddedAt')" width="180" />
+        <el-table-column width="74" align="right" header-align="right">
+          <template #header></template>
+          <template #default="{ row }">
+            <div class="domain-actions">
+              <el-tooltip :content="t('delete')" :show-after="250">
+                <el-button size="small" circle class="action-btn action-danger" @click="handleRemoveDomain(row.id)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card v-else shadow="hover" class="detail-card">
+      <el-input v-model="editForm.extra_config" type="textarea" :rows="16" :placeholder="t('si.configPlaceholder')" />
+      <div class="config-actions">
+        <el-button type="primary" @click="handleSave">{{ t('si.saveConfig') }}</el-button>
+      </div>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getSite, updateSite, startSite, stopSite, getDomains, addDomain, removeDomain } from '@/api'
+import { useI18n } from '@/i18n'
+import {
+  getSite,
+  updateSite,
+  startSite,
+  stopSite,
+  getDomains,
+  addDomain,
+  reorderDomains,
+  updateDomain,
+  removeDomain,
+} from '@/api'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ArrowLeft, Edit, Delete, Check, Close } from '@element-plus/icons-vue'
 
 const route = useRoute()
+const { t } = useI18n()
 const siteId = Number(route.params.id)
 const loading = ref(false)
 const activeTab = ref('info')
 const site = ref<any>({})
 const domains = ref<any[]>([])
 const newDomain = ref('')
+const editingDomainId = ref<number | null>(null)
+const editingDomainValue = ref('')
+const suppressNextEditBlur = ref(false)
+const draggingDomainIndex = ref<number | null>(null)
+const dragOverDomainIndex = ref<number | null>(null)
 
 const editForm = reactive({
   name: '',
@@ -94,71 +229,428 @@ const editForm = reactive({
 onMounted(async () => {
   loading.value = true
   try {
-    const [siteRes, domainRes]: any[] = await Promise.all([getSite(siteId), getDomains(siteId)])
-    if (siteRes.success) {
-      site.value = siteRes.data
-      Object.assign(editForm, {
-        name: siteRes.data.name,
-        site_type: siteRes.data.site_type,
-        doc_root: siteRes.data.doc_root,
-        proxy_pass: siteRes.data.proxy_pass || '',
-        extra_config: siteRes.data.extra_config || '',
-      })
-    }
-    if (domainRes.success) domains.value = domainRes.data
+    await Promise.all([loadSite(), loadDomains()])
   } finally {
     loading.value = false
   }
 })
 
+async function loadSite() {
+  const siteRes: any = await getSite(siteId)
+  if (siteRes.success && siteRes.data) {
+    site.value = siteRes.data
+    Object.assign(editForm, {
+      name: siteRes.data.name,
+      site_type: siteRes.data.site_type,
+      doc_root: siteRes.data.doc_root,
+      proxy_pass: siteRes.data.proxy_pass || '',
+      extra_config: siteRes.data.extra_config || '',
+    })
+  }
+}
+
+async function loadDomains() {
+  const domainRes: any = await getDomains(siteId)
+  if (domainRes.success) domains.value = domainRes.data || []
+}
+
+function normalizeDomainInput(value: string) {
+  return value
+    .trim()
+    .replace(/^[a-z]+:\/\//i, '')
+    .replace(/\/.*$/, '')
+}
+
+function splitDomain(value: string) {
+  const domain = String(value || '').trim()
+  const match = domain.match(/^(.*):(\d{1,5})$/)
+  if (!match) return { host: domain, port: '' }
+  return { host: match[1], port: match[2] }
+}
+
+function getDomainHost(value: string) {
+  return splitDomain(value).host
+}
+
+function getDomainPort(value: string) {
+  return splitDomain(value).port
+}
+
+function toDomainUrl(value: string) {
+  const domain = String(value || '').trim()
+  if (!domain) return '#'
+  if (/^https?:\/\//i.test(domain)) return domain
+  return `http://${domain}`
+}
+
 async function handleSave() {
   const res: any = await updateSite(siteId, editForm)
   if (res.success) {
     site.value = res.data
-    ElMessage.success('保存成功')
+    ElMessage.success(t('si.saved'))
   }
 }
 
 async function handleStart() {
   const res: any = await startSite(siteId)
-  if (res.success) { site.value.status = 'running'; ElMessage.success('已Start') }
+  if (res.success) { site.value.status = 'running'; ElMessage.success(t('si.started')) }
 }
 
 async function handleStop() {
   const res: any = await stopSite(siteId)
-  if (res.success) { site.value.status = 'stopped'; ElMessage.success('Stopped') }
+  if (res.success) { site.value.status = 'stopped'; ElMessage.success(t('si.stoppedMsg')) }
 }
 
 async function handleAddDomain() {
-  if (!newDomain.value) return
-  const res: any = await addDomain(siteId, { domain: newDomain.value })
+  const domain = normalizeDomainInput(newDomain.value)
+  if (!domain) return
+  const res: any = await addDomain(siteId, { domain })
   if (res.success) {
-    domains.value.push(res.data)
+    await loadDomains()
     newDomain.value = ''
-    ElMessage.success('添加成功')
+    ElMessage.success(t('si.domainAdded'))
+  }
+}
+
+function startEditDomain(row: any) {
+  editingDomainId.value = row.id
+  editingDomainValue.value = row.domain
+}
+
+function markEditActionMouseDown() {
+  suppressNextEditBlur.value = true
+}
+
+function handleEditInputBlur() {
+  if (suppressNextEditBlur.value) {
+    suppressNextEditBlur.value = false
+    return
+  }
+  cancelEditDomain()
+}
+
+function cancelEditDomain() {
+  suppressNextEditBlur.value = false
+  editingDomainId.value = null
+  editingDomainValue.value = ''
+}
+
+async function handleSaveEditDomain(row: any) {
+  suppressNextEditBlur.value = false
+  const domain = normalizeDomainInput(editingDomainValue.value)
+  if (!domain) return
+  const res: any = await updateDomain(siteId, row.id, { domain })
+  if (res.success) {
+    await loadDomains()
+    cancelEditDomain()
+    ElMessage.success(t('si.domainUpdated'))
+  }
+}
+
+function handleDomainDragStart(index: number, event: DragEvent) {
+  draggingDomainIndex.value = index
+  dragOverDomainIndex.value = index
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(domains.value[index]?.id || ''))
+  }
+}
+
+function handleDomainDragOver(index: number, event: DragEvent) {
+  event.preventDefault()
+  if (draggingDomainIndex.value === null) return
+  if (index === draggingDomainIndex.value) return
+  dragOverDomainIndex.value = index
+}
+
+function handleDomainDragEnd() {
+  draggingDomainIndex.value = null
+  dragOverDomainIndex.value = null
+}
+
+async function handleDomainDrop(index: number, event: DragEvent) {
+  event.preventDefault()
+  const from = draggingDomainIndex.value
+  if (from === null) {
+    handleDomainDragEnd()
+    return
+  }
+  if (from === index) {
+    handleDomainDragEnd()
+    return
+  }
+
+  const next = [...domains.value]
+  const [item] = next.splice(from, 1)
+  next.splice(index, 0, item)
+  domains.value = next
+  handleDomainDragEnd()
+
+  const orderedIds = next
+    .map((d: any) => Number(d.id))
+    .filter((id: number) => Number.isFinite(id))
+  if (orderedIds.length !== next.length) {
+    await loadDomains()
+    ElMessage.error(t('api.domainOrderInvalid'))
+    return
+  }
+
+  try {
+    const res: any = await reorderDomains(siteId, { ordered_ids: orderedIds })
+    if (res.success) {
+      domains.value = res.data || next
+      ElMessage.success(t('si.domainOrderUpdated'))
+    } else {
+      await loadDomains()
+    }
+  } catch {
+    await loadDomains()
   }
 }
 
 async function handleRemoveDomain(id: number) {
   const res: any = await removeDomain(siteId, id)
   if (res.success) {
-    domains.value = domains.value.filter((d: any) => d.id !== id)
-    ElMessage.success('Delete成功')
+    if (editingDomainId.value === id) cancelEditDomain()
+    await loadDomains()
+    ElMessage.success(t('si.domainDeleted'))
   }
 }
 </script>
 
 <style scoped lang="scss">
-.page-header {
+.site-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.detail-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background: var(--lp-card-bg);
+  border: 1px solid var(--lp-border-light);
+  border-radius: var(--lp-radius-lg);
+  box-shadow: var(--lp-shadow-sm);
 }
-.page-title {
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.back-btn {
+  color: var(--lp-text-secondary);
+  &:hover { color: var(--lp-primary); }
+}
+.site-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--lp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.section-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--lp-border-light);
+  background: var(--lp-card-bg);
+  box-shadow: var(--lp-shadow-sm);
+  width: fit-content;
+}
+.section-item {
+  height: 38px;
+  min-width: 100px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--lp-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 38px;
+  cursor: pointer;
+  transition: all var(--lp-transition);
+  &:hover {
+    color: var(--lp-primary);
+    background: var(--lp-primary-bg);
+  }
+  &.active {
+    color: var(--lp-primary);
+    background: var(--lp-primary-bg);
+    box-shadow: 0 0 0 1px rgba(79,110,247,0.18) inset;
+  }
+}
+.detail-card {
+  background: var(--lp-card-bg);
+  border: 1px solid var(--lp-border-light);
+  border-radius: var(--lp-radius-lg);
+  :deep(.el-card__body) { padding: 20px; }
+}
+.info-form {
+  max-width: 640px;
+}
+.domain-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.domain-input {
+  width: 360px;
+  max-width: 100%;
+}
+.domain-tip {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--lp-text-secondary);
+  line-height: 1.5;
+}
+.domain-table {
+  :deep(.el-table__cell) {
+    vertical-align: middle;
+  }
+  :deep(.domain-col .cell),
+  :deep(.domain-col-header .cell) {
+    text-align: left !important;
+    justify-content: flex-start !important;
+  }
+}
+.domain-order-cell {
   display: flex;
   align-items: center;
   gap: 8px;
-  h2 { font-size: 20px; font-weight: 600; }
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 0 4px;
+  transition: background-color var(--lp-transition);
+  &.is-drop-target {
+    background: var(--lp-primary-bg);
+  }
+  &.is-dragging {
+    opacity: .55;
+  }
+}
+.drag-handle-btn {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lp-text-placeholder);
+  cursor: grab;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all var(--lp-transition);
+  &:hover {
+    color: var(--lp-primary);
+    background: var(--lp-primary-bg);
+  }
+  &:active {
+    cursor: grabbing;
+  }
+}
+.drag-grip {
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+.order-text {
+  font-size: 12px;
+  color: var(--lp-text-secondary);
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+.domain-link {
+  display: inline-block;
+  text-align: left !important;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 38px);
+  vertical-align: middle;
+  :deep(.el-link__inner) {
+    text-align: left !important;
+    max-width: 100%;
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+.domain-display-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.domain-edit-btn {
+  flex-shrink: 0;
+}
+.port-text {
+  display: inline-block;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--lp-text-secondary);
+}
+.domain-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  :deep(.el-input__wrapper) {
+    min-height: 30px;
+  }
+  :deep(.el-button + .el-button) {
+    margin-left: 0 !important;
+  }
+  .action-btn {
+    width: 28px;
+    height: 28px;
+    margin-left: 0 !important;
+  }
+}
+.domain-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0;
+}
+.action-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--lp-border) !important;
+  background: var(--lp-card-bg) !important;
+  color: var(--lp-text-secondary) !important;
+  &:hover {
+    border-color: var(--lp-primary) !important;
+    color: var(--lp-primary) !important;
+    background: var(--lp-primary-bg) !important;
+  }
+}
+.action-primary {
+  border-color: rgba(79, 110, 247, 0.28) !important;
+  color: var(--lp-primary) !important;
+  background: var(--lp-primary-bg) !important;
+}
+.action-danger {
+  border-color: rgba(255, 77, 79, 0.28) !important;
+  color: var(--lp-danger) !important;
+  background: var(--lp-danger-bg) !important;
+  &:hover {
+    border-color: var(--lp-danger) !important;
+    color: var(--lp-danger) !important;
+    background: var(--lp-danger-bg) !important;
+  }
+}
+.config-actions {
+  margin-top: 12px;
 }
 </style>

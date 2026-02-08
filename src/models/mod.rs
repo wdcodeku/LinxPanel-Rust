@@ -79,6 +79,7 @@ pub struct Domain {
     pub site_id: i64,
     pub domain: String,
     pub is_primary: bool,
+    pub sort_order: i64,
     pub created_at: String,
 }
 
@@ -86,6 +87,16 @@ pub struct Domain {
 pub struct AddDomainRequest {
     pub domain: String,
     pub is_primary: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateDomainRequest {
+    pub domain: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReorderDomainsRequest {
+    pub ordered_ids: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]

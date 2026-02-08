@@ -45,18 +45,53 @@ async fn create_site(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSiteRequest>,
 ) -> Json<ApiResponse<Site>> {
-    let domains_str = req.domains.join(",");
-    let doc_root = req.doc_root.unwrap_or_else(|| format!("/www/sites/{}", req.name));
-    let site_type = req.site_type.unwrap_or_else(|| "static".into());
+    let CreateSiteRequest {
+        name,
+        domains,
+        doc_root,
+        site_type,
+        proxy_pass,
+    } = req;
+
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Json(ApiResponse::err("Site name is required"));
+    }
+
+    let domains: Vec<String> = domains
+        .into_iter()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .collect();
+    if domains.is_empty() {
+        return Json(ApiResponse::err("At least one domain is required"));
+    }
+
+    let doc_root = doc_root
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| format!("/www/sites/{}", name));
+    if let Err(e) = std::fs::create_dir_all(&doc_root) {
+        return Json(ApiResponse::err(&format!(
+            "Failed to create site directory: {}",
+            e
+        )));
+    }
+
+    let site_type = site_type
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "static".into());
+    let domains_str = domains.join(",");
 
     let result = sqlx::query(
         "INSERT INTO sites (name, domains, doc_root, site_type, proxy_pass) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(&req.name)
+    .bind(&name)
     .bind(&domains_str)
     .bind(&doc_root)
     .bind(&site_type)
-    .bind(&req.proxy_pass)
+    .bind(&proxy_pass)
     .execute(&state.db)
     .await;
 
@@ -64,13 +99,14 @@ async fn create_site(
         Ok(r) => {
             let site_id = r.last_insert_rowid();
             // Insert domains
-            for (i, domain) in req.domains.iter().enumerate() {
+            for (i, domain) in domains.iter().enumerate() {
                 let _ = sqlx::query(
-                    "INSERT INTO domains (site_id, domain, is_primary) VALUES (?, ?, ?)",
+                    "INSERT INTO domains (site_id, domain, is_primary, sort_order) VALUES (?, ?, ?, ?)",
                 )
                 .bind(site_id)
                 .bind(domain)
                 .bind(i == 0)
+                .bind(i as i64)
                 .execute(&state.db)
                 .await;
             }
