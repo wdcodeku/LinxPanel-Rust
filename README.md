@@ -13,6 +13,7 @@
 - 安装目录：`/opt/linxpanel`
 - 监听端口：`7200`
 - 自动创建并启动 `systemd` 服务（若系统支持）
+- 若系统 `cargo` 过旧，会自动安装/切换到 `rustup stable`
 
 ### 单文件部署（内嵌 Web）
 
@@ -84,6 +85,7 @@ Defaults:
 - Install path: `/opt/linxpanel`
 - Port: `7200`
 - Auto-create and start `systemd` service (if available)
+- If system `cargo` is too old, installer auto switches to `rustup stable`
 
 ### Single Binary Deployment (Embedded Web)
 

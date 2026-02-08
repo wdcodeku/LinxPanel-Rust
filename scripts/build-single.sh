@@ -7,6 +7,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 command -v cargo >/dev/null 2>&1 || { echo "cargo not found in PATH"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "npm not found in PATH"; exit 1; }
 
+CARGO_BIN=(cargo)
+if command -v rustup >/dev/null 2>&1; then
+  CARGO_BIN=(cargo +stable)
+fi
+
 echo "[LinxPanel] Building web assets..."
 cd "${REPO_ROOT}/web"
 if [[ -f package-lock.json ]]; then
@@ -18,7 +23,7 @@ npm run build
 
 echo "[LinxPanel] Building backend release binary..."
 cd "${REPO_ROOT}"
-cargo build --release
+"${CARGO_BIN[@]}" build --release
 
 BINARY_PATH="${REPO_ROOT}/target/release/linxpanel"
 if [[ ! -f "${BINARY_PATH}" ]]; then

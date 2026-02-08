@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_URL="${LINXPANEL_REPO_URL:-https://github.com/wdcodeku/LinxPanel-Rust.git}"
 INSTALL_ROOT="${LINXPANEL_INSTALL_ROOT:-/opt/linxpanel}"
 PORT="${LINXPANEL_PORT:-7200}"
+MIN_CARGO_VERSION="${LINXPANEL_MIN_CARGO_VERSION:-1.78.0}"
 
 if [[ "$(id -u)" -eq 0 ]]; then
   SUDO=""
@@ -27,6 +28,16 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+version_ge() {
+  local current="$1"
+  local required="$2"
+  [[ "$(printf '%s\n%s\n' "${required}" "${current}" | sort -V | head -n1)" == "${required}" ]]
+}
+
+get_cargo_version() {
+  cargo --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
+}
+
 install_deps() {
   if require_cmd git && require_cmd npm && require_cmd cargo; then
     return
@@ -48,12 +59,45 @@ install_deps() {
   fi
 }
 
+ensure_modern_cargo() {
+  local current_version
+  current_version="$(get_cargo_version)"
+
+  if [[ -n "${current_version}" ]] && version_ge "${current_version}" "${MIN_CARGO_VERSION}"; then
+    return
+  fi
+
+  log "Cargo is missing or too old (need >= ${MIN_CARGO_VERSION}), installing Rust stable toolchain..."
+  if ! require_cmd curl; then
+    echo "[LinxPanel] curl is required to bootstrap rustup." >&2
+    exit 1
+  fi
+
+  if ! require_cmd rustup; then
+    curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+  fi
+
+  export PATH="${HOME}/.cargo/bin:${PATH}"
+
+  if require_cmd rustup; then
+    rustup toolchain install stable --profile minimal >/dev/null 2>&1 || true
+    rustup default stable >/dev/null 2>&1 || true
+  fi
+
+  current_version="$(get_cargo_version)"
+  if [[ -z "${current_version}" ]] || ! version_ge "${current_version}" "${MIN_CARGO_VERSION}"; then
+    echo "[LinxPanel] Cargo version is still too old (${current_version:-unknown}). Please update Rust toolchain manually." >&2
+    exit 1
+  fi
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "[LinxPanel] This installer currently supports Linux only." >&2
   exit 1
 fi
 
 install_deps
+ensure_modern_cargo
 
 for cmd in git npm cargo bash; do
   if ! require_cmd "${cmd}"; then
