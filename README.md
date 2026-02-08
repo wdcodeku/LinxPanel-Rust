@@ -11,6 +11,7 @@
 默认行为：
 
 - 首个提示会让你选择语言（默认英文）
+- 第二个提示会让你选择安装方式（默认二进制安装）
 - 安装目录：`/opt/linxpanel`
 - 监听端口：`7200`
 - 自动创建并启动 `systemd` 服务（若系统支持）
@@ -18,6 +19,7 @@
 - 安装结束会自动输出真实访问 IP（优先公网 IP）
 - 无交互部署可指定语言：
   - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
+  - 指定安装方式：`LINXPANEL_INSTALL_MODE=binary` 或 `LINXPANEL_INSTALL_MODE=build`
   - 如需手动指定输出 IP：`LINXPANEL_PUBLIC_IP=1.2.3.4`
 
 ### 单文件部署（内嵌 Web）
@@ -88,6 +90,7 @@ Use the command below to install dependencies, build, and deploy LinxPanel:
 Defaults:
 
 - The first prompt asks language choice (English by default)
+- The second prompt asks install mode (binary install by default)
 - Install path: `/opt/linxpanel`
 - Port: `7200`
 - Auto-create and start `systemd` service (if available)
@@ -95,6 +98,7 @@ Defaults:
 - Installer prints a real access IP at the end (prefers public IP)
 - For non-interactive deployment, set language explicitly:
   - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
+  - Set install mode: `LINXPANEL_INSTALL_MODE=binary` or `LINXPANEL_INSTALL_MODE=build`
   - To force output IP manually: `LINXPANEL_PUBLIC_IP=1.2.3.4`
 
 ### Single Binary Deployment (Embedded Web)

@@ -105,16 +105,45 @@ if command -v apt-get >/dev/null 2>&1; then
     fi
   fi
 
-  REPO_BASE="http://openresty.org/package/debian"
+  if [ "$DISTRO_ID" = "debian" ]; then
+    case "$CODENAME" in
+      testing|unstable|sid|trixie|forky)
+        echo "[LinxPanel] Debian codename '$CODENAME' not supported yet, fallback to 'bookworm'."
+        CODENAME="bookworm"
+        ;;
+    esac
+  fi
+
+  REPO_BASE="https://openresty.org/package/debian"
   case "$DISTRO_ID" in
-    ubuntu) REPO_BASE="http://openresty.org/package/ubuntu" ;;
-    debian) REPO_BASE="http://openresty.org/package/debian" ;;
+    ubuntu) REPO_BASE="https://openresty.org/package/ubuntu" ;;
+    debian) REPO_BASE="https://openresty.org/package/debian" ;;
     *)
       if echo "$DISTRO_LIKE" | grep -qi ubuntu; then
-        REPO_BASE="http://openresty.org/package/ubuntu"
+        REPO_BASE="https://openresty.org/package/ubuntu"
       fi
       ;;
   esac
+
+  write_openresty_repo() {
+    local candidate="$1"
+    if [ "${USE_SUDO:-0}" = "1" ]; then
+      echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${candidate} openresty" | sudo -n tee /etc/apt/sources.list.d/openresty.list >/dev/null
+    else
+      echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${candidate} openresty" > /etc/apt/sources.list.d/openresty.list
+    fi
+  }
+
+  try_openresty_repo() {
+    local candidate="$1"
+    echo "[LinxPanel] Trying OpenResty apt repo codename: ${candidate}"
+    write_openresty_repo "${candidate}"
+    if apt_update_safe; then
+      CODENAME="${candidate}"
+      return 0
+    fi
+    return 1
+  }
 
   TMP_KEY="/tmp/openresty_pubkey.gpg"
   curl -fsSL https://openresty.org/package/pubkey.gpg -o "$TMP_KEY"
@@ -122,13 +151,41 @@ if command -v apt-get >/dev/null 2>&1; then
   run gpg --dearmor -o /usr/share/keyrings/openresty.gpg "$TMP_KEY"
   rm -f "$TMP_KEY"
 
-  if [ "${USE_SUDO:-0}" = "1" ]; then
-    echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${CODENAME} openresty" | sudo -n tee /etc/apt/sources.list.d/openresty.list >/dev/null
+  ORIGINAL_CODENAME="$CODENAME"
+  repo_ready=0
+  if try_openresty_repo "$CODENAME"; then
+    repo_ready=1
   else
-    echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${CODENAME} openresty" > /etc/apt/sources.list.d/openresty.list
+    if [ "$DISTRO_ID" = "debian" ]; then
+      for fallback in bookworm bullseye; do
+        if [ "$fallback" = "$CODENAME" ]; then
+          continue
+        fi
+        if try_openresty_repo "$fallback"; then
+          repo_ready=1
+          break
+        fi
+      done
+    elif [ "$DISTRO_ID" = "ubuntu" ] || echo "$DISTRO_LIKE" | grep -qi ubuntu; then
+      for fallback in jammy focal; do
+        if [ "$fallback" = "$CODENAME" ]; then
+          continue
+        fi
+        if try_openresty_repo "$fallback"; then
+          repo_ready=1
+          break
+        fi
+      done
+    fi
   fi
 
-  apt_update_safe
+  if [ "$repo_ready" != "1" ]; then
+    echo "[LinxPanel] OpenResty apt repo is not available for codename '${ORIGINAL_CODENAME}'."
+    echo "[LinxPanel] Tried fallback codenames, but all failed."
+    exit 51
+  fi
+
+  echo "[LinxPanel] OpenResty apt repo ready with codename: ${CODENAME}"
   apt_install_safe openresty
 elif command -v dnf >/dev/null 2>&1; then
   run dnf install -y dnf-plugins-core
@@ -436,6 +493,14 @@ fn summarize_linux_install_error(full_log: &str, fallback_detail: String) -> Str
         || lower.contains("is another process using it")
     {
         return "APT is locked by another process. Wait for other package tasks to finish, then retry OpenResty install.".to_string();
+    }
+
+    if lower.contains("does not have a release file")
+        || lower.contains("repository")
+            && lower.contains("release")
+            && lower.contains("openresty.org/package")
+    {
+        return "OpenResty apt repository for current distro codename is unavailable. LinxPanel tried fallback codenames automatically; if it still fails, please switch to a supported distro codename (Debian bookworm / Ubuntu jammy) or install OpenResty manually.".to_string();
     }
 
     fallback_detail
