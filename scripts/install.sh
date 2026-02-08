@@ -61,7 +61,7 @@ msg() {
       service_status) echo "服务状态：systemctl status linxpanel --no-pager" ;;
       no_systemd) echo "未检测到 systemd，改为 nohup 启动..." ;;
       deploy_complete_nohup) echo "部署完成（nohup 模式）。" ;;
-      running_url) echo "LinxPanel 已运行：http://<your-server-ip>:%s" ;;
+      running_url) echo "LinxPanel 已运行：http://%s:%s" ;;
       default_admin) echo "默认管理员：admin / linxpanel" ;;
       *) echo "${key}" ;;
     esac
@@ -90,7 +90,7 @@ msg() {
       service_status) echo "Service status: systemctl status linxpanel --no-pager" ;;
       no_systemd) echo "systemd not detected, starting with nohup..." ;;
       deploy_complete_nohup) echo "Deploy complete (nohup mode)." ;;
-      running_url) echo "LinxPanel is running on: http://<your-server-ip>:%s" ;;
+      running_url) echo "LinxPanel is running on: http://%s:%s" ;;
       default_admin) echo "Default admin: admin / linxpanel" ;;
       *) echo "${key}" ;;
     esac
@@ -150,6 +150,70 @@ version_ge() {
   local current="$1"
   local required="$2"
   [[ "$(printf '%s\n%s\n' "${required}" "${current}" | sort -V | head -n1)" == "${required}" ]]
+}
+
+is_valid_ipv4() {
+  local ip="$1"
+  [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+is_valid_ipv6() {
+  local ip="$1"
+  [[ "${ip}" =~ : ]]
+}
+
+format_host_for_url() {
+  local host="$1"
+  if is_valid_ipv6 "${host}"; then
+    printf '[%s]' "${host}"
+  else
+    printf '%s' "${host}"
+  fi
+}
+
+detect_server_ip() {
+  local ip_candidate=""
+
+  if [[ -n "${LINXPANEL_PUBLIC_IP:-}" ]]; then
+    printf '%s' "${LINXPANEL_PUBLIC_IP}"
+    return
+  fi
+
+  if require_cmd curl; then
+    ip_candidate="$(curl -4fsS --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+    if is_valid_ipv4 "${ip_candidate}"; then
+      printf '%s' "${ip_candidate}"
+      return
+    fi
+
+    ip_candidate="$(curl -6fsS --connect-timeout 3 --max-time 5 https://api64.ipify.org 2>/dev/null || true)"
+    if is_valid_ipv6 "${ip_candidate}"; then
+      printf '%s' "${ip_candidate}"
+      return
+    fi
+  fi
+
+  if require_cmd ip; then
+    ip_candidate="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i==\"src\"){print $(i+1); exit}}}' || true)"
+    if is_valid_ipv4 "${ip_candidate}"; then
+      printf '%s' "${ip_candidate}"
+      return
+    fi
+
+    ip_candidate="$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i==\"src\"){print $(i+1); exit}}}' || true)"
+    if is_valid_ipv6 "${ip_candidate}"; then
+      printf '%s' "${ip_candidate}"
+      return
+    fi
+  fi
+
+  ip_candidate="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i!~ /^127\\./){print $i; exit}}}' || true)"
+  if [[ -n "${ip_candidate}" ]]; then
+    printf '%s' "${ip_candidate}"
+    return
+  fi
+
+  printf '%s' "127.0.0.1"
 }
 
 get_cargo_version() {
@@ -305,5 +369,7 @@ else
   logf deploy_complete_nohup
 fi
 
-logf running_url "${PORT}"
+SERVER_IP="$(detect_server_ip)"
+SERVER_HOST="$(format_host_for_url "${SERVER_IP}")"
+logf running_url "${SERVER_HOST}" "${PORT}"
 logf default_admin

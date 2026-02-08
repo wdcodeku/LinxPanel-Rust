@@ -39,6 +39,39 @@ run() {
   fi
 }
 
+repair_apt_state() {
+  echo "[LinxPanel] Attempting to repair apt/dpkg state..."
+  run dpkg --configure -a || true
+  run apt-get -y -f install || true
+}
+
+apt_update_safe() {
+  if run apt-get update; then
+    return 0
+  fi
+  echo "[LinxPanel] apt-get update failed, retrying after repair..."
+  repair_apt_state
+  run apt-get update
+}
+
+apt_install_safe() {
+  if run apt-get install -y "$@"; then
+    return 0
+  fi
+  echo "[LinxPanel] apt-get install failed for: $*"
+  repair_apt_state
+  run apt-get update || true
+  if run apt-get install -y "$@"; then
+    return 0
+  fi
+  echo "[LinxPanel] apt install still failed after automatic repair."
+  echo "[LinxPanel] Please run manually:"
+  echo "[LinxPanel]   sudo dpkg --configure -a"
+  echo "[LinxPanel]   sudo apt-get -f install -y"
+  echo "[LinxPanel]   sudo apt-get update"
+  return 1
+}
+
 echo "[LinxPanel] Starting OpenResty quick install"
 
 if command -v openresty >/dev/null 2>&1 || [ -x /usr/local/openresty/nginx/sbin/nginx ]; then
@@ -48,8 +81,9 @@ fi
 
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
-  run apt-get update
-  run apt-get install -y curl gnupg ca-certificates lsb-release
+  repair_apt_state
+  apt_update_safe
+  apt_install_safe curl gnupg ca-certificates lsb-release
 
   DISTRO_ID=""
   DISTRO_LIKE=""
@@ -94,8 +128,8 @@ if command -v apt-get >/dev/null 2>&1; then
     echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${CODENAME} openresty" > /etc/apt/sources.list.d/openresty.list
   fi
 
-  run apt-get update
-  run apt-get install -y openresty
+  apt_update_safe
+  apt_install_safe openresty
 elif command -v dnf >/dev/null 2>&1; then
   run dnf install -y dnf-plugins-core
   run dnf config-manager --add-repo https://openresty.org/package/centos/openresty.repo
@@ -382,7 +416,29 @@ fn install_openresty_package() -> Result<String> {
 
     let detail = last_non_empty_line(&text)
         .unwrap_or_else(|| format!("Exit status: {}", output.status));
+    let detail = summarize_linux_install_error(&text, detail);
     Err(anyhow!(detail))
+}
+
+#[cfg(target_os = "linux")]
+fn summarize_linux_install_error(full_log: &str, fallback_detail: String) -> String {
+    let lower = full_log.to_ascii_lowercase();
+
+    if lower.contains("sub-process /usr/bin/dpkg returned an error code (1)")
+        || lower.contains("dpkg was interrupted")
+        || lower.contains("you must manually run 'sudo dpkg --configure -a'")
+    {
+        return "APT/DPKG is in a broken state. LinxPanel auto-repair was attempted but failed. Please run: sudo dpkg --configure -a && sudo apt-get -f install -y && sudo apt-get update".to_string();
+    }
+
+    if lower.contains("could not get lock")
+        || lower.contains("unable to acquire the dpkg frontend lock")
+        || lower.contains("is another process using it")
+    {
+        return "APT is locked by another process. Wait for other package tasks to finish, then retry OpenResty install.".to_string();
+    }
+
+    fallback_detail
 }
 
 #[cfg(target_os = "windows")]
