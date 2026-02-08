@@ -53,6 +53,9 @@ function localizeApiMessage(message: unknown): string {
   if (text.startsWith('Failed to create site directory:')) {
     return t('api.createSiteDirFailed', { detail: text.replace(/^Failed to create site directory:\s*/i, '') })
   }
+  if (text.startsWith('OpenResty apply failed:')) {
+    return t('api.openrestyApplyFailed', { detail: text.replace(/^OpenResty apply failed:\s*/i, '') })
+  }
   return text
 }
 

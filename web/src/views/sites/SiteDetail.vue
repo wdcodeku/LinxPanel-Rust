@@ -88,16 +88,17 @@
               @dragover.prevent="handleDomainDragOver($index, $event)"
               @drop="handleDomainDrop($index, $event)"
             >
-              <button
-                type="button"
-                class="drag-handle-btn"
-                draggable="true"
-                :title="t('si.dragToSort')"
-                @dragstart="handleDomainDragStart($index, $event)"
-                @dragend="handleDomainDragEnd"
-              >
-                <span class="drag-grip">⋮⋮</span>
-              </button>
+              <el-tooltip :content="t('si.dragToSort')" :show-after="250">
+                <button
+                  type="button"
+                  class="drag-handle-btn"
+                  draggable="true"
+                  @dragstart="handleDomainDragStart($index, $event)"
+                  @dragend="handleDomainDragEnd"
+                >
+                  <span class="drag-grip">⋮⋮</span>
+                </button>
+              </el-tooltip>
               <span class="order-text">{{ $index + 1 }}</span>
             </div>
           </template>

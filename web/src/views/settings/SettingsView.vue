@@ -25,6 +25,25 @@
             <el-form-item :label="t('st.apiUrl')">
               <el-input v-model="form.api_url" placeholder="http://0.0.0.0:7200" />
             </el-form-item>
+            <el-divider>{{ t('st.openrestySettings') }}</el-divider>
+            <el-form-item :label="t('st.openrestyEnabled')">
+              <el-switch v-model="form.openresty_enabled" />
+            </el-form-item>
+            <el-form-item :label="t('st.openrestyBin')">
+              <el-input v-model="form.openresty_bin" :placeholder="t('st.openrestyBinPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('st.openrestySitesDir')">
+              <el-input v-model="form.openresty_sites_dir" :placeholder="t('st.openrestySitesDirPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('st.openrestyConfPath')">
+              <el-input v-model="form.openresty_conf_path" :placeholder="t('st.openrestyConfPathPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('st.phpFpmAddr')">
+              <el-input v-model="form.php_fpm_addr" :placeholder="t('st.phpFpmAddrPlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('st.openrestyIpv6')">
+              <el-switch v-model="form.openresty_listen_ipv6" />
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" @click="saveSettings" :loading="saving">{{ t('st.saveSettings') }}</el-button>
             </el-form-item>
@@ -72,6 +91,12 @@ const form = reactive({
   panel_port: 7200,
   session_timeout: '24',
   api_url: '',
+  openresty_enabled: false,
+  openresty_bin: '/usr/local/openresty/nginx/sbin/nginx',
+  openresty_sites_dir: '/usr/local/openresty/nginx/conf/sites-enabled',
+  openresty_conf_path: '/usr/local/openresty/nginx/conf/nginx.conf',
+  php_fpm_addr: '127.0.0.1:9000',
+  openresty_listen_ipv6: true,
 })
 
 const pwForm = reactive({
@@ -90,9 +115,30 @@ async function loadSettings() {
   try {
     const res: any = await getSettings()
     if (res.success && res.data) {
-      Object.assign(form, res.data)
+      const data = res.data as Record<string, any>
+      form.panel_name = String(data.panel_name ?? form.panel_name)
+      form.panel_port = Number(data.panel_port ?? form.panel_port)
+      form.session_timeout = String(data.session_timeout ?? form.session_timeout)
+      form.api_url = String(data.api_url ?? form.api_url)
+      form.openresty_enabled = parseBoolLike(data.openresty_enabled, form.openresty_enabled)
+      form.openresty_bin = String(data.openresty_bin ?? form.openresty_bin)
+      form.openresty_sites_dir = String(data.openresty_sites_dir ?? form.openresty_sites_dir)
+      form.openresty_conf_path = String(data.openresty_conf_path ?? form.openresty_conf_path)
+      form.php_fpm_addr = String(data.php_fpm_addr ?? form.php_fpm_addr)
+      form.openresty_listen_ipv6 = parseBoolLike(data.openresty_listen_ipv6, form.openresty_listen_ipv6)
     }
   } catch {}
+}
+
+function parseBoolLike(value: unknown, fallback: boolean) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const text = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(text)) return true
+    if (['0', 'false', 'no', 'off'].includes(text)) return false
+  }
+  if (typeof value === 'number') return value !== 0
+  return fallback
 }
 
 async function saveSettings() {

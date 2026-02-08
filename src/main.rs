@@ -16,6 +16,7 @@ mod utils;
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    pub openresty_lock: tokio::sync::Mutex<()>,
 }
 
 fn resolve_path(relative: &str) -> std::path::PathBuf {
@@ -61,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
         db: pool,
         jwt_secret: std::env::var("JWT_SECRET")
             .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
+        openresty_lock: tokio::sync::Mutex::new(()),
     });
 
     let api_routes = api::routes(state.clone());

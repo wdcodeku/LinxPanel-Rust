@@ -1,4 +1,4 @@
-use axum::{extract::State, routing::{get, put, post}, Json, Router};
+use axum::{extract::State, routing::{get, post}, Json, Router};
 use std::sync::Arc;
 use crate::models::*;
 use crate::AppState;
@@ -22,15 +22,22 @@ async fn get_settings(
 
 async fn update_settings(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<std::collections::HashMap<String, String>>,
+    Json(req): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Json<ApiResponse<()>> {
-    for (key, value) in &req {
+    for (key, value) in req {
+        let value = match value {
+            serde_json::Value::String(v) => v,
+            serde_json::Value::Bool(v) => v.to_string(),
+            serde_json::Value::Number(v) => v.to_string(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        };
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
         )
-        .bind(key)
-        .bind(value)
+        .bind(&key)
+        .bind(&value)
         .execute(&state.db)
         .await
         .ok();

@@ -1,4 +1,4 @@
-use axum::{extract::{Query, State}, routing::{get, post}, Json, Router};
+use axum::{extract::Query, routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::models::ApiResponse;

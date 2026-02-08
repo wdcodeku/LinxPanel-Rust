@@ -6,6 +6,7 @@ use axum::{
 use std::{collections::HashSet, sync::Arc};
 
 use crate::models::*;
+use crate::services::openresty;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -90,6 +91,9 @@ async fn add_domain(
             if let Err(e) = sync_site_domains(&state.db, site_id).await {
                 return Json(ApiResponse::err(&e.to_string()));
             }
+            if let Err(e) = openresty::sync_site(state.as_ref(), site_id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+            }
 
             match sqlx::query_as::<_, Domain>("SELECT * FROM domains WHERE id = ?")
                 .bind(r.last_insert_rowid())
@@ -135,6 +139,9 @@ async fn update_domain(
             }
             if let Err(e) = sync_site_domains(&state.db, site_id).await {
                 return Json(ApiResponse::err(&e.to_string()));
+            }
+            if let Err(e) = openresty::sync_site(state.as_ref(), site_id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
             }
             match sqlx::query_as::<_, Domain>("SELECT * FROM domains WHERE id = ?")
                 .bind(id)
@@ -201,6 +208,9 @@ async fn reorder_domains(
     if let Err(e) = sync_site_domains(&state.db, site_id).await {
         return Json(ApiResponse::err(&e.to_string()));
     }
+    if let Err(e) = openresty::sync_site(state.as_ref(), site_id).await {
+        return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+    }
 
     match sqlx::query_as::<_, Domain>("SELECT * FROM domains WHERE site_id = ? ORDER BY sort_order ASC, id ASC")
         .bind(site_id)
@@ -228,6 +238,9 @@ async fn remove_domain(
             }
             if let Err(e) = sync_site_domains(&state.db, site_id).await {
                 return Json(ApiResponse::err(&e.to_string()));
+            }
+            if let Err(e) = openresty::sync_site(state.as_ref(), site_id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
             }
             Json(ApiResponse::ok_msg("Domain removed"))
         }

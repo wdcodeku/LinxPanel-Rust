@@ -6,6 +6,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::models::*;
+use crate::services::openresty;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -98,7 +99,6 @@ async fn create_site(
     match result {
         Ok(r) => {
             let site_id = r.last_insert_rowid();
-            // Insert domains
             for (i, domain) in domains.iter().enumerate() {
                 let _ = sqlx::query(
                     "INSERT INTO domains (site_id, domain, is_primary, sort_order) VALUES (?, ?, ?, ?)",
@@ -109,6 +109,18 @@ async fn create_site(
                 .bind(i as i64)
                 .execute(&state.db)
                 .await;
+            }
+
+            if let Err(e) = openresty::sync_site(state.as_ref(), site_id).await {
+                let _ = sqlx::query("DELETE FROM domains WHERE site_id = ?")
+                    .bind(site_id)
+                    .execute(&state.db)
+                    .await;
+                let _ = sqlx::query("DELETE FROM sites WHERE id = ?")
+                    .bind(site_id)
+                    .execute(&state.db)
+                    .await;
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
             }
 
             match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
@@ -164,14 +176,20 @@ async fn update_site(
     .await;
 
     match result {
-        Ok(_) => match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
-            .bind(id)
-            .fetch_one(&state.db)
-            .await
-        {
-            Ok(site) => Json(ApiResponse::ok(site)),
-            Err(e) => Json(ApiResponse::err(&e.to_string())),
-        },
+        Ok(_) => {
+            if let Err(e) = openresty::sync_site(state.as_ref(), id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+            }
+
+            match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
+                .bind(id)
+                .fetch_one(&state.db)
+                .await
+            {
+                Ok(site) => Json(ApiResponse::ok(site)),
+                Err(e) => Json(ApiResponse::err(&e.to_string())),
+            }
+        }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
 }
@@ -190,7 +208,12 @@ async fn delete_site(
         .execute(&state.db)
         .await
     {
-        Ok(_) => Json(ApiResponse::ok_msg("Site deleted")),
+        Ok(_) => {
+            if let Err(e) = openresty::remove_site(state.as_ref(), id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+            }
+            Json(ApiResponse::ok_msg("Site deleted"))
+        }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
 }
@@ -204,7 +227,12 @@ async fn start_site(
         .execute(&state.db)
         .await
     {
-        Ok(_) => Json(ApiResponse::ok_msg("Site started")),
+        Ok(_) => {
+            if let Err(e) = openresty::sync_site(state.as_ref(), id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+            }
+            Json(ApiResponse::ok_msg("Site started"))
+        }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
 }
@@ -218,7 +246,12 @@ async fn stop_site(
         .execute(&state.db)
         .await
     {
-        Ok(_) => Json(ApiResponse::ok_msg("Site stopped")),
+        Ok(_) => {
+            if let Err(e) = openresty::sync_site(state.as_ref(), id).await {
+                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+            }
+            Json(ApiResponse::ok_msg("Site stopped"))
+        }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
 }

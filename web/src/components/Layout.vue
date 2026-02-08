@@ -48,9 +48,11 @@
           </div>
         </div>
         <div class="header-right">
-          <el-button circle size="small" @click="toggleLang" class="lang-toggle" :title="t('language')">
-            <span style="font-size:12px;font-weight:600">{{ locale === 'zh' ? 'EN' : '中' }}</span>
-          </el-button>
+          <el-tooltip :content="t('language')" :show-after="250">
+            <el-button circle size="small" @click="toggleLang" class="lang-toggle">
+              <span style="font-size:12px;font-weight:600">{{ locale === 'zh' ? 'EN' : '中' }}</span>
+            </el-button>
+          </el-tooltip>
           <el-button circle size="small" @click="toggleTheme" class="theme-toggle">
             <el-icon :size="16"><Sunny v-if="userStore.theme === 'dark'" /><Moon v-else /></el-icon>
           </el-button>
