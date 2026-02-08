@@ -1,5 +1,24 @@
 # LinxPanel - Modern Linux Server Management Panel (Rust + Vue 3)
 
+## Single Binary Deployment (Embedded Web)
+
+LinxPanel now embeds `web/dist` into the Rust executable at build time.  
+After build, only one backend binary is required for deployment.
+
+- Windows:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\build-single.ps1`
+  - Output binary: `target\release\linxpanel.exe`
+- Linux:
+  - `bash ./scripts/build-single.sh`
+  - Output binary: `target/release/linxpanel`
+- Manual build flow:
+  - `cd web && npm ci && npm run build`
+  - `cd .. && cargo build --release`
+
+Notes:
+- If `web/dist` is missing, build still succeeds but embeds a placeholder page.
+- For production, always run web build before `cargo build --release`.
+
 ## OpenResty Real-Time Apply
 
 Site/domain changes are now applied to OpenResty automatically:
