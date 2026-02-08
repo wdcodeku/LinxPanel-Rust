@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Context, Result};
+use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use crate::models::{Domain, Site};
 use crate::AppState;
@@ -15,6 +16,125 @@ const SETTING_OPENRESTY_SITES_DIR: &str = "openresty_sites_dir";
 const SETTING_OPENRESTY_CONF_PATH: &str = "openresty_conf_path";
 const SETTING_PHP_FPM_ADDR: &str = "php_fpm_addr";
 const SETTING_OPENRESTY_LISTEN_IPV6: &str = "openresty_listen_ipv6";
+
+#[cfg(target_os = "windows")]
+const DEFAULT_OPENRESTY_BIN: &str = "C:\\openresty\\nginx\\nginx.exe";
+#[cfg(not(target_os = "windows"))]
+const DEFAULT_OPENRESTY_BIN: &str = "/usr/local/openresty/nginx/sbin/nginx";
+
+#[cfg(target_os = "windows")]
+const DEFAULT_OPENRESTY_SITES_DIR: &str = "C:\\openresty\\nginx\\conf\\sites-enabled";
+#[cfg(not(target_os = "windows"))]
+const DEFAULT_OPENRESTY_SITES_DIR: &str = "/usr/local/openresty/nginx/conf/sites-enabled";
+
+#[cfg(target_os = "linux")]
+const QUICK_INSTALL_SCRIPT: &str = r#"
+set -eu
+
+run() {
+  if [ "${USE_SUDO:-0}" = "1" ]; then
+    sudo -n "$@"
+  else
+    "$@"
+  fi
+}
+
+echo "[LinxPanel] Starting OpenResty quick install"
+
+if command -v openresty >/dev/null 2>&1 || [ -x /usr/local/openresty/nginx/sbin/nginx ]; then
+  echo "[LinxPanel] OpenResty already installed."
+  exit 0
+fi
+
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  run apt-get update
+  run apt-get install -y curl gnupg ca-certificates lsb-release
+
+  DISTRO_ID=""
+  DISTRO_LIKE=""
+  CODENAME=""
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO_ID="${ID:-}"
+    DISTRO_LIKE="${ID_LIKE:-}"
+    CODENAME="${VERSION_CODENAME:-}"
+  fi
+  if [ -z "$CODENAME" ] && command -v lsb_release >/dev/null 2>&1; then
+    CODENAME="$(lsb_release -sc || true)"
+  fi
+  if [ -z "$CODENAME" ]; then
+    if [ "$DISTRO_ID" = "debian" ]; then
+      CODENAME="bookworm"
+    else
+      CODENAME="jammy"
+    fi
+  fi
+
+  REPO_BASE="http://openresty.org/package/debian"
+  case "$DISTRO_ID" in
+    ubuntu) REPO_BASE="http://openresty.org/package/ubuntu" ;;
+    debian) REPO_BASE="http://openresty.org/package/debian" ;;
+    *)
+      if echo "$DISTRO_LIKE" | grep -qi ubuntu; then
+        REPO_BASE="http://openresty.org/package/ubuntu"
+      fi
+      ;;
+  esac
+
+  TMP_KEY="/tmp/openresty_pubkey.gpg"
+  curl -fsSL https://openresty.org/package/pubkey.gpg -o "$TMP_KEY"
+  run mkdir -p /usr/share/keyrings
+  run gpg --dearmor -o /usr/share/keyrings/openresty.gpg "$TMP_KEY"
+  rm -f "$TMP_KEY"
+
+  if [ "${USE_SUDO:-0}" = "1" ]; then
+    echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${CODENAME} openresty" | sudo -n tee /etc/apt/sources.list.d/openresty.list >/dev/null
+  else
+    echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${CODENAME} openresty" > /etc/apt/sources.list.d/openresty.list
+  fi
+
+  run apt-get update
+  run apt-get install -y openresty
+elif command -v dnf >/dev/null 2>&1; then
+  run dnf install -y dnf-plugins-core
+  run dnf config-manager --add-repo https://openresty.org/package/centos/openresty.repo
+  run dnf install -y openresty
+elif command -v yum >/dev/null 2>&1; then
+  run yum install -y yum-utils
+  run yum-config-manager --add-repo https://openresty.org/package/centos/openresty.repo
+  run yum install -y openresty
+else
+  echo "Unsupported Linux distribution for quick install."
+  exit 52
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  run systemctl enable openresty || true
+  run systemctl start openresty || true
+fi
+
+echo "[LinxPanel] OpenResty package install completed."
+"#;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenRestyStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub enabled: bool,
+    pub nginx_bin: String,
+    pub nginx_conf: String,
+    pub sites_dir: String,
+    pub version: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenRestyInstallResult {
+    pub changed: bool,
+    pub status: OpenRestyStatus,
+    pub log: String,
+}
 
 #[derive(Debug, Clone)]
 struct OpenRestyRuntime {
@@ -32,14 +152,91 @@ impl OpenRestyRuntime {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeInspection {
+    runtime: OpenRestyRuntime,
+    resolved_nginx_bin: Option<PathBuf>,
+    detected_conf_path: Option<PathBuf>,
+    detected_version: Option<String>,
+    is_openresty: bool,
+}
+
+pub async fn get_status(state: &AppState) -> Result<OpenRestyStatus> {
+    let inspection = inspect_runtime(&state.db).await?;
+    Ok(to_public_status(inspection))
+}
+
+pub async fn ensure_management_available(state: &AppState) -> Result<()> {
+    let status = get_status(state).await?;
+    if status.installed {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "OpenResty is required. Please install OpenResty first."
+    ))
+}
+
+pub async fn quick_install(state: &AppState) -> Result<OpenRestyInstallResult> {
+    let _guard = state.openresty_lock.lock().await;
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err(anyhow!(
+            "OpenResty quick install is supported on Windows and Linux only"
+        ));
+    }
+
+    let before = inspect_runtime(&state.db).await?;
+    let was_installed = before.is_openresty;
+    let mut log = String::new();
+
+    if was_installed {
+        log.push_str("[LinxPanel] OpenResty already installed, skip package install.\n");
+    } else {
+        let install_log = install_openresty_package()?;
+        log.push_str(&install_log);
+        if !log.ends_with('\n') {
+            log.push('\n');
+        }
+    }
+
+    let after_install = inspect_runtime(&state.db).await?;
+    if !after_install.is_openresty {
+        return Err(anyhow!("OpenResty binary not found after installation"));
+    }
+    let resolved_bin = after_install
+        .resolved_nginx_bin
+        .clone()
+        .ok_or_else(|| anyhow!("OpenResty binary not found after installation"))?;
+
+    let conf_path = after_install
+        .detected_conf_path
+        .clone()
+        .or_else(|| guess_conf_path_from_bin(&resolved_bin))
+        .ok_or_else(|| anyhow!("OpenResty main config was not detected"))?;
+
+    let sites_dir = prepare_sites_dir(&conf_path, &after_install.runtime.sites_dir, &mut log)?;
+    persist_install_settings(&state.db, &resolved_bin, Some(conf_path.as_path()), &sites_dir).await?;
+
+    let runtime = load_runtime(&state.db).await?;
+    test_openresty(&runtime).context("OpenResty config test failed after install")?;
+
+    let status = to_public_status(inspect_runtime(&state.db).await?);
+    Ok(OpenRestyInstallResult {
+        changed: !was_installed,
+        status,
+        log,
+    })
+}
+
 pub async fn sync_site(state: &AppState, site_id: i64) -> Result<()> {
     let _guard = state.openresty_lock.lock().await;
     let runtime = load_runtime(&state.db).await?;
     if !runtime.enabled {
         return Ok(());
     }
-    if !cfg!(target_os = "linux") {
-        return Err(anyhow!("OpenResty sync is supported on Linux only"));
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err(anyhow!(
+            "OpenResty sync is supported on Windows and Linux only"
+        ));
     }
 
     let site = sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
@@ -63,8 +260,10 @@ pub async fn remove_site(state: &AppState, site_id: i64) -> Result<()> {
     if !runtime.enabled {
         return Ok(());
     }
-    if !cfg!(target_os = "linux") {
-        return Err(anyhow!("OpenResty sync is supported on Linux only"));
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err(anyhow!(
+            "OpenResty sync is supported on Windows and Linux only"
+        ));
     }
 
     apply_site_config(&runtime, site_id, None)?;
@@ -135,6 +334,508 @@ fn restore_file(path: &Path, previous: Option<&str>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn detect_install_privilege_mode() -> Result<bool> {
+    let uid_output = Command::new("id")
+        .arg("-u")
+        .output()
+        .context("Failed to check current user")?;
+    if !uid_output.status.success() {
+        return Err(anyhow!("Failed to check current user"));
+    }
+    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    if uid == "0" {
+        return Ok(false);
+    }
+
+    let sudo_ok = Command::new("sudo")
+        .arg("-n")
+        .arg("true")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if sudo_ok {
+        return Ok(true);
+    }
+
+    Err(anyhow!(
+        "OpenResty quick install requires root privileges or passwordless sudo"
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn install_openresty_package() -> Result<String> {
+    let use_sudo = detect_install_privilege_mode()?;
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(QUICK_INSTALL_SCRIPT)
+        .env("USE_SUDO", if use_sudo { "1" } else { "0" })
+        .output()
+        .context("Failed to execute OpenResty quick install script")?;
+
+    let text = combine_output(&output);
+    if output.status.success() {
+        return Ok(text);
+    }
+
+    let detail = last_non_empty_line(&text)
+        .unwrap_or_else(|| format!("Exit status: {}", output.status));
+    Err(anyhow!(detail))
+}
+
+#[cfg(target_os = "windows")]
+fn install_openresty_package() -> Result<String> {
+    if !is_windows_admin()? {
+        return Err(anyhow!(
+            "OpenResty quick install requires Administrator privileges"
+        ));
+    }
+
+    let mut log = String::new();
+    log.push_str("[LinxPanel] Starting OpenResty quick install (Windows)\n");
+
+    let mut attempted = false;
+    let mut success = false;
+
+    if command_exists("winget") {
+        attempted = true;
+        log.push_str("[LinxPanel] Using winget to install OpenResty...\n");
+        let output = Command::new("winget")
+            .args([
+                "install",
+                "--id",
+                "OpenResty.OpenResty",
+                "-e",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ])
+            .output()
+            .context("Failed to execute winget")?;
+        let result_text = combine_output(&output);
+        if !result_text.trim().is_empty() {
+            log.push_str(&result_text);
+            log.push('\n');
+        }
+        if output.status.success() {
+            success = has_openresty_binary_now();
+            if !success {
+                log.push_str("[LinxPanel] winget finished but OpenResty binary still missing.\n");
+            }
+        }
+    } else {
+        log.push_str("[LinxPanel] winget not found, skip.\n");
+    }
+
+    if !success && command_exists("choco") {
+        attempted = true;
+        log.push_str("[LinxPanel] Using choco to install OpenResty...\n");
+        let output = Command::new("choco")
+            .args(["install", "openresty", "-y", "--no-progress"])
+            .output()
+            .context("Failed to execute choco")?;
+        let result_text = combine_output(&output);
+        if !result_text.trim().is_empty() {
+            log.push_str(&result_text);
+            log.push('\n');
+        }
+        if output.status.success() {
+            success = has_openresty_binary_now();
+            if !success {
+                log.push_str("[LinxPanel] choco finished but OpenResty binary still missing.\n");
+            }
+        }
+    } else if !success {
+        log.push_str("[LinxPanel] choco not found, skip.\n");
+    }
+
+    if !success && command_exists("scoop") {
+        attempted = true;
+        log.push_str("[LinxPanel] Using scoop to install OpenResty...\n");
+        let output = Command::new("scoop")
+            .args(["install", "openresty"])
+            .output()
+            .context("Failed to execute scoop")?;
+        let result_text = combine_output(&output);
+        if !result_text.trim().is_empty() {
+            log.push_str(&result_text);
+            log.push('\n');
+        }
+        if output.status.success() {
+            success = has_openresty_binary_now();
+            if !success {
+                log.push_str("[LinxPanel] scoop finished but OpenResty binary still missing.\n");
+            }
+        }
+    } else if !success {
+        log.push_str("[LinxPanel] scoop not found, skip.\n");
+    }
+
+    if !success {
+        attempted = true;
+        log.push_str("[LinxPanel] Trying fallback install from official OpenResty Windows package...\n");
+        match install_openresty_from_official_zip() {
+            Ok(fallback_log) => {
+                if !fallback_log.trim().is_empty() {
+                    log.push_str(&fallback_log);
+                    if !fallback_log.ends_with('\n') {
+                        log.push('\n');
+                    }
+                }
+                success = has_openresty_binary_now();
+                if !success {
+                    log.push_str("[LinxPanel] Fallback installer finished but OpenResty binary still missing.\n");
+                }
+            }
+            Err(error) => {
+                log.push_str(&format!("[LinxPanel] Fallback installer failed: {}\n", error));
+            }
+        }
+    }
+
+    if !attempted {
+        return Err(anyhow!("No installer method available"));
+    }
+    if !success {
+        return Err(anyhow!(
+            "All OpenResty quick install methods failed. Please review install logs."
+        ));
+    }
+
+    Ok(log)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn install_openresty_package() -> Result<String> {
+    Err(anyhow!(
+        "OpenResty quick install is supported on Windows and Linux only"
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_admin() -> Result<bool> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[bool]([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+        ])
+        .output()
+        .context("Failed to detect Administrator permissions")?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_ascii_lowercase();
+    Ok(text == "true")
+}
+
+#[cfg(target_os = "windows")]
+fn install_openresty_from_official_zip() -> Result<String> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+Write-Output '[LinxPanel] Download index: https://openresty.org/download/'
+$indexRes = Invoke-WebRequest -UseBasicParsing -Uri 'https://openresty.org/download/'
+$matches = [regex]::Matches($indexRes.Content, 'href="(?<url>/download/openresty-[0-9\.]+(?:\.[0-9]+)?-win64\.zip)"')
+if ($matches.Count -eq 0) {
+  throw 'No official OpenResty Windows package found on download page.'
+}
+
+$urls = @()
+foreach ($m in $matches) {
+  $u = $m.Groups['url'].Value
+  if ([string]::IsNullOrWhiteSpace($u)) { continue }
+  if ($u -notmatch '^https?://') { $u = 'https://openresty.org' + $u }
+  $urls += $u
+}
+$urls = $urls | Select-Object -Unique
+
+$selected = $urls | Sort-Object {
+  if ($_ -match 'openresty-(?<v>[0-9\.]+)-win64') {
+    $parts = $Matches['v'].Split('.') | ForEach-Object { [int]$_ }
+    while ($parts.Count -lt 4) { $parts += 0 }
+    return [long]($parts[0] * 1000000000 + $parts[1] * 1000000 + $parts[2] * 1000 + $parts[3])
+  }
+  return [long]0
+} -Descending | Select-Object -First 1
+
+if ([string]::IsNullOrWhiteSpace($selected)) {
+  throw 'Cannot resolve latest OpenResty Windows package URL.'
+}
+Write-Output ('[LinxPanel] Download package: ' + $selected)
+
+$tmpRoot = Join-Path $env:TEMP ('linxpanel-openresty-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmpRoot | Out-Null
+$zipPath = Join-Path $tmpRoot 'openresty-win64.zip'
+$extractPath = Join-Path $tmpRoot 'extract'
+
+Invoke-WebRequest -UseBasicParsing -Uri $selected -OutFile $zipPath
+Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+$pkgDir = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1
+if (-not $pkgDir) {
+  throw 'OpenResty package extraction failed.'
+}
+
+$target = 'C:\openresty'
+if (Test-Path $target) {
+  Write-Output '[LinxPanel] Existing C:\openresty found, trying to stop nginx process...'
+  Get-Process nginx -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Remove-Item -Path $target -Recurse -Force
+}
+Move-Item -Path $pkgDir.FullName -Destination $target -Force
+
+$nginxExe = Join-Path $target 'nginx\nginx.exe'
+if (-not (Test-Path $nginxExe)) {
+  throw 'OpenResty binary not found after extraction.'
+}
+Write-Output ('[LinxPanel] OpenResty binary ready: ' + $nginxExe)
+Write-Output '[LinxPanel] Fallback install completed.'
+"#;
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .output()
+        .context("Failed to execute OpenResty fallback installer")?;
+    let text = combine_output(&output);
+    if output.status.success() {
+        return Ok(text);
+    }
+    let detail = last_non_empty_line(&text).unwrap_or_else(|| format!("Exit status: {}", output.status));
+    Err(anyhow!(detail))
+}
+
+fn combine_output(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut text = String::new();
+    if !stdout.trim().is_empty() {
+        text.push_str(stdout.trim_end());
+    }
+    if !stderr.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(stderr.trim_end());
+    }
+    text
+}
+
+fn last_non_empty_line(text: &str) -> Option<String> {
+    text.lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+}
+
+fn prepare_sites_dir(conf_path: &Path, configured_sites_dir: &Path, log: &mut String) -> Result<PathBuf> {
+    if conf_path.exists() {
+        let conf_content = fs::read_to_string(conf_path)
+            .with_context(|| format!("Failed to read nginx config: {}", conf_path.display()))?;
+        let include_dirs = parse_include_dirs(conf_path, &conf_content);
+        if let Some(selected_dir) = pick_preferred_include_dir(&include_dirs) {
+            fs::create_dir_all(&selected_dir)
+                .with_context(|| format!("Failed to create include dir: {}", selected_dir.display()))?;
+            log.push_str(&format!(
+                "[LinxPanel] Using nginx include directory: {}\n",
+                selected_dir.display()
+            ));
+            return Ok(selected_dir);
+        }
+
+        let fallback_dir = conf_path
+            .parent()
+            .map(|parent| parent.join("sites-enabled"))
+            .unwrap_or_else(|| configured_sites_dir.to_path_buf());
+        fs::create_dir_all(&fallback_dir)
+            .with_context(|| format!("Failed to create sites directory: {}", fallback_dir.display()))?;
+
+        let changed = ensure_sites_include_in_http(conf_path, &fallback_dir)?;
+        if changed {
+            log.push_str("[LinxPanel] Added sites include directive into nginx http block.\n");
+        } else {
+            log.push_str("[LinxPanel] Nginx config already contains sites include directive.\n");
+        }
+        return Ok(fallback_dir);
+    }
+
+    let fallback_dir = if configured_sites_dir.as_os_str().is_empty() {
+        PathBuf::from(DEFAULT_OPENRESTY_SITES_DIR)
+    } else {
+        configured_sites_dir.to_path_buf()
+    };
+    fs::create_dir_all(&fallback_dir)
+        .with_context(|| format!("Failed to create sites directory: {}", fallback_dir.display()))?;
+    log.push_str(&format!(
+        "[LinxPanel] Main config not found ({}), using configured sites dir: {}\n",
+        conf_path.display(),
+        fallback_dir.display()
+    ));
+    Ok(fallback_dir)
+}
+
+fn parse_include_dirs(conf_path: &Path, content: &str) -> Vec<PathBuf> {
+    let base_dir = conf_path.parent().unwrap_or_else(|| Path::new("/"));
+    let mut dirs = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for raw_line in content.lines() {
+        let line = strip_comment(raw_line).trim();
+        if !line.starts_with("include ") {
+            continue;
+        }
+
+        let mut value = line.trim_start_matches("include").trim();
+        value = value.trim_end_matches(';').trim();
+        value = value.trim_matches('"').trim_matches('\'').trim();
+        if value.is_empty() || value.contains('$') {
+            continue;
+        }
+
+        let include_dir = if let Some(star_idx) = value.find('*') {
+            if !value.contains(".conf") {
+                None
+            } else {
+                let prefix = value[..star_idx].trim_end_matches('/').trim();
+                if prefix.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(prefix))
+                }
+            }
+        } else if value.ends_with(".conf")
+            && (value.contains("sites-enabled") || value.contains("conf.d"))
+        {
+            Path::new(value).parent().map(Path::to_path_buf)
+        } else {
+            None
+        };
+
+        if let Some(mut dir) = include_dir {
+            if !dir.is_absolute() {
+                dir = base_dir.join(dir);
+            }
+            let normalized = normalize_path_for_compare(&dir);
+            if seen.insert(normalized) {
+                dirs.push(dir);
+            }
+        }
+    }
+
+    dirs
+}
+
+fn pick_preferred_include_dir(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter()
+        .find(|path| path_contains(path, "sites-enabled"))
+        .cloned()
+        .or_else(|| dirs.iter().find(|path| path_contains(path, "conf.d")).cloned())
+        .or_else(|| dirs.first().cloned())
+}
+
+fn path_contains(path: &Path, needle: &str) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+fn ensure_sites_include_in_http(conf_path: &Path, sites_dir: &Path) -> Result<bool> {
+    let content = fs::read_to_string(conf_path)
+        .with_context(|| format!("Failed to read nginx config: {}", conf_path.display()))?;
+    let normalized_sites_dir = normalize_path_for_compare(sites_dir);
+    if content.replace('\\', "/").contains(&normalized_sites_dir) {
+        return Ok(false);
+    }
+
+    let include_glob = format!("{}/{}", normalized_sites_dir, "*.conf");
+    let include_line = format!("include {};", quote_nginx_value(&include_glob));
+
+    let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
+    let http_start = lines
+        .iter()
+        .position(|line| is_http_block_start(line))
+        .ok_or_else(|| anyhow!("Cannot locate http block in {}", conf_path.display()))?;
+    let http_end = find_block_end_index(&lines, http_start)
+        .ok_or_else(|| anyhow!("Cannot locate end of http block in {}", conf_path.display()))?;
+
+    let indent = detect_block_indent(&lines, http_start);
+    lines.insert(http_end, format!("{}{}", indent, include_line));
+
+    let mut updated = lines.join("\n");
+    if content.ends_with('\n') {
+        updated.push('\n');
+    }
+    write_atomic(conf_path, &updated)?;
+    Ok(true)
+}
+
+fn is_http_block_start(line: &str) -> bool {
+    let line = strip_comment(line).trim_start();
+    let Some(rest) = line.strip_prefix("http") else {
+        return false;
+    };
+    rest.trim_start().starts_with('{')
+}
+
+fn find_block_end_index(lines: &[String], start_index: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut entered = false;
+
+    for (index, line) in lines.iter().enumerate().skip(start_index) {
+        let text = strip_comment(line);
+        for ch in text.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    entered = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if entered && depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn detect_block_indent(lines: &[String], block_start: usize) -> String {
+    for line in lines.iter().skip(block_start + 1) {
+        let no_comment = strip_comment(line);
+        if no_comment.trim().is_empty() {
+            continue;
+        }
+        if no_comment.trim_start().starts_with('}') {
+            break;
+        }
+        let spaces = line.len().saturating_sub(line.trim_start().len());
+        return " ".repeat(spaces);
+    }
+    "    ".to_string()
+}
+
+fn strip_comment(line: &str) -> &str {
+    line.split('#').next().unwrap_or(line)
+}
+
+fn normalize_path_for_compare(path: &Path) -> String {
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
+    if normalized.is_empty() {
+        "/".to_string()
+    } else {
+        normalized
+    }
 }
 
 async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRuntime) -> Result<String> {
@@ -298,6 +999,305 @@ fn run_openresty(runtime: &OpenRestyRuntime, args: &[&str]) -> Result<()> {
     Err(anyhow!(detail))
 }
 
+async fn persist_install_settings(
+    db: &SqlitePool,
+    nginx_bin: &Path,
+    nginx_conf: Option<&Path>,
+    sites_dir: &Path,
+) -> Result<()> {
+    save_setting(db, SETTING_OPENRESTY_ENABLED, "true").await?;
+    save_setting(db, SETTING_OPENRESTY_BIN, &nginx_bin.to_string_lossy()).await?;
+    save_setting(db, SETTING_OPENRESTY_SITES_DIR, &sites_dir.to_string_lossy()).await?;
+    save_setting(
+        db,
+        SETTING_OPENRESTY_CONF_PATH,
+        &nginx_conf
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn save_setting(db: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(db)
+    .await
+    .with_context(|| format!("Failed to save setting '{}'", key))?;
+    Ok(())
+}
+
+async fn inspect_runtime(db: &SqlitePool) -> Result<RuntimeInspection> {
+    let runtime = load_runtime(db).await?;
+    let resolved_nginx_bin = resolve_nginx_bin(&runtime.nginx_bin);
+
+    let detected_conf_path = match runtime.nginx_conf.clone() {
+        Some(path) => Some(path),
+        None => resolved_nginx_bin
+            .as_ref()
+            .and_then(|bin| detect_conf_path(bin).ok().flatten()),
+    };
+    let detected_version = resolved_nginx_bin
+        .as_ref()
+        .and_then(|bin| detect_binary_version(bin).ok().flatten());
+    let is_openresty = resolved_nginx_bin
+        .as_ref()
+        .map(|bin| {
+            is_openresty_binary_path(bin)
+                || detected_version
+                    .as_deref()
+                    .map(|value| value.to_ascii_lowercase().contains("openresty/"))
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    Ok(RuntimeInspection {
+        runtime,
+        resolved_nginx_bin,
+        detected_conf_path,
+        detected_version,
+        is_openresty,
+    })
+}
+
+fn to_public_status(inspection: RuntimeInspection) -> OpenRestyStatus {
+    let supported = cfg!(any(target_os = "linux", target_os = "windows"));
+    let installed = inspection.is_openresty;
+
+    let nginx_bin = inspection
+        .resolved_nginx_bin
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| inspection.runtime.nginx_bin.clone());
+
+    let nginx_conf = inspection
+        .detected_conf_path
+        .or(inspection.runtime.nginx_conf.clone())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let message = if !supported {
+        "OpenResty sync is supported on Windows and Linux only".to_string()
+    } else if installed {
+        format!("OpenResty detected at {}", nginx_bin)
+    } else if !nginx_bin.is_empty() && Path::new(&nginx_bin).exists() {
+        format!(
+            "OpenResty is not installed (detected non-OpenResty nginx: {})",
+            nginx_bin
+        )
+    } else {
+        "OpenResty is not installed".to_string()
+    };
+
+    OpenRestyStatus {
+        supported,
+        installed,
+        enabled: inspection.runtime.enabled,
+        nginx_bin,
+        nginx_conf,
+        sites_dir: inspection.runtime.sites_dir.to_string_lossy().to_string(),
+        version: inspection.detected_version,
+        message,
+    }
+}
+
+fn resolve_nginx_bin(preferred: &str) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if !preferred.trim().is_empty() {
+        candidates.push(PathBuf::from(preferred.trim()));
+    }
+    candidates.push(PathBuf::from(DEFAULT_OPENRESTY_BIN));
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(PathBuf::from("C:\\Program Files\\OpenResty\\nginx\\nginx.exe"));
+        candidates.push(PathBuf::from("C:\\openresty\\nginx\\nginx.exe"));
+    }
+    candidates.push(PathBuf::from("/usr/sbin/openresty"));
+    candidates.push(PathBuf::from("/usr/bin/openresty"));
+    candidates.push(PathBuf::from("/usr/sbin/nginx"));
+    candidates.push(PathBuf::from("/usr/bin/nginx"));
+    if let Some(path) = find_in_path("openresty") {
+        candidates.push(path);
+    }
+    if let Some(path) = find_in_path("nginx") {
+        candidates.push(path);
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for candidate in candidates {
+        let normalized = normalize_path_for_compare(&candidate);
+        if !seen.insert(normalized) {
+            continue;
+        }
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn has_openresty_binary_now() -> bool {
+    let Some(binary) = resolve_nginx_bin(DEFAULT_OPENRESTY_BIN) else {
+        return false;
+    };
+    if is_openresty_binary_path(&binary) {
+        return true;
+    }
+    detect_binary_version(&binary)
+        .ok()
+        .flatten()
+        .map(|value| value.to_ascii_lowercase().contains("openresty/"))
+        .unwrap_or(false)
+}
+
+fn is_openresty_binary_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains("openresty")
+}
+
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path_env = std::env::var_os("PATH")?;
+    let entries = std::env::split_paths(&path_env);
+    for dir in entries {
+        let candidate = dir.join(name);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let candidate_exe = dir.join(format!("{}.exe", name));
+            if is_executable_file(&candidate_exe) {
+                return Some(candidate_exe);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn command_exists(name: &str) -> bool {
+    find_in_path(name).is_some()
+}
+
+#[cfg(target_family = "unix")]
+fn is_executable_file(path: &Path) -> bool {
+    if !path.exists() || !path.is_file() {
+        return false;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_family = "unix"))]
+fn is_executable_file(path: &Path) -> bool {
+    path.exists() && path.is_file()
+}
+
+fn detect_binary_version(binary: &Path) -> Result<Option<String>> {
+    let output = run_binary_capture(binary, ["-v"].as_slice())?;
+    if let Some(version) = extract_version_token(&output, "openresty/") {
+        return Ok(Some(version));
+    }
+    if let Some(version) = extract_version_token(&output, "nginx/") {
+        return Ok(Some(version));
+    }
+    Ok(output
+        .lines()
+        .find(|line| line.contains("version"))
+        .map(|line| line.trim().to_string()))
+}
+
+fn extract_version_token(text: &str, marker: &str) -> Option<String> {
+    let start = text.find(marker)?;
+    let token = text[start..]
+        .split_whitespace()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(token.to_string())
+}
+
+fn detect_conf_path(binary: &Path) -> Result<Option<PathBuf>> {
+    let output = run_binary_capture(binary, ["-V"].as_slice())?;
+    let mut conf_path: Option<PathBuf> = None;
+    let mut prefix: Option<PathBuf> = None;
+
+    for token in output.split_whitespace() {
+        if let Some(value) = token.strip_prefix("--conf-path=") {
+            let value = value.trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                conf_path = Some(PathBuf::from(value));
+            }
+        }
+        if let Some(value) = token.strip_prefix("--prefix=") {
+            let value = value.trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                prefix = Some(PathBuf::from(value));
+            }
+        }
+    }
+
+    let conf_path = conf_path.map(|path| {
+        if path.is_absolute() {
+            path
+        } else if let Some(prefix) = prefix {
+            prefix.join(path)
+        } else {
+            path
+        }
+    });
+
+    Ok(conf_path)
+}
+
+fn guess_conf_path_from_bin(binary: &Path) -> Option<PathBuf> {
+    let binary_text = binary.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    {
+        if is_openresty_binary_path(binary) {
+            if let Some(nginx_dir) = binary.parent() {
+                let candidate = nginx_dir.join("conf").join("nginx.conf");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+            return Some(PathBuf::from("C:\\openresty\\nginx\\conf\\nginx.conf"));
+        }
+    }
+    if binary_text.contains("/usr/local/openresty/") {
+        return Some(PathBuf::from("/usr/local/openresty/nginx/conf/nginx.conf"));
+    }
+    if binary_text.contains("/usr/sbin/openresty") || binary_text.contains("/usr/bin/openresty") {
+        return Some(PathBuf::from("/etc/openresty/nginx.conf"));
+    }
+    if binary_text.contains("/nginx") {
+        return Some(PathBuf::from("/etc/nginx/nginx.conf"));
+    }
+    None
+}
+
+fn run_binary_capture(binary: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new(binary)
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to execute {}", binary.display()))?;
+    let text = combine_output(&output);
+    if output.status.success() || !text.trim().is_empty() {
+        Ok(text)
+    } else {
+        Err(anyhow!("Exit status: {}", output.status))
+    }
+}
+
 async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
     let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(db)
@@ -307,19 +1307,23 @@ async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
 
     let enabled = setting_bool(&settings, SETTING_OPENRESTY_ENABLED)
         .or_else(|| env_bool("OPENRESTY_ENABLED"))
-        .unwrap_or(cfg!(target_os = "linux"));
+        .unwrap_or(cfg!(any(target_os = "linux", target_os = "windows")));
 
-    let nginx_bin = setting_or_env(
+    let configured_nginx_bin = setting_or_env(
         &settings,
         SETTING_OPENRESTY_BIN,
         "OPENRESTY_BIN",
-        "/usr/local/openresty/nginx/sbin/nginx",
+        DEFAULT_OPENRESTY_BIN,
     );
+    let nginx_bin = resolve_nginx_bin(&configured_nginx_bin)
+        .unwrap_or_else(|| PathBuf::from(configured_nginx_bin))
+        .to_string_lossy()
+        .to_string();
     let sites_dir = PathBuf::from(setting_or_env(
         &settings,
         SETTING_OPENRESTY_SITES_DIR,
         "OPENRESTY_SITES_DIR",
-        "/usr/local/openresty/nginx/conf/sites-enabled",
+        DEFAULT_OPENRESTY_SITES_DIR,
     ));
     let nginx_conf = setting_or_env(&settings, SETTING_OPENRESTY_CONF_PATH, "OPENRESTY_CONF_PATH", "")
         .trim()

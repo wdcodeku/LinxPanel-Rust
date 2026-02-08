@@ -1,5 +1,28 @@
 <template>
   <div class="site-detail" v-loading="loading">
+    <el-card v-if="!canManageSites" shadow="hover" class="guard-card">
+      <div class="guard-title">
+        <el-icon><WarningFilled /></el-icon>
+        <span>{{ t('si.openrestyRequiredTitle') }}</span>
+      </div>
+      <div class="guard-desc">{{ openrestyStatus.message || t('si.openrestyRequiredDesc') }}</div>
+      <div class="guard-actions">
+        <el-button
+          type="primary"
+          :disabled="!openrestyStatus.supported"
+          :loading="installingOpenresty"
+          @click="handleQuickInstallOpenResty"
+        >
+          {{ t('si.quickInstallOpenresty') }}
+        </el-button>
+        <el-button :disabled="!installLog" @click="installLogDialogVisible = true">
+          {{ t('st.viewInstallLog') }}
+        </el-button>
+        <el-button @click="router.push('/settings')">{{ t('si.openrestyGoSettings') }}</el-button>
+        <el-button @click="router.push('/sites')">{{ t('sites') }}</el-button>
+      </div>
+    </el-card>
+    <template v-else>
     <div class="detail-header">
       <div class="title-row">
         <el-button :icon="ArrowLeft" text class="back-btn" @click="$router.push('/sites')" />
@@ -184,12 +207,23 @@
         <el-button type="primary" @click="handleSave">{{ t('si.saveConfig') }}</el-button>
       </div>
     </el-card>
+    </template>
+
+    <OperationLogDialog
+      v-model="installLogDialogVisible"
+      :title="t('st.openrestyInstallLog')"
+      :description="openrestyStatus.message || t('st.openrestyInstallStarting')"
+      :status="installLogStatus"
+      :loading="installingOpenresty"
+      :log="installLog"
+      @clear="installLog = ''"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
 import {
   getSite,
@@ -201,11 +235,14 @@ import {
   reorderDomains,
   updateDomain,
   removeDomain,
+  getOpenRestyStatus,
+  quickInstallOpenResty,
 } from '@/api'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, Edit, Delete, Check, Close } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, Edit, Delete, Check, Close, WarningFilled } from '@element-plus/icons-vue'
 
 const route = useRoute()
+const router = useRouter()
 const { t } = useI18n()
 const siteId = Number(route.params.id)
 const loading = ref(false)
@@ -218,6 +255,16 @@ const editingDomainValue = ref('')
 const suppressNextEditBlur = ref(false)
 const draggingDomainIndex = ref<number | null>(null)
 const dragOverDomainIndex = ref<number | null>(null)
+const installingOpenresty = ref(false)
+const installLogDialogVisible = ref(false)
+const installLogStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
+const installLog = ref('')
+const openrestyStatus = ref<any>({
+  supported: true,
+  installed: false,
+  message: '',
+})
+const canManageSites = ref(false)
 
 const editForm = reactive({
   name: '',
@@ -230,11 +277,69 @@ const editForm = reactive({
 onMounted(async () => {
   loading.value = true
   try {
-    await Promise.all([loadSite(), loadDomains()])
+    await loadOpenRestyStatus()
+    if (canManageSites.value) {
+      await Promise.all([loadSite(), loadDomains()])
+    }
   } finally {
     loading.value = false
   }
 })
+
+async function loadOpenRestyStatus() {
+  const res: any = await getOpenRestyStatus()
+  if (res.success && res.data) {
+    openrestyStatus.value = {
+      supported: !!res.data.supported,
+      installed: !!res.data.installed,
+      message: String(res.data.message || ''),
+      ...res.data,
+    }
+    canManageSites.value = !!openrestyStatus.value.installed
+  } else {
+    canManageSites.value = false
+  }
+}
+
+async function handleQuickInstallOpenResty() {
+  if (!openrestyStatus.value?.supported) {
+    ElMessage.warning(t('st.openrestyUnsupportedInstall'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(t('st.openrestyInstallConfirm'), t('confirm'), { type: 'warning' })
+  } catch {
+    return
+  }
+
+  installLogDialogVisible.value = true
+  installLogStatus.value = 'running'
+  installLog.value = `[${new Date().toLocaleString()}] ${t('st.openrestyInstallStarting')}\n`
+
+  installingOpenresty.value = true
+  try {
+    const res: any = await quickInstallOpenResty()
+    if (res.success && res.data) {
+      installLog.value += String(res.data.log || '')
+      if (!installLog.value.endsWith('\n')) installLog.value += '\n'
+      installLogStatus.value = 'success'
+      await loadOpenRestyStatus()
+      if (canManageSites.value) {
+        await Promise.all([loadSite(), loadDomains()])
+      }
+      ElMessage.success(t('st.openrestyInstallSuccess'))
+    } else if (res.message) {
+      installLog.value += `${res.message}\n`
+      installLogStatus.value = 'error'
+    }
+  } catch (error: any) {
+    const message = String(error?.message || t('api.requestFailed'))
+    installLog.value += `${message}\n`
+    installLogStatus.value = 'error'
+  } finally {
+    installingOpenresty.value = false
+  }
+}
 
 async function loadSite() {
   const siteRes: any = await getSite(siteId)
@@ -285,6 +390,10 @@ function toDomainUrl(value: string) {
 }
 
 async function handleSave() {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await updateSite(siteId, editForm)
   if (res.success) {
     site.value = res.data
@@ -293,16 +402,28 @@ async function handleSave() {
 }
 
 async function handleStart() {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await startSite(siteId)
   if (res.success) { site.value.status = 'running'; ElMessage.success(t('si.started')) }
 }
 
 async function handleStop() {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await stopSite(siteId)
   if (res.success) { site.value.status = 'stopped'; ElMessage.success(t('si.stoppedMsg')) }
 }
 
 async function handleAddDomain() {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const domain = normalizeDomainInput(newDomain.value)
   if (!domain) return
   const res: any = await addDomain(siteId, { domain })
@@ -337,6 +458,10 @@ function cancelEditDomain() {
 }
 
 async function handleSaveEditDomain(row: any) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   suppressNextEditBlur.value = false
   const domain = normalizeDomainInput(editingDomainValue.value)
   if (!domain) return
@@ -370,6 +495,10 @@ function handleDomainDragEnd() {
 }
 
 async function handleDomainDrop(index: number, event: DragEvent) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   event.preventDefault()
   const from = draggingDomainIndex.value
   if (from === null) {
@@ -410,6 +539,10 @@ async function handleDomainDrop(index: number, event: DragEvent) {
 }
 
 async function handleRemoveDomain(id: number) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await removeDomain(siteId, id)
   if (res.success) {
     if (editingDomainId.value === id) cancelEditDomain()
@@ -424,6 +557,33 @@ async function handleRemoveDomain(id: number) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+.guard-card {
+  border: 1px solid var(--lp-border-light);
+}
+.guard-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lp-text-primary);
+  .el-icon {
+    color: var(--lp-warning);
+  }
+}
+.guard-desc {
+  margin-top: 8px;
+  color: var(--lp-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.guard-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .detail-header {
   display: flex;

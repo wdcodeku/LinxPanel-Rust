@@ -17,3 +17,23 @@ Runtime keys (in panel settings / `settings` table / env):
 - `openresty_conf_path` / `OPENRESTY_CONF_PATH`
 - `php_fpm_addr` / `PHP_FPM_ADDR`
 - `openresty_listen_ipv6` / `OPENRESTY_LISTEN_IPV6`
+
+## OpenResty Quick Install & Site Guard
+
+- Site create/edit/start/stop/domain management now requires OpenResty to be installed.
+- Quick install supports both Linux and Windows.
+- New APIs:
+  - `GET /api/settings/openresty/status`
+  - `POST /api/settings/openresty/install`
+- Quick install (Linux) will:
+  - install OpenResty by distro package manager,
+  - auto-detect binary and main config path,
+  - auto-select/include a site config directory,
+  - persist runtime settings and run `nginx -t`.
+- Quick install (Windows) tries package managers in order:
+  - `winget` → `choco` → `scoop`
+- If package managers are unavailable/failed on Windows, panel will fallback to:
+  - download latest official OpenResty win64 zip from `openresty.org`
+  - extract and deploy to `C:\openresty`
+- Frontend provides a reusable operation log dialog component:
+  - `web/src/components/OperationLogDialog.vue`

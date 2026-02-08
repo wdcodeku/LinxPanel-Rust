@@ -46,6 +46,10 @@ async fn create_site(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSiteRequest>,
 ) -> Json<ApiResponse<Site>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     let CreateSiteRequest {
         name,
         domains,
@@ -141,6 +145,10 @@ async fn update_site(
     Path(id): Path<i64>,
     Json(req): Json<UpdateSiteRequest>,
 ) -> Json<ApiResponse<Site>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     let existing = sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -198,6 +206,10 @@ async fn delete_site(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     let _ = sqlx::query("DELETE FROM domains WHERE site_id = ?")
         .bind(id)
         .execute(&state.db)
@@ -222,6 +234,10 @@ async fn start_site(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     match sqlx::query("UPDATE sites SET status='running', updated_at=datetime('now') WHERE id=?")
         .bind(id)
         .execute(&state.db)
@@ -241,6 +257,10 @@ async fn stop_site(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Json<ApiResponse<()>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     match sqlx::query("UPDATE sites SET status='stopped', updated_at=datetime('now') WHERE id=?")
         .bind(id)
         .execute(&state.db)

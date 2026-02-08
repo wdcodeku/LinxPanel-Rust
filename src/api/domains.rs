@@ -35,6 +35,10 @@ async fn add_domain(
     Path(site_id): Path<i64>,
     Json(req): Json<AddDomainRequest>,
 ) -> Json<ApiResponse<Domain>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     let domain = match normalize_domain(&req.domain) {
         Some(value) => value,
         None => return Json(ApiResponse::err("Invalid domain format")),
@@ -113,6 +117,10 @@ async fn update_domain(
     Path((site_id, id)): Path<(i64, i64)>,
     Json(req): Json<UpdateDomainRequest>,
 ) -> Json<ApiResponse<Domain>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     let domain = match normalize_domain(&req.domain) {
         Some(value) => value,
         None => return Json(ApiResponse::err("Invalid domain format")),
@@ -161,6 +169,10 @@ async fn reorder_domains(
     Path(site_id): Path<i64>,
     Json(req): Json<ReorderDomainsRequest>,
 ) -> Json<ApiResponse<Vec<Domain>>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     if req.ordered_ids.is_empty() {
         return Json(ApiResponse::err("Domain order is invalid"));
     }
@@ -226,6 +238,10 @@ async fn remove_domain(
     State(state): State<Arc<AppState>>,
     Path((site_id, id)): Path<(i64, i64)>,
 ) -> Json<ApiResponse<()>> {
+    if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
+        return Json(ApiResponse::err(&e.to_string()));
+    }
+
     match sqlx::query("DELETE FROM domains WHERE id = ? AND site_id = ?")
         .bind(id)
         .bind(site_id)

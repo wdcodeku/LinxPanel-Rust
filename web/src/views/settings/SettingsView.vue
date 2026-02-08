@@ -26,6 +26,51 @@
               <el-input v-model="form.api_url" placeholder="http://0.0.0.0:7200" />
             </el-form-item>
             <el-divider>{{ t('st.openrestySettings') }}</el-divider>
+            <el-form-item :label="t('st.openrestyStatus')">
+              <div class="openresty-status-box" v-loading="statusLoading || installingOpenresty">
+                <div class="openresty-status-tags">
+                  <el-tag :type="openrestyStatus.installed ? 'success' : 'danger'" effect="dark" size="small">
+                    {{ openrestyStatus.installed ? t('st.openrestyInstalled') : t('st.openrestyNotInstalled') }}
+                  </el-tag>
+                  <el-tag :type="form.openresty_enabled ? 'success' : 'info'" size="small">
+                    {{ t('st.openrestyEnabled') }}: {{ form.openresty_enabled ? 'ON' : 'OFF' }}
+                  </el-tag>
+                  <el-tag v-if="openrestyStatus.version" type="info" size="small">
+                    {{ openrestyStatus.version }}
+                  </el-tag>
+                </div>
+                <div class="openresty-status-message">{{ openrestyStatus.message || '-' }}</div>
+                <div class="openresty-status-meta">
+                  <span>{{ t('st.openrestyCurrentBin') }}: {{ openrestyStatus.nginx_bin || '-' }}</span>
+                  <span>{{ t('st.openrestyCurrentConf') }}: {{ openrestyStatus.nginx_conf || '-' }}</span>
+                  <span>{{ t('st.openrestyCurrentSitesDir') }}: {{ openrestyStatus.sites_dir || '-' }}</span>
+                </div>
+                <div class="openresty-status-actions">
+                  <el-button size="small" @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :disabled="!openrestyStatus.supported || openrestyStatus.installed"
+                    :loading="installingOpenresty"
+                    @click="handleQuickInstall"
+                  >
+                    {{ t('st.quickInstallOpenresty') }}
+                  </el-button>
+                  <el-button size="small" :disabled="!installLog" @click="installLogDialogVisible = true">
+                    {{ t('st.viewInstallLog') }}
+                  </el-button>
+                </div>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="!openrestyStatus.installed">
+              <el-alert
+                type="warning"
+                :closable="false"
+                show-icon
+                :title="t('si.openrestyRequiredTitle')"
+                :description="t('si.openrestyRequiredDesc')"
+              />
+            </el-form-item>
             <el-form-item :label="t('st.openrestyEnabled')">
               <el-switch v-model="form.openresty_enabled" />
             </el-form-item>
@@ -72,19 +117,45 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <OperationLogDialog
+      v-model="installLogDialogVisible"
+      :title="t('st.openrestyInstallLog')"
+      :description="openrestyStatus.message || t('st.openrestyInstallStarting')"
+      :status="installLogStatus"
+      :loading="installingOpenresty"
+      :log="installLog"
+      @clear="installLog = ''"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from '@/i18n'
-import { getSettings, saveSettingsApi, changePasswordApi } from '@/api'
-import { ElMessage } from 'element-plus'
+import { getSettings, saveSettingsApi, changePasswordApi, getOpenRestyStatus, quickInstallOpenResty } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n()
 const saving = ref(false)
 const changingPw = ref(false)
 const pwRef = ref()
+const statusLoading = ref(false)
+const installingOpenresty = ref(false)
+const installLogDialogVisible = ref(false)
+const installLogStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
+const installLog = ref('')
+
+const openrestyStatus = reactive({
+  supported: true,
+  installed: false,
+  enabled: false,
+  nginx_bin: '',
+  nginx_conf: '',
+  sites_dir: '',
+  version: '',
+  message: '',
+})
 
 const form = reactive({
   panel_name: 'LinxPanel',
@@ -130,6 +201,78 @@ async function loadSettings() {
   } catch {}
 }
 
+function applyOpenRestyStatus(status: Record<string, any> | null | undefined) {
+  const data = status || {}
+  openrestyStatus.supported = parseBoolLike(data.supported, true)
+  openrestyStatus.installed = parseBoolLike(data.installed, false)
+  openrestyStatus.enabled = parseBoolLike(data.enabled, form.openresty_enabled)
+  openrestyStatus.nginx_bin = String(data.nginx_bin ?? '')
+  openrestyStatus.nginx_conf = String(data.nginx_conf ?? '')
+  openrestyStatus.sites_dir = String(data.sites_dir ?? '')
+  openrestyStatus.version = String(data.version ?? '')
+  openrestyStatus.message = String(data.message ?? '')
+}
+
+async function loadOpenRestyStatus(showError = false) {
+  statusLoading.value = true
+  try {
+    const res: any = await getOpenRestyStatus()
+    if (res.success && res.data) {
+      applyOpenRestyStatus(res.data)
+      form.openresty_enabled = parseBoolLike(res.data.enabled, form.openresty_enabled)
+      if (res.data.nginx_bin) form.openresty_bin = String(res.data.nginx_bin)
+      if (res.data.sites_dir) form.openresty_sites_dir = String(res.data.sites_dir)
+      if (res.data.nginx_conf) form.openresty_conf_path = String(res.data.nginx_conf)
+    } else if (showError) {
+      ElMessage.error(res.message || t('api.requestFailed'))
+    }
+  } catch {
+    if (showError) ElMessage.error(t('api.requestFailed'))
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+async function handleQuickInstall() {
+  if (!openrestyStatus.supported) {
+    ElMessage.warning(t('st.openrestyUnsupportedInstall'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(t('st.openrestyInstallConfirm'), t('confirm'), { type: 'warning' })
+  } catch {
+    return
+  }
+
+  installLogDialogVisible.value = true
+  installLogStatus.value = 'running'
+  installLog.value = `[${new Date().toLocaleString()}] ${t('st.openrestyInstallStarting')}\n`
+
+  installingOpenresty.value = true
+  try {
+    const res: any = await quickInstallOpenResty()
+    if (res.success && res.data) {
+      installLog.value += String(res.data.log || '')
+      if (!installLog.value.endsWith('\n')) installLog.value += '\n'
+      installLogStatus.value = 'success'
+      applyOpenRestyStatus(res.data.status)
+      await loadSettings()
+      await loadOpenRestyStatus()
+      ElMessage.success(t('st.openrestyInstallSuccess'))
+    } else if (res.message) {
+      installLog.value += `${res.message}\n`
+      installLogStatus.value = 'error'
+      ElMessage.error(res.message)
+    }
+  } catch (error: any) {
+    const message = String(error?.message || t('api.requestFailed'))
+    installLog.value += `${message}\n`
+    installLogStatus.value = 'error'
+  } finally {
+    installingOpenresty.value = false
+  }
+}
+
 function parseBoolLike(value: unknown, fallback: boolean) {
   if (typeof value === 'boolean') return value
   if (typeof value === 'string') {
@@ -142,6 +285,10 @@ function parseBoolLike(value: unknown, fallback: boolean) {
 }
 
 async function saveSettings() {
+  if (form.openresty_enabled && !openrestyStatus.installed) {
+    ElMessage.warning(t('st.openrestyNeedInstallFirst'))
+    return
+  }
   saving.value = true
   try {
     const res: any = await saveSettingsApi(form)
@@ -168,7 +315,9 @@ async function changePassword() {
   } finally { changingPw.value = false }
 }
 
-onMounted(() => loadSettings())
+onMounted(async () => {
+  await Promise.all([loadSettings(), loadOpenRestyStatus()])
+})
 </script>
 <style scoped lang="scss">
 .settings-page { max-width: 1200px; }
@@ -183,5 +332,41 @@ onMounted(() => loadSettings())
   display: flex; align-items: center; gap: 8px;
   font-size: 15px; font-weight: 600; color: var(--lp-text-primary);
   .el-icon { color: var(--lp-primary); }
+}
+.openresty-status-box {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--lp-radius);
+  border: 1px solid var(--lp-border-light);
+  background: var(--lp-bg-page);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.openresty-status-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.openresty-status-message {
+  color: var(--lp-text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.openresty-status-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--lp-text-secondary);
+  span {
+    word-break: break-all;
+  }
+}
+.openresty-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

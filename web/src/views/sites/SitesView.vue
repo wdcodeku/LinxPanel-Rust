@@ -23,13 +23,43 @@
         v-if="activeCategory === 'sites'"
         type="primary"
         :icon="Plus"
+        :disabled="!canManageSites"
         @click="showCreate = true"
       >
         {{ t('si.addSite') }}
       </el-button>
     </div>
 
-    <el-card v-if="activeCategory === 'sites'" shadow="hover">
+    <el-card
+      v-if="activeCategory === 'sites' && !canManageSites"
+      shadow="hover"
+      class="openresty-guard-card"
+      v-loading="statusLoading || installingOpenresty"
+    >
+      <div class="openresty-guard">
+        <div class="guard-title">
+          <el-icon><WarningFilled /></el-icon>
+          <span>{{ t('si.openrestyRequiredTitle') }}</span>
+        </div>
+        <div class="guard-desc">{{ openrestyStatus.message || t('si.openrestyRequiredDesc') }}</div>
+        <div class="guard-actions">
+          <el-button
+            type="primary"
+            :disabled="!openrestyStatus.supported"
+            :loading="installingOpenresty"
+            @click="handleQuickInstallOpenResty"
+          >
+            {{ t('si.quickInstallOpenresty') }}
+          </el-button>
+          <el-button :disabled="!installLog" @click="installLogDialogVisible = true">
+            {{ t('st.viewInstallLog') }}
+          </el-button>
+          <el-button @click="router.push('/settings')">{{ t('si.openrestyGoSettings') }}</el-button>
+          <el-button @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
+        </div>
+      </div>
+    </el-card>
+    <el-card v-else-if="activeCategory === 'sites'" shadow="hover">
       <el-table :data="sites" v-loading="loading" stripe style="width:100%">
         <el-table-column prop="name" :label="t('si.siteName')" min-width="140">
           <template #default="{ row }">
@@ -199,16 +229,26 @@
         <DirPicker :init-path="createForm.doc_root || '/'" @select="handleSelectDir" />
       </div>
     </el-dialog>
+
+    <OperationLogDialog
+      v-model="installLogDialogVisible"
+      :title="t('st.openrestyInstallLog')"
+      :description="openrestyStatus.message || t('st.openrestyInstallStarting')"
+      :status="installLogStatus"
+      :loading="installingOpenresty"
+      :log="installLog"
+      @clear="installLog = ''"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
-import { getSites, createSite, deleteSite, startSite, stopSite } from '@/api'
+import { getSites, createSite, deleteSite, startSite, stopSite, getOpenRestyStatus, quickInstallOpenResty } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete } from '@element-plus/icons-vue'
+import { Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete, WarningFilled } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -218,8 +258,19 @@ const loading = ref(false)
 const showCreate = ref(false)
 const showDirPicker = ref(false)
 const creating = ref(false)
+const statusLoading = ref(false)
+const installingOpenresty = ref(false)
+const installLogDialogVisible = ref(false)
+const installLogStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
+const installLog = ref('')
 const domainInputRef = ref<HTMLInputElement>()
 const domainInput = ref('')
+const openrestyStatus = ref<any>({
+  supported: true,
+  installed: false,
+  message: '',
+})
+const canManageSites = computed(() => Boolean(openrestyStatus.value?.installed))
 
 const createForm = reactive({
   name: '',
@@ -295,7 +346,75 @@ function handleSelectDir(path: string) {
   showDirPicker.value = false
 }
 
+async function loadOpenRestyStatus(showError = false) {
+  statusLoading.value = true
+  try {
+    const res: any = await getOpenRestyStatus()
+    if (res.success && res.data) {
+      openrestyStatus.value = {
+        supported: !!res.data.supported,
+        installed: !!res.data.installed,
+        message: String(res.data.message || ''),
+        ...res.data,
+      }
+      if (!openrestyStatus.value.installed) {
+        sites.value = []
+      }
+    } else if (showError) {
+      ElMessage.error(res.message || t('api.requestFailed'))
+    }
+  } catch {
+    if (showError) ElMessage.error(t('api.requestFailed'))
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+async function handleQuickInstallOpenResty() {
+  if (!openrestyStatus.value?.supported) {
+    ElMessage.warning(t('st.openrestyUnsupportedInstall'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(t('st.openrestyInstallConfirm'), t('confirm'), { type: 'warning' })
+  } catch {
+    return
+  }
+
+  installLogDialogVisible.value = true
+  installLogStatus.value = 'running'
+  installLog.value = `[${new Date().toLocaleString()}] ${t('st.openrestyInstallStarting')}\n`
+
+  installingOpenresty.value = true
+  try {
+    const res: any = await quickInstallOpenResty()
+    if (res.success && res.data) {
+      installLog.value += String(res.data.log || '')
+      if (!installLog.value.endsWith('\n')) installLog.value += '\n'
+      installLogStatus.value = 'success'
+      await loadOpenRestyStatus(true)
+      if (canManageSites.value) {
+        await loadSites()
+      }
+      ElMessage.success(t('st.openrestyInstallSuccess'))
+    } else if (res.message) {
+      installLog.value += `${res.message}\n`
+      installLogStatus.value = 'error'
+    }
+  } catch (error: any) {
+    const message = String(error?.message || t('api.requestFailed'))
+    installLog.value += `${message}\n`
+    installLogStatus.value = 'error'
+  } finally {
+    installingOpenresty.value = false
+  }
+}
+
 async function loadSites() {
+  if (!canManageSites.value) {
+    sites.value = []
+    return
+  }
   loading.value = true
   try {
     const res: any = await getSites()
@@ -305,6 +424,10 @@ async function loadSites() {
 }
 
 async function doCreate() {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   commitDomainInput()
   const payload = {
     name: createForm.name.trim(),
@@ -337,6 +460,10 @@ async function doCreate() {
 }
 
 async function handleDelete(row: any) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   await ElMessageBox.confirm(t('si.confirmDelete', { name: row.name }), t('confirm'), { type: 'warning' })
   const res: any = await deleteSite(row.id)
   if (res.success) { ElMessage.success(t('si.deleted')); loadSites() }
@@ -348,18 +475,31 @@ function openSiteDir(row: any) {
 }
 
 async function handleStart(id: number) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await startSite(id)
   if (res.success) loadSites()
   else ElMessage.error(res.message)
 }
 
 async function handleStop(id: number) {
+  if (!canManageSites.value) {
+    ElMessage.warning(t('api.openrestyRequired'))
+    return
+  }
   const res: any = await stopSite(id)
   if (res.success) loadSites()
   else ElMessage.error(res.message)
 }
 
-onMounted(() => loadSites())
+onMounted(async () => {
+  await loadOpenRestyStatus()
+  if (canManageSites.value) {
+    await loadSites()
+  }
+})
 </script>
 <style scoped lang="scss">
 .sites-view {
@@ -372,6 +512,33 @@ onMounted(() => loadSites())
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+.openresty-guard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.guard-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lp-text-primary);
+  .el-icon {
+    color: var(--lp-warning);
+  }
+}
+.guard-desc {
+  color: var(--lp-text-secondary);
+  line-height: 1.6;
+  font-size: 13px;
+}
+.guard-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .category-nav {

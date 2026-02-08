@@ -1,12 +1,15 @@
 use axum::{extract::State, routing::{get, post}, Json, Router};
 use std::sync::Arc;
 use crate::models::*;
+use crate::services::openresty;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/settings", get(get_settings).put(update_settings))
         .route("/settings/password", post(change_password))
+        .route("/settings/openresty/status", get(get_openresty_status))
+        .route("/settings/openresty/install", post(quick_install_openresty))
 }
 
 async fn get_settings(
@@ -76,4 +79,22 @@ async fn change_password(
         .ok();
 
     Json(ApiResponse::ok_msg("Password changed"))
+}
+
+async fn get_openresty_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<openresty::OpenRestyStatus>> {
+    match openresty::get_status(state.as_ref()).await {
+        Ok(status) => Json(ApiResponse::ok(status)),
+        Err(e) => Json(ApiResponse::err(&e.to_string())),
+    }
+}
+
+async fn quick_install_openresty(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<openresty::OpenRestyInstallResult>> {
+    match openresty::quick_install(state.as_ref()).await {
+        Ok(result) => Json(ApiResponse::ok(result)),
+        Err(e) => Json(ApiResponse::err(&format!("OpenResty install failed: {}", e))),
+    }
 }

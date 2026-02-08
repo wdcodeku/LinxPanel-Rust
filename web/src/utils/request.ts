@@ -8,6 +8,10 @@ const request = axios.create({
   timeout: 30000,
 })
 
+function isApiEnvelope(data: unknown): data is { success: boolean; message?: unknown } {
+  return !!data && typeof data === 'object' && 'success' in data
+}
+
 const API_MESSAGE_MAP: Record<string, string> = {
   'Invalid credentials': 'api.invalidCredentials',
   'Site not found': 'api.siteNotFound',
@@ -36,6 +40,14 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'Site deleted': 'api.siteDeleted',
   'Site started': 'api.siteStarted',
   'Site stopped': 'api.siteStopped',
+  'OpenResty is required. Please install OpenResty first.': 'api.openrestyRequired',
+  'OpenResty quick install is supported on Windows and Linux only': 'api.openrestyInstallWinLinuxOnly',
+  'OpenResty sync is supported on Windows and Linux only': 'api.openrestySyncWinLinuxOnly',
+  'OpenResty quick install requires root privileges or passwordless sudo': 'api.openrestyInstallNeedRoot',
+  'OpenResty quick install requires Administrator privileges': 'api.openrestyInstallNeedAdmin',
+  'No supported package manager found (winget/choco/scoop)': 'api.openrestyInstallNoPkgManager',
+  'All OpenResty quick install methods failed. Please review install logs.': 'api.openrestyInstallAllMethodsFailed',
+  'No installer method available': 'api.openrestyInstallNoMethod',
 }
 
 function localizeApiMessage(message: unknown): string {
@@ -56,6 +68,9 @@ function localizeApiMessage(message: unknown): string {
   if (text.startsWith('OpenResty apply failed:')) {
     return t('api.openrestyApplyFailed', { detail: text.replace(/^OpenResty apply failed:\s*/i, '') })
   }
+  if (text.startsWith('OpenResty install failed:')) {
+    return t('api.openrestyInstallFailed', { detail: text.replace(/^OpenResty install failed:\s*/i, '') })
+  }
   return text
 }
 
@@ -66,10 +81,18 @@ request.interceptors.request.use((config) => {
 })
 
 request.interceptors.response.use(
-  (res) => {
-    if (res.data && !res.data.success) {
+  (res: any): any => {
+    if (!isApiEnvelope(res.data)) {
+      const rawText = typeof res.data === 'string' ? res.data : ''
+      const isHtml = /^\s*<!doctype html>/i.test(rawText) || /^\s*<html/i.test(rawText)
+      const message = isHtml ? t('api.unexpectedHtmlResponse') : t('api.unexpectedApiResponse')
+      ElMessage.error(message)
+      return Promise.reject(new Error(message))
+    }
+
+    if (!res.data.success) {
       const message = localizeApiMessage(res.data.message)
-      res.data.message = message
+      ;(res.data as { message?: string }).message = message
       ElMessage.error(message)
     }
     return res.data

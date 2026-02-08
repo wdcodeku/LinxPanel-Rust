@@ -31,6 +31,9 @@ export const saveSettingsApi = (data: any) => request.put('/settings', data)
 export const updateSettings = (data: Record<string, string>) => request.put('/settings', data)
 export const changePasswordApi = (data: { username: string; old_password: string; new_password: string }) =>
   request.post('/settings/password', data)
+export const getOpenRestyStatus = () => request.get('/settings/openresty/status')
+export const quickInstallOpenResty = () =>
+  request.post('/settings/openresty/install', {}, { timeout: 20 * 60 * 1000 })
 
 // Files
 export const listFiles = (path: string) => request.get('/files/list', { params: { path } })
