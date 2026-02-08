@@ -1,0 +1,1 @@
+# LinxPanel - Modern Linux Server Management Panel (Rust + Vue 3)

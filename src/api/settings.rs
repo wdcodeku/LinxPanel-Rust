@@ -1,0 +1,72 @@
+use axum::{extract::State, routing::{get, put, post}, Json, Router};
+use std::sync::Arc;
+use crate::models::*;
+use crate::AppState;
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/settings", get(get_settings).put(update_settings))
+        .route("/settings/password", post(change_password))
+}
+
+async fn get_settings(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<std::collections::HashMap<String, String>>> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM settings")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+    let map: std::collections::HashMap<String, String> = rows.into_iter().collect();
+    Json(ApiResponse::ok(map))
+}
+
+async fn update_settings(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<std::collections::HashMap<String, String>>,
+) -> Json<ApiResponse<()>> {
+    for (key, value) in &req {
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
+    Json(ApiResponse::ok_msg("Settings updated"))
+}
+
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Json<ApiResponse<()>> {
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
+        .bind(&req.username)
+        .fetch_optional(&state.db)
+        .await;
+
+    let user = match user {
+        Ok(Some(u)) => u,
+        _ => return Json(ApiResponse::err("User not found")),
+    };
+
+    if !bcrypt::verify(&req.old_password, &user.password_hash).unwrap_or(false) {
+        return Json(ApiResponse::err("Current password is incorrect"));
+    }
+
+    let new_hash = match bcrypt::hash(&req.new_password, 10) {
+        Ok(h) => h,
+        Err(_) => return Json(ApiResponse::err("Failed to hash password")),
+    };
+
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(&new_hash)
+        .bind(user.id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    Json(ApiResponse::ok_msg("Password changed"))
+}

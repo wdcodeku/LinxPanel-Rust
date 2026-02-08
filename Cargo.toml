@@ -1,0 +1,26 @@
+[package]
+name = "linxpanel"
+version = "0.1.0"
+edition = "2021"
+description = "LinxPanel - Modern Linux Server Management Panel"
+license = "Apache-2.0"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-gzip"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+bcrypt = "0.17"
+jsonwebtoken = "9"
+anyhow = "1"
+thiserror = "2"
+sysinfo = "0.33"
+bollard = "0.18"
+futures = "0.3"
