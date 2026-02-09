@@ -30,6 +30,10 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'Directory created': 'api.directoryCreated',
   'Deleted': 'api.deleted',
   'Renamed': 'api.renamed',
+  'Upload target path is required': 'api.uploadPathRequired',
+  'Upload target path is not a directory': 'api.uploadPathNotDirectory',
+  'No file uploaded': 'api.noFileUploaded',
+  'Invalid upload file name': 'api.invalidUploadFileName',
   'Permission changed': 'api.permissionChanged',
   'Permission change not supported on Windows': 'api.permissionNotSupported',
   'Domain removed': 'api.domainRemoved',
@@ -70,6 +74,15 @@ function localizeApiMessage(message: unknown): string {
   }
   if (text.startsWith('OpenResty install failed:')) {
     return t('api.openrestyInstallFailed', { detail: text.replace(/^OpenResty install failed:\s*/i, '') })
+  }
+  if (text.startsWith('Failed to parse upload request:')) {
+    return t('api.uploadParseFailed', { detail: text.replace(/^Failed to parse upload request:\s*/i, '') })
+  }
+  if (text.startsWith('Failed to read upload field:')) {
+    return t('api.uploadReadFailed', { detail: text.replace(/^Failed to read upload field:\s*/i, '') })
+  }
+  if (text.startsWith('Failed to save upload:')) {
+    return t('api.uploadSaveFailed', { detail: text.replace(/^Failed to save upload:\s*/i, '') })
   }
   return text
 }

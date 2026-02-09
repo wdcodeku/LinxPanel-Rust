@@ -37,11 +37,77 @@ export const quickInstallOpenResty = () =>
 
 // Files
 export const listFiles = (path: string) => request.get('/files/list', { params: { path } })
+export const getFileRoots = () => request.get('/files/roots')
 export const readFileContent = (path: string) => request.get('/files/read', { params: { path } })
 export const writeFileContent = (path: string, content: string) => request.post('/files/write', { path, content })
+export const uploadFilesApi = (path: string, files: File[]) => {
+  const formData = new FormData()
+  formData.append('path', path)
+  files.forEach((file) => {
+    formData.append('files', file, file.name)
+  })
+  return request.post('/files/upload', formData, { timeout: 10 * 60 * 1000 })
+}
 export const mkdirApi = (path: string) => request.post('/files/mkdir', { path })
 export const deletePathApi = (path: string) => request.post('/files/delete', { path })
 export const renamePathApi = (from: string, to: string) => request.post('/files/rename', { from, to })
 export const execCmd = (cmd: string, cwd?: string) => request.post('/files/exec', { cmd, cwd })
+export type ExecStreamChunk = { type: 'out' | 'err' | 'exit'; data?: string; exit_code?: number; done?: boolean }
+export const execCmdStream = async (
+  cmd: string,
+  cwd: string | undefined,
+  onChunk: (chunk: ExecStreamChunk) => void,
+) => {
+  const token = localStorage.getItem('token')
+  const response = await fetch('/api/files/exec/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ cmd, cwd }),
+  })
+
+  if (!response.ok) {
+    let errorText = `HTTP ${response.status}`
+    try {
+      const body = await response.json() as { message?: string }
+      if (body?.message) errorText = body.message
+    } catch {}
+    throw new Error(errorText)
+  }
+
+  if (!response.body) {
+    throw new Error('Readable stream is not available')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let lineEnd = buffer.indexOf('\n')
+    while (lineEnd >= 0) {
+      const line = buffer.slice(0, lineEnd).trim()
+      buffer = buffer.slice(lineEnd + 1)
+      if (line) {
+        try {
+          onChunk(JSON.parse(line) as ExecStreamChunk)
+        } catch {}
+      }
+      lineEnd = buffer.indexOf('\n')
+    }
+  }
+
+  const tail = buffer.trim()
+  if (tail) {
+    try {
+      onChunk(JSON.parse(tail) as ExecStreamChunk)
+    } catch {}
+  }
+}
 export const fileInfo = (path: string) => request.get('/files/info', { params: { path } })
 export const chmodApi = (path: string, mode: string) => request.post('/files/chmod', { path, mode })
