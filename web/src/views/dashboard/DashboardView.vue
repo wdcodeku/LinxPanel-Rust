@@ -310,21 +310,67 @@ function diskDeviceKey(rawName: string): string {
   return value
 }
 
+const VIRTUAL_FS_TYPES = new Set([
+  'overlay', 'aufs', 'tmpfs', 'devtmpfs', 'squashfs', 'ramfs', 'zram', 'nsfs', 'tracefs',
+  'securityfs', 'cgroup', 'cgroup2', 'autofs', 'proc', 'procfs', 'sysfs', 'devpts',
+  'mqueue', 'hugetlbfs', 'fusectl', 'pstore', 'configfs', 'debugfs', 'rpc_pipefs', 'bpf',
+  'binfmt_misc',
+])
+
+function isRealDiskRow(row: any): boolean {
+  const fsType = String(row?.fs_type || '').trim().toLowerCase()
+  const name = String(row?.name || '').trim().toLowerCase()
+  const mountPoint = String(row?.mount_point || '').trim().toLowerCase()
+  const total = Number(row?.total || 0)
+  if (!Number.isFinite(total) || total <= 0) return false
+  if (VIRTUAL_FS_TYPES.has(fsType)) return false
+  if (name === 'overlay' || fsType === 'overlay') return false
+  if (mountPoint.startsWith('/proc') || mountPoint.startsWith('/sys') || mountPoint.startsWith('/run')) return false
+  return true
+}
+
 const mergedDisks = computed<DiskMergedRow[]>(() => {
-  const rows = Array.isArray(info.value.disks) ? info.value.disks : []
-  const map = new Map<string, { name: string; fs_types: Set<string>; total: number; used: number; free: number }>()
+  const rawRows = Array.isArray(info.value.disks) ? info.value.disks : []
+  const preferredRows = rawRows.filter((row: any) => isRealDiskRow(row))
+  const rows = preferredRows.length > 0
+    ? preferredRows
+    : rawRows.filter((row: any) => Number(row?.total || 0) > 0)
+
+  const map = new Map<string, {
+    name: string
+    fs_types: Set<string>
+    total: number
+    used: number
+    free: number
+    seen: Set<string>
+  }>()
+
   for (const row of rows) {
     const key = diskDeviceKey(String(row?.name || row?.mount_point || '-'))
     if (!map.has(key)) {
-      map.set(key, { name: key, fs_types: new Set<string>(), total: 0, used: 0, free: 0 })
+      map.set(key, {
+        name: key,
+        fs_types: new Set<string>(),
+        total: 0,
+        used: 0,
+        free: 0,
+        seen: new Set<string>(),
+      })
     }
     const item = map.get(key)!
-    item.total += Number(row?.total || 0)
-    item.used += Number(row?.used || 0)
-    item.free += Number(row?.free || 0)
     const fsType = String(row?.fs_type || '').trim()
+    const total = Number(row?.total || 0)
+    const used = Number(row?.used || 0)
+    const free = Number(row?.free || 0)
+    const signature = `${Math.round(total / 1024 / 1024)}:${Math.round(used / 1024 / 1024)}:${Math.round(free / 1024 / 1024)}:${fsType}`
+    if (item.seen.has(signature)) continue
+    item.seen.add(signature)
+    item.total += total
+    item.used += used
+    item.free += free
     if (fsType) item.fs_types.add(fsType)
   }
+
   return Array.from(map.values())
     .map((item) => ({
       name: item.name,
