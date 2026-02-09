@@ -68,13 +68,25 @@
               @change="toggleAllVisibleSelection"
             />
           </span>
-          <span class="fm-col-name">{{ t('fm.name') }}</span>
-          <span class="fm-col-size">{{ t('fm.size') }}</span>
-          <span class="fm-col-time">{{ t('fm.modified') }}</span>
-          <span class="fm-col-perm">{{ t('fm.permissions') }}</span>
+          <span class="fm-col-name fm-col-name-header" :class="{ 'with-check': showSelectionCheckboxes }" @click="setSort('name')">
+            {{ t('fm.name') }}
+            <el-icon v-if="sortKey === 'name'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
+          </span>
+          <span class="fm-col-size fm-col-header-sortable" @click="setSort('size')">
+            {{ t('fm.size') }}
+            <el-icon v-if="sortKey === 'size'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
+          </span>
+          <span class="fm-col-time fm-col-header-sortable" @click="setSort('modified')">
+            {{ t('fm.modified') }}
+            <el-icon v-if="sortKey === 'modified'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
+          </span>
+          <span class="fm-col-perm fm-col-header-sortable" @click="setSort('permissions')">
+            {{ t('fm.permissions') }}
+            <el-icon v-if="sortKey === 'permissions'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
+          </span>
         </div>
         <div class="fm-list-body" ref="scrollRef" v-loading="loading">
-          <div v-for="f in visibleFiles" :key="f.path" class="fm-row"
+          <div v-for="f in sortedVisibleFiles" :key="f.path" class="fm-row"
             :class="{ selected: selectedSet.has(f.path) }" :data-path="f.path"
             @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
             @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
@@ -82,24 +94,34 @@
             <span v-if="showSelectionCheckboxes" class="fm-col-check" @click.stop @mousedown.stop>
               <el-checkbox :model-value="selectedSet.has(f.path)" @change="(checked) => setSelectedByCheckbox(f, checked)" />
             </span>
-            <span class="fm-col-name">
+            <span class="fm-col-name" :class="{ 'with-check': showSelectionCheckboxes }">
               <el-icon :size="18" :color="f.is_dir ? 'var(--lp-warning)' : fileIconColor(f.name)">
                 <Folder v-if="f.is_dir" /><Document v-else />
               </el-icon>
               <span class="fm-fname">{{ f.name }}</span>
             </span>
-            <span class="fm-col-size">{{ f.is_dir ? '-' : fmtSize(f.size) }}</span>
+            <span class="fm-col-size">
+              <span
+                v-if="f.is_dir"
+                class="fm-dir-size-btn"
+                :class="{ loading: dirSizeLoadingSet.has(f.path) }"
+                @click.stop="calculateDirectorySize(f)"
+              >
+                {{ getDisplaySize(f) }}
+              </span>
+              <span v-else>{{ fmtSize(f.size) }}</span>
+            </span>
             <span class="fm-col-time">{{ f.modified }}</span>
-            <span class="fm-col-perm">{{ f.permissions }}</span>
+            <span class="fm-col-perm">{{ permissionDigits(f.permissions) }}</span>
           </div>
-          <div v-if="!loading && visibleFiles.length === 0" class="fm-empty">
+          <div v-if="!loading && sortedVisibleFiles.length === 0" class="fm-empty">
             <el-empty :description="t('fm.emptyDir')" :image-size="64" />
           </div>
         </div>
       </div>
 
       <div v-else class="fm-grid" ref="scrollRef" v-loading="loading">
-        <div v-for="f in visibleFiles" :key="f.path" class="fm-grid-item"
+        <div v-for="f in sortedVisibleFiles" :key="f.path" class="fm-grid-item"
           :class="{ selected: selectedSet.has(f.path) }" :data-path="f.path"
           @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
           @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
@@ -117,7 +139,7 @@
           </el-icon>
           <span class="fm-grid-name" :title="f.name">{{ f.name }}</span>
         </div>
-        <div v-if="!loading && visibleFiles.length === 0" class="fm-empty" style="grid-column:1/-1">
+        <div v-if="!loading && sortedVisibleFiles.length === 0" class="fm-empty" style="grid-column:1/-1">
           <el-empty :description="t('fm.emptyDir')" :image-size="64" />
         </div>
       </div>
@@ -159,6 +181,7 @@
           <div class="fm-ctx-item" @click="ctxAction('open')"><el-icon><FolderOpened /></el-icon> {{ t('open') }}</div>
           <div class="fm-ctx-item" :class="{ 'is-disabled': ctxRenameDisabled }" @click="ctxAction('rename')"><el-icon><Edit /></el-icon> {{ t('rename') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
+          <div class="fm-ctx-item" :class="{ 'is-disabled': ctxDownloadDisabled }" @click="ctxAction('download')"><el-icon><Download /></el-icon> {{ t('fm.download') }}</div>
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="ctxAction('terminal')"><el-icon><Monitor /></el-icon> {{ t('fm.openTerminal') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('chmod')"><el-icon><Lock /></el-icon> {{ t('fm.chmod') }}</div>
@@ -179,6 +202,7 @@
           <template v-if="selectedSet.size > 0">
             <div class="fm-ctx-sep"></div>
             <div class="fm-ctx-item" @click="bgCtxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('download')"><el-icon><Download /></el-icon> {{ t('fm.download') }}</div>
             <div class="fm-ctx-item" @click="bgCtxAction('chmod')"><el-icon><Lock /></el-icon> {{ t('fm.chmod') }}</div>
             <div class="fm-ctx-item" @click="bgCtxAction('props')"><el-icon><InfoFilled /></el-icon> {{ t('fm.properties') }}</div>
             <div class="fm-ctx-item fm-ctx-danger" @click="bgCtxAction('delete')"><el-icon><Delete /></el-icon> {{ t('delete') }}</div>
@@ -225,7 +249,7 @@
           <el-descriptions-item :label="t('fm.type')">{{ propsData.is_dir ? t('fm.folder') : t('fm.file') }}</el-descriptions-item>
           <el-descriptions-item :label="t('fm.size')">{{ fmtSize(propsData.size || 0) }}</el-descriptions-item>
           <el-descriptions-item :label="t('fm.modified')">{{ propsData.modified }}</el-descriptions-item>
-          <el-descriptions-item :label="t('fm.permissions')">{{ propsData.permissions }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.permissions')">{{ permissionDigits(propsData.permissions) }}</el-descriptions-item>
         </template>
         <template v-else>
           <el-descriptions-item :label="t('fm.selectedCount')">{{ propsData.count }}</el-descriptions-item>
@@ -249,9 +273,9 @@ import { useRoute } from 'vue-router'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
-import { listFiles, getFileRoots, readFileContent, writeFileContent, uploadFilesApi, mkdirApi, deletePathApi, renamePathApi, fileInfo, chmodApi } from '@/api'
+import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, uploadFilesApi, mkdirApi, deletePathApi, renamePathApi, fileInfo, chmodApi } from '@/api'
 import { useI18n } from '@/i18n'
-import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide } from '@element-plus/icons-vue'
+import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n()
@@ -310,6 +334,12 @@ const chmodTargets = ref<string[]>([])
 const chmodMode = ref('755')
 const showProps = ref(false)
 const propsData = ref<any>({})
+const dirSizeCache = ref<Record<string, number>>({})
+const dirSizeLoadingSet = reactive(new Set<string>())
+
+type SortKey = 'name' | 'size' | 'modified' | 'permissions'
+const sortKey = ref<SortKey>('name')
+const sortOrder = ref<'asc' | 'desc'>('asc')
 
 const ctxVisible = ref(false)
 const ctxX = ref(0)
@@ -486,6 +516,45 @@ const visibleFiles = computed(() => {
   if (showHiddenFiles.value) return files.value
   return files.value.filter((item) => !isHiddenFileEntry(item))
 })
+
+const sortedVisibleFiles = computed(() => {
+  const items = [...visibleFiles.value]
+  const direction = sortOrder.value === 'asc' ? 1 : -1
+  const currentSort = sortKey.value
+
+  const compareText = (left: string, right: string) => left.localeCompare(right, undefined, { sensitivity: 'base' })
+  const compareNumber = (left: number, right: number) => left - right
+  const modifiedTime = (value: string) => {
+    const timestamp = Date.parse(value || '')
+    return Number.isNaN(timestamp) ? 0 : timestamp
+  }
+
+  items.sort((left, right) => {
+    if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1
+
+    let result = 0
+    if (currentSort === 'name') {
+      result = compareText(String(left.name || ''), String(right.name || ''))
+    } else if (currentSort === 'size') {
+      const leftSize = left.is_dir ? Number(dirSizeCache.value[left.path] ?? -1) : Number(left.size || 0)
+      const rightSize = right.is_dir ? Number(dirSizeCache.value[right.path] ?? -1) : Number(right.size || 0)
+      result = compareNumber(leftSize, rightSize)
+    } else if (currentSort === 'modified') {
+      result = compareNumber(modifiedTime(String(left.modified || '')), modifiedTime(String(right.modified || '')))
+    } else {
+      result = compareNumber(
+        Number(permissionDigits(String(left.permissions || '')) || '0'),
+        Number(permissionDigits(String(right.permissions || '')) || '0'),
+      )
+    }
+
+    if (result === 0) {
+      result = compareText(String(left.name || ''), String(right.name || ''))
+    }
+    return result * direction
+  })
+  return items
+})
 const showSelectionCheckboxes = computed(() => selectedSet.size > 1)
 const selectableVisibleFiles = computed(() => visibleFiles.value.filter((item) => !item?.is_virtual_drive))
 const allVisibleSelected = computed(
@@ -626,6 +695,7 @@ async function loadFileRoots() {
 async function loadFiles() {
   loading.value = true
   selectedSet.clear()
+  dirSizeLoadingSet.clear()
   try {
     if (isVirtualDriveView.value) {
       files.value = windowsDriveRoots.value.map((root) => ({
@@ -662,6 +732,47 @@ function goBack() { if (canGoBack.value) { navIndex.value--; currentPath.value =
 function goForward() { if (canGoForward.value) { navIndex.value++; currentPath.value = normPath(navHistory.value[navIndex.value]); void loadFiles() } }
 function refresh() { void loadFiles() }
 function toggleView() { viewMode.value = viewMode.value === 'list' ? 'grid' : 'list' }
+function setSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortOrder.value = 'asc'
+}
+
+function permissionDigits(rawPermission: string) {
+  const text = String(rawPermission || '').trim()
+  const direct = text.match(/\b([0-7]{3,4})\b/)
+  if (direct) return direct[1].slice(-3)
+  return text
+}
+
+function getDisplaySize(item: any) {
+  if (!item?.is_dir) return fmtSize(Number(item?.size || 0))
+  if (dirSizeLoadingSet.has(item.path)) return t('loading')
+  const cached = dirSizeCache.value[item.path]
+  if (typeof cached === 'number') return fmtSize(cached)
+  return t('fm.calcSize')
+}
+
+async function calculateDirectorySize(item: any) {
+  if (!item?.is_dir || dirSizeLoadingSet.has(item.path)) return
+  dirSizeLoadingSet.add(item.path)
+  try {
+    const res: any = await getDirectorySize(item.path)
+    if (res.success) {
+      dirSizeCache.value = {
+        ...dirSizeCache.value,
+        [item.path]: Number(res.data?.size || 0),
+      }
+    } else {
+      ElMessage.error(res.message)
+    }
+  } finally {
+    dirSizeLoadingSet.delete(item.path)
+  }
+}
 
 function resolveEntriesByPaths(paths: string[]) {
   const indexed = new Map(files.value.map((item: any) => [item.path, item]))
@@ -684,6 +795,10 @@ function resolveActionTargets(primary?: any) {
 }
 
 const ctxRenameDisabled = computed(() => resolveActionTargets(ctxFile.value).length > 1)
+const ctxDownloadDisabled = computed(() => {
+  const targets = resolveActionTargets(ctxFile.value)
+  return targets.length === 0 || targets.every((item) => item.is_dir)
+})
 
 function setSelectedByCheckbox(file: any, checked: string | number | boolean) {
   if (checked) selectedSet.add(file.path)
@@ -707,13 +822,13 @@ function toggleSelect(f: any) {
 }
 function shiftSelect(f: any) {
   if (!lastClicked.value) { selectOne(f); return }
-  const paths = visibleFiles.value.map(x => x.path)
+  const paths = sortedVisibleFiles.value.map(x => x.path)
   const a = paths.indexOf(lastClicked.value), b = paths.indexOf(f.path)
   if (a < 0 || b < 0) return
   const [lo, hi] = a < b ? [a, b] : [b, a]
   for (let i = lo; i <= hi; i++) selectedSet.add(paths[i])
 }
-function selectAll() { visibleFiles.value.forEach(f => selectedSet.add(f.path)) }
+function selectAll() { sortedVisibleFiles.value.forEach(f => selectedSet.add(f.path)) }
 
 async function copyPathTargets(targets: any[]) {
   const paths = targets.map((item) => String(item.path || '')).filter(Boolean)
@@ -724,6 +839,24 @@ async function copyPathTargets(targets: any[]) {
   } catch {
     ElMessage.error(t('failed'))
   }
+}
+
+async function downloadTargets(targets: any[]) {
+  const fileTargets = targets.filter((item) => !item.is_dir)
+  if (fileTargets.length === 0) {
+    ElMessage.warning(t('api.downloadFileOnly'))
+    return
+  }
+
+  for (const target of fileTargets) {
+    try {
+      await downloadFileApi(String(target.path || ''), String(target.name || 'download'))
+    } catch (error: any) {
+      ElMessage.error(String(error?.message || t('api.requestFailed')))
+      return
+    }
+  }
+  ElMessage.success(t('fm.downloadedN', { n: fileTargets.length }))
 }
 
 function openChmodDialog(targets: any[]) {
@@ -753,11 +886,22 @@ async function openPropertiesDialog(targets: any[]) {
   const shouldLoadDetail = targets.length <= 40
   const details = shouldLoadDetail
     ? await Promise.all(targets.map(async (item) => {
+      let baseItem: any = item
       try {
         const res: any = await fileInfo(item.path)
-        if (res.success) return res.data
+        if (res.success) baseItem = res.data
       } catch {}
-      return item
+      if (baseItem?.is_dir) {
+        try {
+          const sizeRes: any = await getDirectorySize(baseItem.path)
+          if (sizeRes.success) {
+            const calculated = Number(sizeRes.data?.size || 0)
+            dirSizeCache.value = { ...dirSizeCache.value, [baseItem.path]: calculated }
+            return { ...baseItem, size: calculated }
+          }
+        } catch {}
+      }
+      return baseItem
     }))
     : targets
 
@@ -923,6 +1067,7 @@ function ctxAction(action: string) {
   else if (action === 'rename') startRename(f)
   else if (action === 'delete') { void deleteTargets(actionTargets) }
   else if (action === 'copy') { void copyPathTargets(actionTargets) }
+  else if (action === 'download') { void downloadTargets(actionTargets) }
   else if (action === 'terminal') {
     const targetDir = f.is_dir ? f.path : currentPath.value
     openTerminal(targetDir)
@@ -944,6 +1089,7 @@ function bgCtxAction(action: string) {
   else if (action === 'terminal') openTerminal(currentPath.value)
   else if (action === 'refresh') loadFiles()
   else if (action === 'copy') { void copyPathTargets(getSelectedEntries()) }
+  else if (action === 'download') { void downloadTargets(getSelectedEntries()) }
   else if (action === 'chmod') { openChmodDialog(getSelectedEntries()) }
   else if (action === 'props') { void openPropertiesDialog(getSelectedEntries()) }
   else if (action === 'delete') { void deleteTargets(getSelectedEntries()) }
@@ -1429,6 +1575,22 @@ onUnmounted(() => {
   }
 }
 .fm-col-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.fm-col-name.with-check { padding-left: 18px; }
+.fm-col-name-header,
+.fm-col-header-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--lp-transition);
+  &:hover { color: var(--lp-primary); }
+}
+.fm-col-name-header {
+  align-items: center;
+  display: inline-flex;
+}
+.fm-sort-icon {
+  margin-left: 4px;
+  font-size: 12px;
+}
 .fm-col-size { width: 96px; text-align: right; flex-shrink: 0; }
 .fm-col-time { width: 172px; text-align: right; flex-shrink: 0; }
 .fm-col-perm { width: 118px; text-align: right; flex-shrink: 0; font-family: monospace; }
@@ -1468,6 +1630,21 @@ onUnmounted(() => {
 .fm-grid-name {
   font-size: 12px; color: var(--lp-text-primary); text-align: center;
   max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fm-dir-size-btn {
+  display: inline-flex;
+  align-items: center;
+  color: var(--lp-primary);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: color var(--lp-transition), border-color var(--lp-transition), opacity var(--lp-transition);
+  &:hover { border-color: currentColor; }
+  &.loading {
+    color: var(--lp-text-secondary);
+    cursor: wait;
+    border-bottom-color: transparent;
+  }
 }
 .fm-drag-rect {
   position: fixed; border: 1px solid var(--lp-primary);

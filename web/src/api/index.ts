@@ -39,6 +39,39 @@ export const quickInstallOpenResty = () =>
 export const listFiles = (path: string) => request.get('/files/list', { params: { path } })
 export const getFileRoots = () => request.get('/files/roots')
 export const readFileContent = (path: string) => request.get('/files/read', { params: { path } })
+export const getDirectorySize = (path: string) => request.get('/files/dir-size', { params: { path } })
+export const downloadFileApi = async (path: string, fallbackName?: string) => {
+  const token = localStorage.getItem('token')
+  const response = await fetch(`/api/files/download?path=${encodeURIComponent(path)}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const data = await response.json() as { message?: string }
+      if (data?.message) message = data.message
+    } catch {
+      try {
+        const text = (await response.text()).trim()
+        if (text) message = text
+      } catch {}
+    }
+    throw new Error(message)
+  }
+
+  const blob = await response.blob()
+  const suggestedName = fallbackName || path.split('/').filter(Boolean).pop() || 'download'
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = suggestedName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
 export const writeFileContent = (path: string, content: string) => request.post('/files/write', { path, content })
 export const uploadFilesApi = (path: string, files: File[]) => {
   const formData = new FormData()

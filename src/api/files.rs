@@ -30,6 +30,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/files/roots", get(file_roots))
         .route("/files/list", get(list_files))
         .route("/files/read", get(read_file))
+        .route("/files/download", get(download_file))
+        .route("/files/dir-size", get(directory_size))
         .route("/files/write", post(write_file))
         .route("/files/mkdir", post(mkdir))
         .route("/files/delete", post(delete_path))
@@ -62,6 +64,12 @@ struct FileEntry {
 struct FileContent {
     path: String,
     content: String,
+    size: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct DirSizePayload {
+    path: String,
     size: u64,
 }
 
@@ -170,6 +178,42 @@ fn sanitize_upload_filename(raw: &str) -> Option<String> {
     Some(base.to_string())
 }
 
+fn format_permissions(metadata: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode() & 0o777;
+        return format!("{:03o}", mode);
+    }
+    #[cfg(not(unix))]
+    {
+        if metadata.permissions().readonly() {
+            return "444".to_string();
+        }
+        if metadata.is_dir() {
+            return "755".to_string();
+        }
+        "644".to_string()
+    }
+}
+
+fn calculate_directory_size(path: &Path) -> u64 {
+    let mut total = 0_u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    total = total.saturating_add(metadata.len());
+                } else if metadata.is_dir() {
+                    total = total.saturating_add(calculate_directory_size(&entry_path));
+                }
+            }
+        }
+    }
+    total
+}
+
 async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntry>>> {
     let normalized_path = normalize_fs_path(&q.path);
     let dir = std::path::Path::new(&normalized_path);
@@ -192,7 +236,10 @@ async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntr
                         dt.format("%Y-%m-%d %H:%M:%S").to_string()
                     })
                     .unwrap_or_default();
-                let permissions = if is_dir { "drwxr-xr-x".into() } else { "-rw-r--r--".into() };
+                let permissions = meta
+                    .as_ref()
+                    .map(format_permissions)
+                    .unwrap_or_else(|| if is_dir { "755".into() } else { "644".into() });
                 entries.push(FileEntry { name, path, is_dir, size, modified, permissions });
             }
             entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -220,6 +267,62 @@ async fn read_file(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileContent>>
         })),
         Err(e) => Json(ApiResponse::err(&format!("Cannot read: {}", e))),
     }
+}
+
+async fn download_file(Query(q): Query<PathQuery>) -> Response<Body> {
+    let normalized_path = normalize_fs_path(&q.path);
+    let file_path = std::path::Path::new(&normalized_path);
+    if !file_path.exists() {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("File not found"))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
+    if !file_path.is_file() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Download supports file only"))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
+
+    let bytes = match std::fs::read(file_path) {
+        Ok(data) => data,
+        Err(error) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from(format!("Failed to read file: {}", error)))
+                .unwrap_or_else(|_| Response::new(Body::empty()));
+        }
+    };
+
+    let mime = mime_guess::from_path(file_path).first_or_octet_stream();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime.as_ref())
+        .header(header::CONTENT_DISPOSITION, "attachment")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+async fn directory_size(Query(q): Query<PathQuery>) -> Json<ApiResponse<DirSizePayload>> {
+    let normalized_path = normalize_fs_path(&q.path);
+    let path = Path::new(&normalized_path);
+    if !path.exists() {
+        return Json(ApiResponse::err("Path not found"));
+    }
+    if !path.is_dir() {
+        return Json(ApiResponse::err("Path is not a directory"));
+    }
+
+    let size = calculate_directory_size(path);
+    Json(ApiResponse::ok(DirSizePayload {
+        path: normalized_path,
+        size,
+    }))
 }
 
 async fn write_file(Json(req): Json<WriteRequest>) -> Json<ApiResponse<()>> {
@@ -283,7 +386,10 @@ async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
         is_dir,
         size,
         modified,
-        permissions: if is_dir { "drwxr-xr-x".into() } else { "-rw-r--r--".into() },
+        permissions: meta
+            .as_ref()
+            .map(format_permissions)
+            .unwrap_or_else(|| if is_dir { "755".into() } else { "644".into() }),
     }))
 }
 

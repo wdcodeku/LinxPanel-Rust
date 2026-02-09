@@ -24,7 +24,9 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'Password changed': 'api.passwordChanged',
   'Path does not exist': 'api.pathNotExist',
   'Path not found': 'api.pathNotFound',
+  'Path is not a directory': 'api.pathNotDirectory',
   'File not found': 'api.fileNotFound',
+  'Download supports file only': 'api.downloadFileOnly',
   'File too large (>10MB)': 'api.fileTooLarge',
   'File saved': 'api.fileSaved',
   'Directory created': 'api.directoryCreated',
@@ -74,6 +76,9 @@ function localizeApiMessage(message: unknown): string {
   }
   if (text.startsWith('OpenResty install failed:')) {
     return t('api.openrestyInstallFailed', { detail: text.replace(/^OpenResty install failed:\s*/i, '') })
+  }
+  if (text.startsWith('Failed to read file:')) {
+    return t('api.readFileFailed', { detail: text.replace(/^Failed to read file:\s*/i, '') })
   }
   if (text.startsWith('Failed to parse upload request:')) {
     return t('api.uploadParseFailed', { detail: text.replace(/^Failed to parse upload request:\s*/i, '') })
