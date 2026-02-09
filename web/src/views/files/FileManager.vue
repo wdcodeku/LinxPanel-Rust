@@ -486,7 +486,7 @@ const visibleFiles = computed(() => {
   if (showHiddenFiles.value) return files.value
   return files.value.filter((item) => !isHiddenFileEntry(item))
 })
-const showSelectionCheckboxes = computed(() => selectedSet.size > 0)
+const showSelectionCheckboxes = computed(() => selectedSet.size > 1)
 const selectableVisibleFiles = computed(() => visibleFiles.value.filter((item) => !item?.is_virtual_drive))
 const allVisibleSelected = computed(
   () => selectableVisibleFiles.value.length > 0 && selectableVisibleFiles.value.every((item) => selectedSet.has(item.path)),
@@ -1404,16 +1404,29 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--lp-border-light); flex-shrink: 0;
   background: var(--lp-table-header-bg);
   border-radius: var(--lp-radius-lg) var(--lp-radius-lg) 0 0;
+  position: relative;
 }
 .fm-list-body { flex: 1; overflow-y: auto; }
 .fm-col-check {
-  width: 30px;
-  flex: 0 0 30px;
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 4px;
-  :deep(.el-checkbox) { margin-right: 0; }
+  z-index: 2;
+  pointer-events: auto;
+  :deep(.el-checkbox) {
+    margin-right: 0;
+    line-height: 1;
+    height: 16px;
+  }
+  :deep(.el-checkbox__input) { line-height: 1; }
+  :deep(.el-checkbox__inner) {
+    width: 14px;
+    height: 14px;
+  }
 }
 .fm-col-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .fm-col-size { width: 96px; text-align: right; flex-shrink: 0; }
@@ -1423,6 +1436,7 @@ onUnmounted(() => {
   display: flex; align-items: center; padding: 9px 18px;
   font-size: 14px; cursor: default; transition: background 0.1s;
   border-bottom: 1px solid var(--lp-border-light);
+  position: relative;
   &:last-child { border-bottom: none; }
   &:hover { background: var(--lp-table-row-hover); }
   &.selected { background: var(--lp-primary-bg); }
