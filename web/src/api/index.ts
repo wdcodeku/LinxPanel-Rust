@@ -6,6 +6,8 @@ export const login = (data: { username: string; password: string }) =>
 
 // System
 export const getSystemInfo = () => request.get('/system/info')
+export const getSystemProcesses = (limit = 15) =>
+  request.get('/system/processes', { params: { limit } })
 
 // Sites
 export const getSites = () => request.get('/sites')

@@ -25,9 +25,9 @@
       <div class="fm-path-bar" @click="startEditPath">
         <template v-if="!editingPath">
           <el-icon class="fm-path-icon fm-path-icon-clickable" :size="14" :title="pathIconTooltip" @click.stop="onPathIconClick"><FolderOpened /></el-icon>
-          <span class="fm-path-root" @click.stop="goTo(rootPath)">{{ rootLabel }}</span>
+          <span v-if="showRootLabel" class="fm-path-root" @click.stop="goTo(rootPath)">{{ rootLabel }}</span>
           <template v-for="(seg, i) in pathSegments" :key="i">
-            <el-icon :size="10" class="fm-path-arrow"><ArrowRight /></el-icon>
+            <el-icon v-if="showRootLabel || i > 0" :size="10" class="fm-path-arrow"><ArrowRight /></el-icon>
             <span class="fm-path-seg" @click.stop="goTo(segmentPath(i))">{{ seg }}</span>
           </template>
         </template>
@@ -152,8 +152,8 @@
         </div>
       </transition>
 
-      <div v-show="termVisible" class="fm-terminal" :style="{ height: termHeight + 'px' }">
-        <div class="fm-term-resize" @mousedown.prevent="startTermResize"></div>
+      <div v-show="termVisible" class="fm-term-resize" @mousedown.stop.prevent="startTermResize"></div>
+      <div v-show="termVisible" class="fm-terminal" :style="{ height: termHeight + 'px' }" @contextmenu.prevent.stop="onTerminalContext">
         <div class="fm-term-header">
           <span class="fm-term-title"><el-icon :size="14"><Monitor /></el-icon> {{ t('terminal') }}</span>
           <span class="fm-term-cwd">{{ currentPath }}</span>
@@ -177,7 +177,7 @@
     <!-- Context menus -->
     <teleport to="body">
       <transition name="fade">
-        <div v-if="ctxVisible" class="fm-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
+        <div ref="ctxMenuRef" v-if="ctxVisible" class="fm-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
           <div class="fm-ctx-item" @click="ctxAction('open')"><el-icon><FolderOpened /></el-icon> {{ t('open') }}</div>
           <div class="fm-ctx-item" :class="{ 'is-disabled': ctxRenameDisabled }" @click="ctxAction('rename')"><el-icon><Edit /></el-icon> {{ t('rename') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
@@ -193,7 +193,7 @@
     </teleport>
     <teleport to="body">
       <transition name="fade">
-        <div v-if="bgCtxVisible" class="fm-ctx-menu" :style="{ left: bgCtxX + 'px', top: bgCtxY + 'px' }">
+        <div ref="bgCtxMenuRef" v-if="bgCtxVisible" class="fm-ctx-menu" :style="{ left: bgCtxX + 'px', top: bgCtxY + 'px' }">
           <div class="fm-ctx-item" @click="bgCtxAction('newFile')"><el-icon><DocumentAdd /></el-icon> {{ t('fm.newFile') }}</div>
           <div class="fm-ctx-item" @click="bgCtxAction('newDir')"><el-icon><FolderAdd /></el-icon> {{ t('fm.newFolder') }}</div>
           <div class="fm-ctx-sep"></div>
@@ -209,6 +209,22 @@
           </template>
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="bgCtxAction('selectAll')"><el-icon><Select /></el-icon> {{ t('selectAll') }}</div>
+        </div>
+      </transition>
+    </teleport>
+    <teleport to="body">
+      <transition name="fade">
+        <div ref="termCtxMenuRef" v-if="termCtxVisible" class="fm-ctx-menu" :style="{ left: termCtxX + 'px', top: termCtxY + 'px' }">
+          <div class="fm-ctx-item" :class="{ 'is-disabled': termCopyDisabled }" @click="termCtxAction('copy')">
+            <el-icon><CopyDocument /></el-icon> {{ t('fm.termCopy') }}
+          </div>
+          <div class="fm-ctx-item" @click="termCtxAction('paste')">
+            <el-icon><CopyDocument /></el-icon> {{ t('fm.termPaste') }}
+          </div>
+          <div class="fm-ctx-sep"></div>
+          <div class="fm-ctx-item" @click="termCtxAction('clear')">
+            <el-icon><Delete /></el-icon> {{ t('fm.termClear') }}
+          </div>
         </div>
       </transition>
     </teleport>
@@ -348,6 +364,14 @@ const ctxFile = ref<any>(null)
 const bgCtxVisible = ref(false)
 const bgCtxX = ref(0)
 const bgCtxY = ref(0)
+const termCtxVisible = ref(false)
+const termCtxX = ref(0)
+const termCtxY = ref(0)
+const termCopyDisabled = ref(false)
+const ctxMenuRef = ref<HTMLElement>()
+const bgCtxMenuRef = ref<HTMLElement>()
+const termCtxMenuRef = ref<HTMLElement>()
+const CTX_MENU_EDGE_GAP = 8
 
 const termVisible = ref(false)
 const termConnected = ref(false)
@@ -434,7 +458,12 @@ const rootPath = computed(() => {
   if (isVirtualDriveView.value) return WINDOWS_ROOTS_VIEW
   return useWindowsPathStyle.value ? getDriveRoot(currentPath.value) : '/'
 })
-const rootLabel = computed(() => (isVirtualDriveView.value ? t('fm.allDrives') : rootPath.value))
+const rootLabel = computed(() => {
+  if (isVirtualDriveView.value) return t('fm.allDrives')
+  if (useWindowsPathStyle.value) return rootPath.value
+  return ''
+})
+const showRootLabel = computed(() => rootLabel.value.trim().length > 0)
 const currentDriveRoot = computed(() => {
   if (useWindowsPathStyle.value) return getDriveRoot(currentPath.value)
   const fallback = windowsDriveRoots.value[0]?.path || 'C:/'
@@ -957,7 +986,14 @@ function onBodyMouseDown(e: MouseEvent) {
     return
   }
   const tgt = e.target as HTMLElement
-  if (tgt.closest('.fm-row') || tgt.closest('.fm-grid-item') || tgt.closest('.fm-toolbar') || tgt.closest('.fm-terminal') || tgt.closest('.fm-list-header')) return
+  if (
+    tgt.closest('.fm-row') ||
+    tgt.closest('.fm-grid-item') ||
+    tgt.closest('.fm-toolbar') ||
+    tgt.closest('.fm-terminal') ||
+    tgt.closest('.fm-term-resize') ||
+    tgt.closest('.fm-list-header')
+  ) return
   e.preventDefault()
   if (!e.ctrlKey) selectedSet.clear()
   preSelectSnapshot = new Set(selectedSet)
@@ -999,7 +1035,12 @@ function updateDragSelection() {
 
 function startEditPath() {
   editingPath.value = true
-  pathInputVal.value = isVirtualDriveView.value ? currentDriveRoot.value : currentPath.value
+  if (isVirtualDriveView.value) {
+    pathInputVal.value = currentDriveRoot.value
+  } else {
+    const normalized = normPath(currentPath.value)
+    pathInputVal.value = !useWindowsPathStyle.value && normalized === '/' ? '' : normalized
+  }
   nextTick(() => { pathInputRef.value?.focus(); pathInputRef.value?.select() })
 }
 async function confirmPath() {
@@ -1053,10 +1094,48 @@ function handleOpen(f: any) {
   else openEditor(f.path)
 }
 
+function resolveCtxMenuPos(x: number, y: number, menuEl: HTMLElement) {
+  const width = menuEl.offsetWidth || 180
+  const height = menuEl.offsetHeight || 160
+  let left = x
+  let top = y
+
+  if (left + width + CTX_MENU_EDGE_GAP > window.innerWidth) {
+    left = Math.max(CTX_MENU_EDGE_GAP, window.innerWidth - width - CTX_MENU_EDGE_GAP)
+  }
+  if (top + height + CTX_MENU_EDGE_GAP > window.innerHeight) {
+    top = y - height
+  }
+  if (top < CTX_MENU_EDGE_GAP) top = CTX_MENU_EDGE_GAP
+
+  return { left, top }
+}
+
+function adjustCtxMenuPos(kind: 'file' | 'bg' | 'term', x: number, y: number) {
+  nextTick(() => {
+    const menuEl =
+      kind === 'file' ? ctxMenuRef.value : kind === 'bg' ? bgCtxMenuRef.value : termCtxMenuRef.value
+    if (!menuEl) return
+    const { left, top } = resolveCtxMenuPos(x, y, menuEl)
+    if (kind === 'file') {
+      ctxX.value = left
+      ctxY.value = top
+    } else if (kind === 'bg') {
+      bgCtxX.value = left
+      bgCtxY.value = top
+    } else {
+      termCtxX.value = left
+      termCtxY.value = top
+    }
+  })
+}
+
 function onContext(e: MouseEvent, f: any) {
   if (f?.is_virtual_drive) return
   bgCtxVisible.value = false
+  termCtxVisible.value = false
   ctxX.value = e.clientX; ctxY.value = e.clientY; ctxFile.value = f; ctxVisible.value = true
+  adjustCtxMenuPos('file', e.clientX, e.clientY)
   if (!selectedSet.has(f.path)) { selectedSet.clear(); selectedSet.add(f.path) }
 }
 function ctxAction(action: string) {
@@ -1080,7 +1159,9 @@ function onBodyContext(e: MouseEvent) {
   const tgt = e.target as HTMLElement
   if (tgt.closest('.fm-row') || tgt.closest('.fm-grid-item') || tgt.closest('.fm-toolbar') || tgt.closest('.fm-terminal')) return
   ctxVisible.value = false
+  termCtxVisible.value = false
   bgCtxX.value = e.clientX; bgCtxY.value = e.clientY; bgCtxVisible.value = true
+  adjustCtxMenuPos('bg', e.clientX, e.clientY)
 }
 function bgCtxAction(action: string) {
   bgCtxVisible.value = false
@@ -1096,7 +1177,58 @@ function bgCtxAction(action: string) {
   else if (action === 'selectAll') selectAll()
 }
 
-function closeAllCtx() { ctxVisible.value = false; bgCtxVisible.value = false }
+function getTerminalSelectionText() {
+  if (!termInstance) return ''
+  try {
+    if (termInstance.hasSelection()) return termInstance.getSelection() || ''
+  } catch {}
+  return ''
+}
+async function copyTerminalSelection() {
+  const text = getTerminalSelectionText()
+  if (!text) return
+  try {
+    await navigator.clipboard?.writeText(text)
+    ElMessage.success(t('fm.copied'))
+  } catch {
+    ElMessage.error(t('failed'))
+  }
+}
+async function pasteTerminalClipboard() {
+  if (!termSocket || termSocket.readyState !== WebSocket.OPEN) {
+    ElMessage.warning(t('fm.termDisconnected'))
+    return
+  }
+  try {
+    const text = await navigator.clipboard?.readText()
+    if (!text) return
+    termSocket.send(text)
+    termInstance?.focus()
+  } catch {
+    ElMessage.error(t('failed'))
+  }
+}
+function clearTerminalScreen() {
+  termInstance?.clear()
+  termInstance?.focus()
+}
+function onTerminalContext(e: MouseEvent) {
+  e.preventDefault()
+  ctxVisible.value = false
+  bgCtxVisible.value = false
+  termCtxX.value = e.clientX
+  termCtxY.value = e.clientY
+  termCopyDisabled.value = !getTerminalSelectionText()
+  termCtxVisible.value = true
+  adjustCtxMenuPos('term', e.clientX, e.clientY)
+}
+function termCtxAction(action: 'copy' | 'paste' | 'clear') {
+  termCtxVisible.value = false
+  if (action === 'copy') { void copyTerminalSelection() }
+  else if (action === 'paste') { void pasteTerminalClipboard() }
+  else if (action === 'clear') clearTerminalScreen()
+}
+function closeAllCtx() { ctxVisible.value = false; bgCtxVisible.value = false; termCtxVisible.value = false }
 
 async function openEditor(path: string) {
   try {
@@ -1190,6 +1322,7 @@ function scheduleTerminalReconnect() {
 }
 function applyTerminalTheme() {
   if (!termInstance) return
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
   termInstance.options.theme = {
     background: cssVar('--lp-input-bg', '#0f1014'),
     foreground: cssVar('--lp-text-primary', '#d4d4d4'),
@@ -1197,7 +1330,23 @@ function applyTerminalTheme() {
     cursorAccent: cssVar('--lp-card-bg', '#ffffff'),
     selectionBackground: cssVar('--lp-primary-bg', 'rgba(79,110,247,0.24)'),
     black: cssVar('--lp-text-secondary', '#7a7a7a'),
+    red: cssVar('--lp-danger', isDark ? '#ff7875' : '#cf1322'),
+    green: cssVar('--lp-success', isDark ? '#6abe39' : '#389e0d'),
+    yellow: isDark ? '#ffc53d' : '#8a6200',
+    blue: cssVar('--lp-primary', isDark ? '#5b7bf9' : '#2f54eb'),
+    magenta: isDark ? '#d3adf7' : '#722ed1',
+    cyan: isDark ? '#87e8de' : '#08979c',
+    white: isDark ? '#d9d9d9' : '#262626',
+    brightBlack: cssVar('--lp-text-secondary', isDark ? '#737373' : '#8c8c8c'),
+    brightRed: isDark ? '#ffa39e' : '#ff4d4f',
+    brightGreen: isDark ? '#95de64' : '#52c41a',
+    brightYellow: isDark ? '#ffd666' : '#735100',
+    brightBlue: isDark ? '#91aaff' : '#4f6ef7',
+    brightMagenta: isDark ? '#efdbff' : '#9254de',
+    brightCyan: isDark ? '#b5f5ec' : '#13c2c2',
+    brightWhite: isDark ? '#ffffff' : '#434343',
   }
+  termInstance.options.drawBoldTextInBrightColors = false
 }
 function sendTerminalResize() {
   if (!termInstance || !termSocket || termSocket.readyState !== WebSocket.OPEN) return
@@ -1219,9 +1368,10 @@ function applySyncedTerminalPath(path: string) {
   navigate(targetPath)
 }
 function fitTerminal() {
-  if (!termFitAddon) return
+  if (!termFitAddon || !termInstance) return
   try {
     termFitAddon.fit()
+    termInstance.refresh(0, Math.max(0, termInstance.rows - 1))
     sendTerminalResize()
   } catch {}
 }
@@ -1254,12 +1404,15 @@ function disconnectTerminal(manual = true) {
 function ensureTerminal() {
   if (termInstance || !termContainerRef.value) return
   termInstance = new Terminal({
-    allowTransparency: true,
+    allowTransparency: false,
     convertEol: true,
     cursorBlink: true,
-    fontFamily: 'Cascadia Code, Fira Code, Consolas, monospace',
+    fontFamily: 'Cascadia Mono, Cascadia Code, Consolas, "Courier New", monospace',
     fontSize: 12,
-    lineHeight: 1.25,
+    lineHeight: 1.2,
+    letterSpacing: 0,
+    fontWeight: '400',
+    fontWeightBold: '600',
     scrollback: 5000,
   })
   termFitAddon = new FitAddon()
@@ -1382,6 +1535,7 @@ function onTermResizeMove(e: MouseEvent) {
   nextTick(() => fitTerminal())
 }
 function startTermResize(e: MouseEvent) {
+  e.stopPropagation()
   termResizeStartY = e.clientY
   termResizeStartHeight = termHeight.value
   document.addEventListener('mousemove', onTermResizeMove)
@@ -1670,22 +1824,26 @@ onUnmounted(() => {
   backdrop-filter: blur(2px);
 }
 .fm-terminal {
-  margin-top: 8px; background: var(--lp-card-bg); border-radius: var(--lp-radius-lg);
+  margin-top: 0; background: var(--lp-card-bg); border-radius: var(--lp-radius-lg);
   display: flex; flex-direction: column; flex-shrink: 0; min-height: 140px;
   box-shadow: var(--lp-shadow-sm); overflow: hidden; border: 1px solid var(--lp-border-light);
 }
 .fm-term-resize {
-  height: 8px; cursor: ns-resize; flex-shrink: 0;
+  height: 12px; cursor: ns-resize; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  background: var(--lp-table-header-bg);
+  width: 100%;
+  align-self: stretch;
+  margin-top: 8px;
+  user-select: none;
   &::before {
-    content: ''; width: 40px; height: 3px; border-radius: 99px; background: var(--lp-border);
+    content: ''; width: 46px; height: 4px; border-radius: 99px; background: var(--lp-border);
+    transition: background var(--lp-transition), transform var(--lp-transition);
   }
+  &:hover::before { background: color-mix(in srgb, var(--lp-primary) 40%, var(--lp-border)); transform: scaleX(1.06); }
 }
 .fm-term-header {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 12px; background: var(--lp-table-header-bg); flex-shrink: 0;
-  border-top: 1px solid var(--lp-border-light);
   border-bottom: 1px solid var(--lp-border-light);
 }
 .fm-term-title { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--lp-text-secondary); white-space: nowrap; }
@@ -1720,23 +1878,23 @@ onUnmounted(() => {
 .fm-term-xterm {
   flex: 1; min-height: 0; padding: 8px 10px; background: var(--lp-input-bg);
 }
-.fm-term-xterm :deep(.xterm),
-.fm-term-xterm :deep(.xterm-viewport),
-.fm-term-xterm :deep(.xterm-screen) {
+.fm-term-xterm :deep(.xterm) {
   width: 100%;
   height: 100%;
+  padding: 0;
 }
-.fm-term-xterm :deep(.xterm) { padding: 0; }
 .fm-term-xterm :deep(.xterm-viewport) { overflow-y: auto !important; }
 .fm-term-xterm :deep(.xterm-cursor-layer) { z-index: 2; }
 .fm-term-xterm :deep(.xterm-screen canvas) { image-rendering: auto; }
 .fm-term-xterm :deep(.xterm .xterm-rows) {
   font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  letter-spacing: 0;
 }
 .fm-ctx-menu {
   position: fixed; z-index: 9999; min-width: 180px;
   background: var(--lp-popover-bg); border: 1px solid var(--lp-border);
   border-radius: var(--lp-radius); box-shadow: var(--lp-shadow-lg); padding: 4px 0;
+  max-height: calc(100vh - 16px); overflow-y: auto; overflow-x: hidden;
 }
 .fm-ctx-item {
   display: flex; align-items: center; gap: 8px;

@@ -151,6 +151,16 @@ pub struct NetworkInfo {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProcessInfo {
+    pub pid: String,
+    pub name: String,
+    pub cpu_percent: f32,
+    pub memory: u64,
+    pub virtual_memory: u64,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PlatformInfo {
     pub hostname: String,
     pub os_name: String,
