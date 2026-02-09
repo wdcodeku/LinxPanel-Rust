@@ -17,6 +17,7 @@ const CPU_SMOOTH_WINDOW: usize = 4;
 #[cfg(target_os = "windows")]
 const WINDOWS_COUNTER_CACHE_TTL: Duration = Duration::from_millis(1500);
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
 struct WindowsCpuMetrics {
     usage_percent: f32,
@@ -268,11 +269,6 @@ $cores = $samples |
     })
 }
 
-#[cfg(not(target_os = "windows"))]
-fn read_windows_cpu_metrics() -> Option<WindowsCpuMetrics> {
-    None
-}
-
 #[cfg(target_os = "windows")]
 fn read_windows_cpu_metrics_cached(
     sampler: &mut SystemSampler,
@@ -291,14 +287,6 @@ fn read_windows_cpu_metrics_cached(
     sampler.last_windows_counter_refresh = Some(now);
     sampler.last_windows_counter_value = Some(fresh.clone());
     Some(fresh)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn read_windows_cpu_metrics_cached(
-    _sampler: &mut SystemSampler,
-    _now: Instant,
-) -> Option<WindowsCpuMetrics> {
-    None
 }
 
 pub fn get_system_info() -> SystemInfo {
