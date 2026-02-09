@@ -61,6 +61,13 @@
     >
       <div v-if="viewMode === 'list'" class="fm-list" ref="listRef">
         <div class="fm-list-header">
+          <span v-if="showSelectionCheckboxes" class="fm-col-check" @click.stop @mousedown.stop>
+            <el-checkbox
+              :model-value="allVisibleSelected"
+              :indeterminate="indeterminateVisibleSelected"
+              @change="toggleAllVisibleSelection"
+            />
+          </span>
           <span class="fm-col-name">{{ t('fm.name') }}</span>
           <span class="fm-col-size">{{ t('fm.size') }}</span>
           <span class="fm-col-time">{{ t('fm.modified') }}</span>
@@ -72,6 +79,9 @@
             @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
             @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
             @mousedown.left.stop="onRowMouseDown($event, f)">
+            <span v-if="showSelectionCheckboxes" class="fm-col-check" @click.stop @mousedown.stop>
+              <el-checkbox :model-value="selectedSet.has(f.path)" @change="(checked) => setSelectedByCheckbox(f, checked)" />
+            </span>
             <span class="fm-col-name">
               <el-icon :size="18" :color="f.is_dir ? 'var(--lp-warning)' : fileIconColor(f.name)">
                 <Folder v-if="f.is_dir" /><Document v-else />
@@ -94,6 +104,14 @@
           @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
           @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
           @mousedown.left.stop="onRowMouseDown($event, f)">
+          <el-checkbox
+            v-if="showSelectionCheckboxes"
+            class="fm-grid-check"
+            :model-value="selectedSet.has(f.path)"
+            @change="(checked) => setSelectedByCheckbox(f, checked)"
+            @click.stop
+            @mousedown.stop
+          />
           <el-icon :size="40" :color="f.is_dir ? 'var(--lp-warning)' : fileIconColor(f.name)">
             <Folder v-if="f.is_dir" /><Document v-else />
           </el-icon>
@@ -139,7 +157,7 @@
       <transition name="fade">
         <div v-if="ctxVisible" class="fm-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
           <div class="fm-ctx-item" @click="ctxAction('open')"><el-icon><FolderOpened /></el-icon> {{ t('open') }}</div>
-          <div class="fm-ctx-item" @click="ctxAction('rename')"><el-icon><Edit /></el-icon> {{ t('rename') }}</div>
+          <div class="fm-ctx-item" :class="{ 'is-disabled': ctxRenameDisabled }" @click="ctxAction('rename')"><el-icon><Edit /></el-icon> {{ t('rename') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="ctxAction('terminal')"><el-icon><Monitor /></el-icon> {{ t('fm.openTerminal') }}</div>
@@ -158,6 +176,13 @@
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="bgCtxAction('terminal')"><el-icon><Monitor /></el-icon> {{ t('fm.openInTerminal') }}</div>
           <div class="fm-ctx-item" @click="bgCtxAction('refresh')"><el-icon><RefreshRight /></el-icon> {{ t('refresh') }}</div>
+          <template v-if="selectedSet.size > 0">
+            <div class="fm-ctx-sep"></div>
+            <div class="fm-ctx-item" @click="bgCtxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('chmod')"><el-icon><Lock /></el-icon> {{ t('fm.chmod') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('props')"><el-icon><InfoFilled /></el-icon> {{ t('fm.properties') }}</div>
+            <div class="fm-ctx-item fm-ctx-danger" @click="bgCtxAction('delete')"><el-icon><Delete /></el-icon> {{ t('delete') }}</div>
+          </template>
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="bgCtxAction('selectAll')"><el-icon><Select /></el-icon> {{ t('selectAll') }}</div>
         </div>
@@ -188,18 +213,31 @@
       <template #footer><el-button @click="showRename = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doRename">{{ t('ok') }}</el-button></template>
     </el-dialog>
     <el-dialog v-model="showChmod" :title="t('fm.chmodTitle')" width="400px" v-drag :modal="false" :close-on-click-modal="false">
-      <div style="margin-bottom:8px;color:var(--lp-text-secondary);font-size:13px">{{ chmodPath }}</div>
+      <div style="margin-bottom:8px;color:var(--lp-text-secondary);font-size:13px">{{ chmodTargetLabel }}</div>
       <el-input v-model="chmodMode" placeholder="755" @keyup.enter="doChmod" autofocus />
       <template #footer><el-button @click="showChmod = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doChmod">{{ t('ok') }}</el-button></template>
     </el-dialog>
     <el-dialog v-model="showProps" :title="t('fm.fileProps')" width="450px" v-drag :modal="false" :close-on-click-modal="false">
       <el-descriptions :column="1" border size="small">
-        <el-descriptions-item :label="t('fm.name')">{{ propsData.name }}</el-descriptions-item>
-        <el-descriptions-item :label="t('fm.path')">{{ propsData.path }}</el-descriptions-item>
-        <el-descriptions-item :label="t('fm.type')">{{ propsData.is_dir ? t('fm.folder') : t('fm.file') }}</el-descriptions-item>
-        <el-descriptions-item :label="t('fm.size')">{{ fmtSize(propsData.size || 0) }}</el-descriptions-item>
-        <el-descriptions-item :label="t('fm.modified')">{{ propsData.modified }}</el-descriptions-item>
-        <el-descriptions-item :label="t('fm.permissions')">{{ propsData.permissions }}</el-descriptions-item>
+        <template v-if="!propsData.is_batch">
+          <el-descriptions-item :label="t('fm.name')">{{ propsData.name }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.path')">{{ propsData.path }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.type')">{{ propsData.is_dir ? t('fm.folder') : t('fm.file') }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.size')">{{ fmtSize(propsData.size || 0) }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.modified')">{{ propsData.modified }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.permissions')">{{ propsData.permissions }}</el-descriptions-item>
+        </template>
+        <template v-else>
+          <el-descriptions-item :label="t('fm.selectedCount')">{{ propsData.count }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.file')">{{ propsData.file_count }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.folder')">{{ propsData.dir_count }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.totalSize')">{{ fmtSize(propsData.total_size || 0) }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.selectedPaths')">
+            <div class="fm-props-path-list">
+              <div v-for="path in propsData.paths || []" :key="path" class="fm-props-path">{{ path }}</div>
+            </div>
+          </el-descriptions-item>
+        </template>
       </el-descriptions>
     </el-dialog>
   </div>
@@ -268,6 +306,7 @@ const renameFrom = ref('')
 const renameTo = ref('')
 const showChmod = ref(false)
 const chmodPath = ref('')
+const chmodTargets = ref<string[]>([])
 const chmodMode = ref('755')
 const showProps = ref(false)
 const propsData = ref<any>({})
@@ -447,6 +486,21 @@ const visibleFiles = computed(() => {
   if (showHiddenFiles.value) return files.value
   return files.value.filter((item) => !isHiddenFileEntry(item))
 })
+const showSelectionCheckboxes = computed(() => selectedSet.size > 0)
+const selectableVisibleFiles = computed(() => visibleFiles.value.filter((item) => !item?.is_virtual_drive))
+const allVisibleSelected = computed(
+  () => selectableVisibleFiles.value.length > 0 && selectableVisibleFiles.value.every((item) => selectedSet.has(item.path)),
+)
+const indeterminateVisibleSelected = computed(() => {
+  const total = selectableVisibleFiles.value.length
+  if (total === 0) return false
+  const selectedCount = selectableVisibleFiles.value.filter((item) => selectedSet.has(item.path)).length
+  return selectedCount > 0 && selectedCount < total
+})
+const chmodTargetLabel = computed(() => {
+  if (chmodTargets.value.length <= 1) return chmodTargets.value[0] || chmodPath.value
+  return t('fm.batchTargetN', { n: chmodTargets.value.length })
+})
 
 function triggerUpload() {
   if (isVirtualDriveView.value) {
@@ -609,6 +663,42 @@ function goForward() { if (canGoForward.value) { navIndex.value++; currentPath.v
 function refresh() { void loadFiles() }
 function toggleView() { viewMode.value = viewMode.value === 'list' ? 'grid' : 'list' }
 
+function resolveEntriesByPaths(paths: string[]) {
+  const indexed = new Map(files.value.map((item: any) => [item.path, item]))
+  return paths
+    .map((path) => indexed.get(path))
+    .filter((item): item is any => !!item && !item.is_virtual_drive)
+}
+
+function getSelectedEntries() {
+  return resolveEntriesByPaths(Array.from(selectedSet))
+}
+
+function resolveActionTargets(primary?: any) {
+  if (primary && selectedSet.size > 1 && selectedSet.has(primary.path)) {
+    const selectedEntries = getSelectedEntries()
+    if (selectedEntries.length > 0) return selectedEntries
+  }
+  if (primary && !primary.is_virtual_drive) return [primary]
+  return getSelectedEntries()
+}
+
+const ctxRenameDisabled = computed(() => resolveActionTargets(ctxFile.value).length > 1)
+
+function setSelectedByCheckbox(file: any, checked: string | number | boolean) {
+  if (checked) selectedSet.add(file.path)
+  else selectedSet.delete(file.path)
+  lastClicked.value = file.path
+}
+
+function toggleAllVisibleSelection(checked: string | number | boolean) {
+  const shouldSelect = !!checked
+  selectableVisibleFiles.value.forEach((item) => {
+    if (shouldSelect) selectedSet.add(item.path)
+    else selectedSet.delete(item.path)
+  })
+}
+
 function selectOne(f: any) { selectedSet.clear(); selectedSet.add(f.path); lastClicked.value = f.path }
 function toggleSelect(f: any) {
   if (selectedSet.has(f.path)) selectedSet.delete(f.path)
@@ -625,13 +715,94 @@ function shiftSelect(f: any) {
 }
 function selectAll() { visibleFiles.value.forEach(f => selectedSet.add(f.path)) }
 
-async function batchDelete() {
-  const count = selectedSet.size
-  await ElMessageBox.confirm(t('fm.confirmDeleteN', { n: count }), t('confirm'), { type: 'warning' })
+async function copyPathTargets(targets: any[]) {
+  const paths = targets.map((item) => String(item.path || '')).filter(Boolean)
+  if (paths.length === 0) return
+  try {
+    await navigator.clipboard?.writeText(paths.join('\n'))
+    ElMessage.success(paths.length > 1 ? t('fm.copiedN', { n: paths.length }) : t('fm.copied'))
+  } catch {
+    ElMessage.error(t('failed'))
+  }
+}
+
+function openChmodDialog(targets: any[]) {
+  const paths = targets.map((item) => String(item.path || '')).filter(Boolean)
+  if (paths.length === 0) return
+  chmodTargets.value = paths
+  chmodPath.value = paths[0]
+  chmodMode.value = '755'
+  showChmod.value = true
+}
+
+async function openPropertiesDialog(targets: any[]) {
+  if (targets.length === 0) return
+  if (targets.length === 1) {
+    const target = targets[0]
+    try {
+      const res: any = await fileInfo(target.path)
+      if (res.success) propsData.value = { ...res.data, is_batch: false }
+      else propsData.value = { ...target, is_batch: false }
+    } catch {
+      propsData.value = { ...target, is_batch: false }
+    }
+    showProps.value = true
+    return
+  }
+
+  const shouldLoadDetail = targets.length <= 40
+  const details = shouldLoadDetail
+    ? await Promise.all(targets.map(async (item) => {
+      try {
+        const res: any = await fileInfo(item.path)
+        if (res.success) return res.data
+      } catch {}
+      return item
+    }))
+    : targets
+
+  const fileCount = details.filter((item) => !item.is_dir).length
+  const dirCount = details.filter((item) => item.is_dir).length
+  const totalSize = details.reduce((sum, item) => sum + Number(item.size || 0), 0)
+  propsData.value = {
+    is_batch: true,
+    count: details.length,
+    file_count: fileCount,
+    dir_count: dirCount,
+    total_size: totalSize,
+    paths: details.map((item) => item.path),
+  }
+  showProps.value = true
+}
+
+async function deleteTargets(targets: any[]) {
+  if (targets.length === 0) return
+  try {
+    if (targets.length === 1) {
+      await ElMessageBox.confirm(t('fm.confirmDeleteMsg', { name: targets[0].name }), t('confirm'), { type: 'warning' })
+    } else {
+      await ElMessageBox.confirm(t('fm.confirmDeleteN', { n: targets.length }), t('confirm'), { type: 'warning' })
+    }
+  } catch {
+    return
+  }
+
   let ok = 0
-  for (const p of selectedSet) { try { const r: any = await deletePathApi(p); if (r.success) ok++ } catch {} }
-  ElMessage.success(t('fm.deletedN', { n: ok }))
-  selectedSet.clear(); loadFiles()
+  for (const item of targets) {
+    try {
+      const result: any = await deletePathApi(item.path)
+      if (result.success) ok++
+    } catch {}
+  }
+
+  if (targets.length === 1) ElMessage.success(ok ? t('fm.deleted') : t('failed'))
+  else ElMessage.success(t('fm.deletedN', { n: ok }))
+  selectedSet.clear()
+  await loadFiles()
+}
+
+async function batchDelete() {
+  await deleteTargets(getSelectedEntries())
 }
 
 function onBodyMouseDown(e: MouseEvent) {
@@ -747,16 +918,17 @@ function onContext(e: MouseEvent, f: any) {
 function ctxAction(action: string) {
   ctxVisible.value = false
   const f = ctxFile.value; if (!f) return
+  const actionTargets = resolveActionTargets(f)
   if (action === 'open') handleOpen(f)
   else if (action === 'rename') startRename(f)
-  else if (action === 'delete') handleDelete(f)
-  else if (action === 'copy') { navigator.clipboard?.writeText(f.path); ElMessage.success(t('fm.copied')) }
+  else if (action === 'delete') { void deleteTargets(actionTargets) }
+  else if (action === 'copy') { void copyPathTargets(actionTargets) }
   else if (action === 'terminal') {
     const targetDir = f.is_dir ? f.path : currentPath.value
     openTerminal(targetDir)
   }
-  else if (action === 'chmod') { chmodPath.value = f.path; chmodMode.value = '755'; showChmod.value = true }
-  else if (action === 'props') { propsData.value = { ...f }; showProps.value = true }
+  else if (action === 'chmod') { openChmodDialog(actionTargets) }
+  else if (action === 'props') { void openPropertiesDialog(actionTargets) }
 }
 
 function onBodyContext(e: MouseEvent) {
@@ -771,6 +943,10 @@ function bgCtxAction(action: string) {
   else if (action === 'newDir') showMkdir.value = true
   else if (action === 'terminal') openTerminal(currentPath.value)
   else if (action === 'refresh') loadFiles()
+  else if (action === 'copy') { void copyPathTargets(getSelectedEntries()) }
+  else if (action === 'chmod') { openChmodDialog(getSelectedEntries()) }
+  else if (action === 'props') { void openPropertiesDialog(getSelectedEntries()) }
+  else if (action === 'delete') { void deleteTargets(getSelectedEntries()) }
   else if (action === 'selectAll') selectAll()
 }
 
@@ -809,7 +985,17 @@ async function doNewFile() {
   if (res.success) { ElMessage.success(t('fm.created')); showNewFile.value = false; newFileName.value = ''; loadFiles() }
   else ElMessage.error(res.message)
 }
-function startRename(f: any) { renameFrom.value = f.path; renameTo.value = f.name; showRename.value = true }
+function startRename(f: any) {
+  const targets = resolveActionTargets(f)
+  if (targets.length > 1) {
+    ElMessage.warning(t('fm.renameMultiNotSupported'))
+    return
+  }
+  const target = targets[0] || f
+  renameFrom.value = target.path
+  renameTo.value = target.name
+  showRename.value = true
+}
 async function doRename() {
   if (!renameTo.value.trim()) return
   const res: any = await renamePathApi(renameFrom.value, normPath(currentPath.value + '/' + renameTo.value.trim()))
@@ -817,16 +1003,26 @@ async function doRename() {
   else ElMessage.error(res.message)
 }
 async function handleDelete(f: any) {
-  await ElMessageBox.confirm(t('fm.confirmDeleteMsg', { name: f.name }), t('confirm'), { type: 'warning' })
-  const res: any = await deletePathApi(f.path)
-  if (res.success) { ElMessage.success(t('fm.deleted')); loadFiles() }
-  else ElMessage.error(res.message)
+  await deleteTargets([f])
 }
 async function doChmod() {
   if (!chmodMode.value.trim()) return
-  const res: any = await chmodApi(chmodPath.value, chmodMode.value.trim())
-  if (res.success) { ElMessage.success(t('fm.permChanged')); showChmod.value = false; loadFiles() }
-  else ElMessage.error(res.message)
+  const targets = chmodTargets.value.length > 0 ? chmodTargets.value : [chmodPath.value]
+  let ok = 0
+  for (const path of targets) {
+    try {
+      const res: any = await chmodApi(path, chmodMode.value.trim())
+      if (res.success) ok++
+    } catch {}
+  }
+  if (ok > 0) {
+    ElMessage.success(targets.length > 1 ? t('fm.permChangedN', { n: ok }) : t('fm.permChanged'))
+    showChmod.value = false
+    chmodTargets.value = []
+    await loadFiles()
+    return
+  }
+  ElMessage.error(t('failed'))
 }
 
 function cssVar(name: string, fallback: string) {
@@ -1092,6 +1288,12 @@ watch(
     }
   },
 )
+watch(
+  showChmod,
+  (visible) => {
+    if (!visible) chmodTargets.value = []
+  },
+)
 
 onMounted(async () => {
   document.addEventListener('click', closeAllCtx)
@@ -1204,6 +1406,15 @@ onUnmounted(() => {
   border-radius: var(--lp-radius-lg) var(--lp-radius-lg) 0 0;
 }
 .fm-list-body { flex: 1; overflow-y: auto; }
+.fm-col-check {
+  width: 30px;
+  flex: 0 0 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  :deep(.el-checkbox) { margin-right: 0; }
+}
 .fm-col-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .fm-col-size { width: 96px; text-align: right; flex-shrink: 0; }
 .fm-col-time { width: 172px; text-align: right; flex-shrink: 0; }
@@ -1230,8 +1441,15 @@ onUnmounted(() => {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 12px 8px; border-radius: var(--lp-radius);
   cursor: default; transition: background 0.1s;
+  position: relative;
   &:hover { background: var(--lp-table-row-hover); }
   &.selected { background: var(--lp-primary-bg); outline: 1px solid var(--lp-primary); }
+}
+.fm-grid-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
 }
 .fm-grid-name {
   font-size: 12px; color: var(--lp-text-primary); text-align: center;
@@ -1335,8 +1553,29 @@ onUnmounted(() => {
   cursor: pointer; transition: background 0.1s;
   &:hover { background: var(--lp-primary-bg); color: var(--lp-primary); }
 }
+.fm-ctx-item.is-disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .fm-ctx-danger { &:hover { background: var(--lp-danger-bg) !important; color: var(--lp-danger) !important; } }
 .fm-ctx-sep { height: 1px; background: var(--lp-border-light); margin: 4px 0; }
+.fm-props-path-list {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--lp-border-light);
+  border-radius: var(--lp-radius-sm);
+  background: var(--lp-input-bg);
+}
+.fm-props-path {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  color: var(--lp-text-primary);
+  border-bottom: 1px solid var(--lp-border-light);
+  word-break: break-all;
+  &:last-child { border-bottom: none; }
+}
 .fm-editor-wrap { height: 65vh; }
 .fm-editor {
   width: 100%; height: 100%; resize: none;
