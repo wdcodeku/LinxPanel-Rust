@@ -112,7 +112,7 @@
         </div>
       </transition>
 
-      <div v-if="termVisible" class="fm-terminal" :style="{ height: termHeight + 'px' }">
+      <div v-show="termVisible" class="fm-terminal" :style="{ height: termHeight + 'px' }">
         <div class="fm-term-resize" @mousedown.prevent="startTermResize"></div>
         <div class="fm-term-header">
           <span class="fm-term-title"><el-icon :size="14"><Monitor /></el-icon> {{ t('terminal') }}</span>
@@ -751,7 +751,10 @@ function ctxAction(action: string) {
   else if (action === 'rename') startRename(f)
   else if (action === 'delete') handleDelete(f)
   else if (action === 'copy') { navigator.clipboard?.writeText(f.path); ElMessage.success(t('fm.copied')) }
-  else if (action === 'terminal') openTerminal()
+  else if (action === 'terminal') {
+    const targetDir = f.is_dir ? f.path : currentPath.value
+    openTerminal(targetDir)
+  }
   else if (action === 'chmod') { chmodPath.value = f.path; chmodMode.value = '755'; showChmod.value = true }
   else if (action === 'props') { propsData.value = { ...f }; showProps.value = true }
 }
@@ -766,7 +769,7 @@ function bgCtxAction(action: string) {
   bgCtxVisible.value = false
   if (action === 'newFile') showNewFile.value = true
   else if (action === 'newDir') showMkdir.value = true
-  else if (action === 'terminal') openTerminal()
+  else if (action === 'terminal') openTerminal(currentPath.value)
   else if (action === 'refresh') loadFiles()
   else if (action === 'selectAll') selectAll()
 }
@@ -889,10 +892,10 @@ function getTerminalCwdPath() {
   }
   return currentPath.value
 }
-function buildTerminalWsUrl() {
+function buildTerminalWsUrl(cwd?: string) {
   const endpoint = new URL('/api/files/terminal/ws', window.location.origin)
   endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:'
-  endpoint.searchParams.set('cwd', getTerminalCwdPath())
+  endpoint.searchParams.set('cwd', cwd || getTerminalCwdPath())
   const token = localStorage.getItem('token')
   if (token) endpoint.searchParams.set('token', token)
   return endpoint.toString()
@@ -939,17 +942,21 @@ function ensureTerminal() {
   }
   nextTick(() => fitTerminal())
 }
-function connectTerminal(force = false) {
+function connectTerminal(force = false, initialPath?: string) {
   if (!termVisible.value) return
   ensureTerminal()
   if (!termInstance) return
   if (!force && termSocket && (termSocket.readyState === WebSocket.OPEN || termSocket.readyState === WebSocket.CONNECTING)) {
+    if (initialPath && termSocket.readyState === WebSocket.OPEN) {
+      termSocket.send(JSON.stringify({ type: 'chdir', path: initialPath }))
+    }
     termInstance.focus()
     return
   }
   disconnectTerminal(false)
   termDisableAutoReconnect = false
-  const ws = new WebSocket(buildTerminalWsUrl())
+  const startupPath = initialPath || getTerminalCwdPath()
+  const ws = new WebSocket(buildTerminalWsUrl(startupPath))
   ws.binaryType = 'arraybuffer'
   termSocket = ws
   ws.onopen = () => {
@@ -958,7 +965,7 @@ function connectTerminal(force = false) {
     cleanupTermReconnectTimer()
     applyTerminalTheme()
     fitTerminal()
-    sendTerminalChdir(getTerminalCwdPath())
+    sendTerminalChdir(startupPath)
     termInstance?.focus()
   }
   ws.onmessage = async (event) => {
@@ -998,9 +1005,10 @@ function connectTerminal(force = false) {
     }
   }
 }
-function openTerminal() {
+function openTerminal(targetPath?: string) {
+  const startupPath = targetPath ? normPath(targetPath) : undefined
   termVisible.value = true
-  nextTick(() => connectTerminal(false))
+  nextTick(() => connectTerminal(false, startupPath))
 }
 function closeTerminal() {
   termVisible.value = false
