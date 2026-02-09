@@ -149,9 +149,10 @@ async fn file_roots() -> Json<ApiResponse<FileRootsPayload>> {
 }
 
 fn normalize_fs_path(path: &str) -> String {
-    let mut normalized = path.replace('\\', "/");
+    let normalized = path.replace('\\', "/");
     #[cfg(windows)]
     {
+        let mut normalized = normalized;
         if normalized.len() >= 3
             && normalized.starts_with('/')
             && normalized.as_bytes().get(2) == Some(&b':')
@@ -161,8 +162,12 @@ fn normalize_fs_path(path: &str) -> String {
         if normalized.len() == 2 && normalized.as_bytes().get(1) == Some(&b':') {
             normalized.push('/');
         }
+        normalized
     }
-    normalized
+    #[cfg(not(windows))]
+    {
+        normalized
+    }
 }
 
 fn sanitize_upload_filename(raw: &str) -> Option<String> {
