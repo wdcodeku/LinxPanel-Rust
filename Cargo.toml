@@ -6,7 +6,7 @@ description = "LinxPanel - Modern Linux Server Management Panel"
 license = "Apache-2.0"
 
 [dependencies]
-axum = { version = "0.8", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-gzip"] }
 tokio = { version = "1", features = ["full"] }
@@ -26,3 +26,5 @@ bollard = "0.18"
 futures = "0.3"
 include_dir = "0.7"
 mime_guess = "2"
+tokio-stream = "0.1"
+portable-pty = "0.9"

@@ -16,7 +16,13 @@ pub async fn auth(mut req: Request, next: Next) -> Result<Response, StatusCode> 
         .unwrap_or("");
 
     let token = if let Some(t) = auth_header.strip_prefix("Bearer ") {
-        t
+        t.to_string()
+    } else if req.uri().path().ends_with("/files/terminal/ws") {
+        req.uri()
+            .query()
+            .and_then(extract_token_from_query)
+            .ok_or(StatusCode::UNAUTHORIZED)?
+            .to_string()
     } else {
         return Err(StatusCode::UNAUTHORIZED);
     };
@@ -28,7 +34,7 @@ pub async fn auth(mut req: Request, next: Next) -> Result<Response, StatusCode> 
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let claims = decode::<Claims>(
-        token,
+        &token,
         &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
         &Validation::default(),
     )
@@ -37,4 +43,14 @@ pub async fn auth(mut req: Request, next: Next) -> Result<Response, StatusCode> 
 
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
+}
+
+fn extract_token_from_query(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| {
+        let mut parts = pair.splitn(2, '=');
+        match (parts.next(), parts.next()) {
+            (Some("token"), Some(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        }
+    })
 }

@@ -17,10 +17,19 @@
 - 自动创建并启动 `systemd` 服务（若系统支持）
 - 若系统 `cargo` 过旧，会自动安装/切换到 `rustup stable`
 - 安装结束会自动输出真实访问 IP（优先公网 IP）
+- 自动安装命令行工具：`Lp`（别名：`lp`）
 - 无交互部署可指定语言：
   - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
   - 指定安装方式：`LINXPANEL_INSTALL_MODE=binary` 或 `LINXPANEL_INSTALL_MODE=build`
   - 如需手动指定输出 IP：`LINXPANEL_PUBLIC_IP=1.2.3.4`
+
+### Lp 命令行工具
+
+- `Lp status`：查看服务状态
+- `Lp start|stop|restart`：启停/重启服务
+- `Lp logs [out|err|all|service]`：查看日志
+- `Lp info`：查看安装路径、端口与访问地址
+- `Lp update [binary|build]`：一键更新（默认二进制）
 
 ### 单文件部署（内嵌 Web）
 
@@ -96,10 +105,19 @@ Defaults:
 - Auto-create and start `systemd` service (if available)
 - If system `cargo` is too old, installer auto switches to `rustup stable`
 - Installer prints a real access IP at the end (prefers public IP)
+- Installs CLI tool automatically: `Lp` (alias: `lp`)
 - For non-interactive deployment, set language explicitly:
   - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
   - Set install mode: `LINXPANEL_INSTALL_MODE=binary` or `LINXPANEL_INSTALL_MODE=build`
   - To force output IP manually: `LINXPANEL_PUBLIC_IP=1.2.3.4`
+
+### Lp CLI Tool
+
+- `Lp status`: show service status
+- `Lp start|stop|restart`: manage service lifecycle
+- `Lp logs [out|err|all|service]`: tail logs
+- `Lp info`: show install path, port, and access URL
+- `Lp update [binary|build]`: one-command upgrade (default: binary)
 
 ### Single Binary Deployment (Embedded Web)
 

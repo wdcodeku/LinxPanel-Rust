@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="${LINXPANEL_REPO_URL:-https://github.com/wdcodeku/LinxPanel-Rust.git}"
 RELEASE_API_URL="${LINXPANEL_RELEASE_API_URL:-https://api.github.com/repos/wdcodeku/LinxPanel-Rust/releases/latest}"
+LP_CLI_RAW_URL="${LINXPANEL_LP_CLI_RAW_URL:-https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/lp}"
 INSTALL_ROOT="${LINXPANEL_INSTALL_ROOT:-/opt/linxpanel}"
 PORT="${LINXPANEL_PORT:-7200}"
 MIN_CARGO_VERSION="${LINXPANEL_MIN_CARGO_VERSION:-1.78.0}"
@@ -105,6 +106,9 @@ msg() {
       binary_not_found_after_extract) echo "解压后未找到 linxpanel 二进制文件。" ;;
       binary_mode_fallback_build) echo "二进制安装失败，自动回退为编译安装..." ;;
       install_files) echo "正在安装文件到 %s..." ;;
+      install_lp_cli) echo "正在安装 Lp 命令行工具..." ;;
+      install_lp_cli_done) echo "Lp 命令可用：%s（别名：lp）" ;;
+      install_lp_cli_failed) echo "Lp 安装失败（已跳过）：%s" ;;
       configure_systemd) echo "正在配置 systemd 服务..." ;;
       deploy_complete) echo "部署完成。" ;;
       service_status) echo "服务状态：systemctl status linxpanel --no-pager" ;;
@@ -145,6 +149,9 @@ msg() {
       binary_not_found_after_extract) echo "linxpanel binary not found after extraction." ;;
       binary_mode_fallback_build) echo "Binary install failed, falling back to source build..." ;;
       install_files) echo "Installing files to %s..." ;;
+      install_lp_cli) echo "Installing Lp CLI tool..." ;;
+      install_lp_cli_done) echo "Lp command ready: %s (alias: lp)" ;;
+      install_lp_cli_failed) echo "Failed to install Lp CLI (skipped): %s" ;;
       configure_systemd) echo "Configuring systemd service..." ;;
       deploy_complete) echo "Deploy complete." ;;
       service_status) echo "Service status: systemctl status linxpanel --no-pager" ;;
@@ -474,6 +481,45 @@ build_binary_from_source() {
   printf '%s' "${bin_source}"
 }
 
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+install_lp_cli() {
+  local source_cli=""
+  local cli_tmp="${TMP_DIR}/lp"
+  local cli_target="/usr/local/bin/Lp"
+  local cli_alias="/usr/local/bin/lp"
+  local install_root_escaped=""
+
+  logf install_lp_cli
+
+  if [[ -f "${TMP_DIR}/repo/scripts/lp" ]]; then
+    source_cli="${TMP_DIR}/repo/scripts/lp"
+  elif require_cmd curl; then
+    if ! curl -fsSL "${LP_CLI_RAW_URL}" -o "${cli_tmp}.raw"; then
+      logf install_lp_cli_failed "download ${LP_CLI_RAW_URL}"
+      return 0
+    fi
+    source_cli="${cli_tmp}.raw"
+  else
+    logf install_lp_cli_failed "curl not found"
+    return 0
+  fi
+
+  cp "${source_cli}" "${cli_tmp}"
+  install_root_escaped="$(escape_sed_replacement "${INSTALL_ROOT}")"
+  sed -i "s|__INSTALL_ROOT__|${install_root_escaped}|g" "${cli_tmp}"
+
+  ${SUDO} mkdir -p "/usr/local/bin"
+  if ! ${SUDO} install -m 755 "${cli_tmp}" "${cli_target}"; then
+    logf install_lp_cli_failed "install ${cli_target}"
+    return 0
+  fi
+  ${SUDO} ln -sf "${cli_target}" "${cli_alias}" || true
+  logf install_lp_cli_done "${cli_target}"
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   die linux_only
 fi
@@ -534,6 +580,7 @@ logf install_files "${INSTALL_ROOT}"
 ${SUDO} mkdir -p "${INSTALL_ROOT}/bin" "${INSTALL_ROOT}/data" "${INSTALL_ROOT}/logs"
 ${SUDO} install -m 755 "${BIN_SOURCE}" "${INSTALL_ROOT}/bin/linxpanel"
 ${SUDO} chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}"
+install_lp_cli
 
 SERVICE_FILE="/etc/systemd/system/linxpanel.service"
 if require_cmd systemctl; then

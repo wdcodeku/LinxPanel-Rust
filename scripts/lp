@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_INSTALL_ROOT="__INSTALL_ROOT__"
+if [[ "${DEFAULT_INSTALL_ROOT}" == "__INSTALL_ROOT__" ]]; then
+  DEFAULT_INSTALL_ROOT="/opt/linxpanel"
+fi
+
+SERVICE_NAME="${LINXPANEL_SERVICE_NAME:-linxpanel}"
+INSTALL_ROOT="${LINXPANEL_INSTALL_ROOT:-${DEFAULT_INSTALL_ROOT}}"
+BIN_PATH="${LINXPANEL_BIN_PATH:-${INSTALL_ROOT}/bin/linxpanel}"
+LOG_DIR="${LINXPANEL_LOG_DIR:-${INSTALL_ROOT}/logs}"
+LOG_OUT="${LINXPANEL_LOG_OUT:-${LOG_DIR}/linxpanel.out.log}"
+LOG_ERR="${LINXPANEL_LOG_ERR:-${LOG_DIR}/linxpanel.err.log}"
+PID_FILE="${LINXPANEL_PID_FILE:-${INSTALL_ROOT}/linxpanel.pid}"
+INSTALL_SCRIPT_URL="${LINXPANEL_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh}"
+
+has_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+run_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif has_cmd sudo; then
+    sudo "$@"
+  else
+    echo "This action requires root privileges (sudo not found)." >&2
+    exit 1
+  fi
+}
+
+get_service_file() {
+  local file=""
+  for file in "/etc/systemd/system/${SERVICE_NAME}.service" "/lib/systemd/system/${SERVICE_NAME}.service"; do
+    if [[ -f "${file}" ]]; then
+      printf '%s' "${file}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+read_service_value() {
+  local key="$1"
+  local service_file=""
+  service_file="$(get_service_file || true)"
+  if [[ -z "${service_file}" ]]; then
+    return 1
+  fi
+  grep -E "^${key}=" "${service_file}" | head -n1 | cut -d= -f2- || true
+}
+
+read_service_env() {
+  local key="$1"
+  local service_file=""
+  service_file="$(get_service_file || true)"
+  if [[ -z "${service_file}" ]]; then
+    return 1
+  fi
+  grep -E "^Environment=${key}=" "${service_file}" | head -n1 | sed -E "s/^Environment=${key}=//" || true
+}
+
+sync_paths_from_service() {
+  local exec_start=""
+  exec_start="$(read_service_value "ExecStart" || true)"
+  if [[ -n "${exec_start}" && "${BIN_PATH}" == "${INSTALL_ROOT}/bin/linxpanel" ]]; then
+    BIN_PATH="${exec_start}"
+    INSTALL_ROOT="$(dirname "$(dirname "${BIN_PATH}")")"
+    LOG_DIR="${INSTALL_ROOT}/logs"
+    LOG_OUT="${LOG_DIR}/linxpanel.out.log"
+    LOG_ERR="${LOG_DIR}/linxpanel.err.log"
+    PID_FILE="${INSTALL_ROOT}/linxpanel.pid"
+  fi
+}
+
+systemd_available() {
+  if ! has_cmd systemctl; then
+    return 1
+  fi
+  if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}\\.service"; then
+    return 0
+  fi
+  get_service_file >/dev/null 2>&1
+}
+
+current_port() {
+  local value=""
+  value="${LINXPANEL_PORT:-}"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+  value="$(read_service_env "PORT" || true)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+  printf '%s' "7200"
+}
+
+current_database_url() {
+  local value=""
+  value="${LINXPANEL_DATABASE_URL:-}"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+  value="$(read_service_env "DATABASE_URL" || true)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+  printf '%s' "sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc"
+}
+
+running_pids() {
+  pgrep -f "${BIN_PATH}" 2>/dev/null || true
+}
+
+is_running() {
+  [[ -n "$(running_pids)" ]]
+}
+
+detect_ip() {
+  local ip_candidate=""
+  if [[ -n "${LINXPANEL_PUBLIC_IP:-}" ]]; then
+    printf '%s' "${LINXPANEL_PUBLIC_IP}"
+    return
+  fi
+  if has_cmd curl; then
+    ip_candidate="$(curl -4fsS --connect-timeout 2 --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "${ip_candidate}" ]]; then
+      printf '%s' "${ip_candidate}"
+      return
+    fi
+  fi
+  ip_candidate="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  if [[ -n "${ip_candidate}" ]]; then
+    printf '%s' "${ip_candidate}"
+    return
+  fi
+  printf '%s' "127.0.0.1"
+}
+
+start_no_systemd() {
+  if is_running; then
+    echo "LinxPanel already running (PID: $(running_pids | tr '\n' ' '))."
+    return
+  fi
+  mkdir -p "${INSTALL_ROOT}/data" "${LOG_DIR}"
+  nohup env \
+    PORT="$(current_port)" \
+    DATABASE_URL="$(current_database_url)" \
+    "${BIN_PATH}" \
+    >> "${LOG_OUT}" \
+    2>> "${LOG_ERR}" &
+  echo $! > "${PID_FILE}" || true
+  sleep 1
+  if is_running; then
+    echo "LinxPanel started (PID: $(running_pids | tr '\n' ' '))."
+  else
+    echo "Failed to start LinxPanel. Check logs: ${LOG_ERR}" >&2
+    exit 1
+  fi
+}
+
+stop_no_systemd() {
+  local pids=""
+  pids="$(running_pids)"
+  if [[ -z "${pids}" ]]; then
+    echo "LinxPanel is not running."
+    rm -f "${PID_FILE}" || true
+    return
+  fi
+  echo "${pids}" | xargs -r kill -TERM || true
+  sleep 1
+  pids="$(running_pids)"
+  if [[ -n "${pids}" ]]; then
+    echo "${pids}" | xargs -r kill -KILL || true
+  fi
+  rm -f "${PID_FILE}" || true
+  echo "LinxPanel stopped."
+}
+
+status_cmd() {
+  if systemd_available; then
+    systemctl status "${SERVICE_NAME}" --no-pager || true
+    return
+  fi
+  if is_running; then
+    echo "LinxPanel is running (PID: $(running_pids | tr '\n' ' '))."
+    echo "URL: http://$(detect_ip):$(current_port)"
+  else
+    echo "LinxPanel is not running."
+  fi
+}
+
+logs_cmd() {
+  local kind="${1:-out}"
+  case "${kind}" in
+    out) tail -f "${LOG_OUT}" ;;
+    err) tail -f "${LOG_ERR}" ;;
+    all) tail -f "${LOG_OUT}" "${LOG_ERR}" ;;
+    service)
+      if systemd_available && has_cmd journalctl; then
+        run_sudo journalctl -u "${SERVICE_NAME}" -f -n 100
+      else
+        echo "systemd/journalctl not available; using file logs."
+        tail -f "${LOG_OUT}" "${LOG_ERR}"
+      fi
+      ;;
+    *)
+      echo "Unknown log type: ${kind}" >&2
+      echo "Usage: Lp logs [out|err|all|service]" >&2
+      exit 1
+      ;;
+  esac
+}
+
+update_cmd() {
+  local mode="${1:-binary}"
+  case "${mode}" in
+    binary|build) ;;
+    *)
+      echo "Unsupported update mode: ${mode}" >&2
+      echo "Usage: Lp update [binary|build]" >&2
+      exit 1
+      ;;
+  esac
+  if ! has_cmd curl; then
+    echo "curl is required for update command." >&2
+    exit 1
+  fi
+  env \
+    LINXPANEL_INSTALL_ROOT="${INSTALL_ROOT}" \
+    LINXPANEL_PORT="$(current_port)" \
+    LINXPANEL_INSTALL_MODE="${mode}" \
+    bash -c "$(curl -sSL "${INSTALL_SCRIPT_URL}")"
+}
+
+info_cmd() {
+  local mode="nohup"
+  if systemd_available; then
+    mode="systemd"
+  fi
+  echo "Command: Lp"
+  echo "Service: ${SERVICE_NAME}"
+  echo "Mode: ${mode}"
+  echo "Install root: ${INSTALL_ROOT}"
+  echo "Binary: ${BIN_PATH}"
+  echo "Logs: ${LOG_OUT} | ${LOG_ERR}"
+  echo "Port: $(current_port)"
+  echo "URL: http://$(detect_ip):$(current_port)"
+  if is_running; then
+    echo "Status: running (PID: $(running_pids | tr '\n' ' '))"
+  else
+    echo "Status: stopped"
+  fi
+}
+
+print_help() {
+  cat <<'EOF'
+Lp - LinxPanel CLI
+
+Usage:
+  Lp status                 Show service status
+  Lp start                  Start LinxPanel
+  Lp stop                   Stop LinxPanel
+  Lp restart                Restart LinxPanel
+  Lp logs [out|err|all|service]
+                            View logs
+  Lp info                   Show runtime info
+  Lp update [binary|build]  Upgrade/reinstall LinxPanel
+  Lp enable                 Enable systemd service
+  Lp disable                Disable systemd service
+  Lp help                   Show this help
+EOF
+}
+
+sync_paths_from_service
+
+cmd="${1:-help}"
+
+require_binary=0
+case "${cmd}" in
+  start|restart|logs|info) require_binary=1 ;;
+esac
+
+if [[ "${require_binary}" == "1" && ! -x "${BIN_PATH}" ]]; then
+  echo "LinxPanel binary not found: ${BIN_PATH}" >&2
+  echo "Tip: set LINXPANEL_INSTALL_ROOT or run: Lp update binary" >&2
+  exit 1
+fi
+
+case "${cmd}" in
+  start)
+    if systemd_available; then
+      run_sudo systemctl start "${SERVICE_NAME}"
+      status_cmd
+    else
+      start_no_systemd
+    fi
+    ;;
+  stop)
+    if systemd_available; then
+      run_sudo systemctl stop "${SERVICE_NAME}"
+      echo "LinxPanel stopped."
+    else
+      stop_no_systemd
+    fi
+    ;;
+  restart)
+    if systemd_available; then
+      run_sudo systemctl restart "${SERVICE_NAME}"
+      status_cmd
+    else
+      stop_no_systemd
+      start_no_systemd
+    fi
+    ;;
+  status)
+    status_cmd
+    ;;
+  logs)
+    logs_cmd "${2:-out}"
+    ;;
+  info)
+    info_cmd
+    ;;
+  update)
+    update_cmd "${2:-binary}"
+    ;;
+  enable)
+    if systemd_available; then
+      run_sudo systemctl enable "${SERVICE_NAME}"
+      echo "systemd service enabled."
+    else
+      echo "systemd not available, skip."
+    fi
+    ;;
+  disable)
+    if systemd_available; then
+      run_sudo systemctl disable "${SERVICE_NAME}"
+      echo "systemd service disabled."
+    else
+      echo "systemd not available, skip."
+    fi
+    ;;
+  help|-h|--help)
+    print_help
+    ;;
+  *)
+    echo "Unknown command: ${cmd}" >&2
+    print_help
+    exit 1
+    ;;
+esac
