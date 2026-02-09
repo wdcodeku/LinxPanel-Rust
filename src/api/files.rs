@@ -202,17 +202,36 @@ fn format_permissions(metadata: &std::fs::Metadata) -> String {
     }
 }
 
+fn file_allocated_size(metadata: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return metadata.blocks().saturating_mul(512);
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.len()
+    }
+}
+
 fn calculate_directory_size(path: &Path) -> u64 {
     let mut total = 0_u64;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
             let entry_path = entry.path();
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_file() {
-                    total = total.saturating_add(metadata.len());
-                } else if metadata.is_dir() {
-                    total = total.saturating_add(calculate_directory_size(&entry_path));
+            if file_type.is_file() {
+                if let Ok(metadata) = entry.metadata() {
+                    total = total.saturating_add(file_allocated_size(&metadata));
                 }
+            } else if file_type.is_dir() {
+                total = total.saturating_add(calculate_directory_size(&entry_path));
             }
         }
     }
