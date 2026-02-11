@@ -70,6 +70,7 @@ export default {
     deleted: '\u5df2\u5220\u9664',
     copied: '\u5df2\u590d\u5236',
     copiedN: '\u5df2\u590d\u5236 {n} \u4e2a\u8def\u5f84',
+    clipboardUnavailable: '\u5f53\u524d\u6d4f\u89c8\u5668\u73af\u5883\u65e0\u6cd5\u8bbf\u95ee\u526a\u8d34\u677f',
     download: '\u4e0b\u8f7d',
     downloadedN: '\u5df2\u5f00\u59cb\u4e0b\u8f7d {n} \u4e2a\u6587\u4ef6',
     calcSize: '\u8ba1\u7b97',

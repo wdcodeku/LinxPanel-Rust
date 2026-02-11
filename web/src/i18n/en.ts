@@ -70,6 +70,7 @@ export default {
     deleted: 'Deleted',
     copied: 'Copied',
     copiedN: 'Copied {n} paths',
+    clipboardUnavailable: 'Clipboard is unavailable in current browser context',
     download: 'Download',
     downloadedN: 'Started downloading {n} file(s)',
     calcSize: 'Calculate',

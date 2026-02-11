@@ -859,14 +859,55 @@ function shiftSelect(f: any) {
 }
 function selectAll() { sortedVisibleFiles.value.forEach(f => selectedSet.add(f.path)) }
 
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (!text) return false
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+  if (clipboard && typeof clipboard.writeText === 'function') {
+    try {
+      await clipboard.writeText(text)
+      return true
+    } catch {}
+  }
+
+  if (typeof document === 'undefined') return false
+  let textarea: HTMLTextAreaElement | null = null
+  try {
+    textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '-9999px'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    if (textarea?.parentNode) textarea.parentNode.removeChild(textarea)
+  }
+}
+
+async function readClipboardTextSafe(): Promise<string | null> {
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+  if (!clipboard || typeof clipboard.readText !== 'function') return null
+  try {
+    return await clipboard.readText()
+  } catch {
+    return null
+  }
+}
+
 async function copyPathTargets(targets: any[]) {
   const paths = targets.map((item) => String(item.path || '')).filter(Boolean)
   if (paths.length === 0) return
-  try {
-    await navigator.clipboard?.writeText(paths.join('\n'))
+  const copied = await writeClipboardText(paths.join('\n'))
+  if (copied) {
     ElMessage.success(paths.length > 1 ? t('fm.copiedN', { n: paths.length }) : t('fm.copied'))
-  } catch {
-    ElMessage.error(t('failed'))
+  } else {
+    ElMessage.error(t('fm.clipboardUnavailable'))
   }
 }
 
@@ -1187,11 +1228,11 @@ function getTerminalSelectionText() {
 async function copyTerminalSelection() {
   const text = getTerminalSelectionText()
   if (!text) return
-  try {
-    await navigator.clipboard?.writeText(text)
+  const copied = await writeClipboardText(text)
+  if (copied) {
     ElMessage.success(t('fm.copied'))
-  } catch {
-    ElMessage.error(t('failed'))
+  } else {
+    ElMessage.error(t('fm.clipboardUnavailable'))
   }
 }
 async function pasteTerminalClipboard() {
@@ -1199,14 +1240,14 @@ async function pasteTerminalClipboard() {
     ElMessage.warning(t('fm.termDisconnected'))
     return
   }
-  try {
-    const text = await navigator.clipboard?.readText()
-    if (!text) return
-    termSocket.send(text)
-    termInstance?.focus()
-  } catch {
-    ElMessage.error(t('failed'))
+  const text = await readClipboardTextSafe()
+  if (text === null) {
+    ElMessage.error(t('fm.clipboardUnavailable'))
+    return
   }
+  if (!text) return
+  termSocket.send(text)
+  termInstance?.focus()
 }
 function clearTerminalScreen() {
   termInstance?.clear()
