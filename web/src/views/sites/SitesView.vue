@@ -255,13 +255,17 @@
           <el-input v-model="createForm.name" />
         </el-form-item>
         <el-form-item :label="t('si.domain')">
-          <div class="domain-editor" @click="focusDomainInput">
+          <div class="domain-editor" @click="handleDomainEditorClick">
             <el-tag
               v-for="domain in createForm.domains"
               :key="domain"
               closable
               size="small"
-              :class="['domain-tag', { 'domain-tag-conflict': domainConflictMap[domain] }]"
+              :class="[
+                'domain-tag',
+                { 'domain-tag-conflict': domainConflictMap[domain] },
+                { 'domain-tag-selected': domainTagsAllSelected },
+              ]"
               @close="removeDomain(domain)"
             >
               {{ domain }}
@@ -273,6 +277,7 @@
               :placeholder="createForm.domains.length ? '' : t('si.domainInputPlaceholder')"
               @keydown="handleDomainInputKeydown"
               @blur="commitDomainInput"
+              @paste="handleDomainInputPaste"
             />
           </div>
           <div class="form-tip">{{ t('si.domainInputTip') }}</div>
@@ -358,6 +363,7 @@ const installLog = ref('')
 const domainInputRef = ref<HTMLInputElement>()
 const domainInput = ref('')
 const domainConflictMap = reactive<Record<string, boolean>>({})
+const domainTagsAllSelected = ref(false)
 const openrestyStatus = ref<any>({
   supported: true,
   installed: false,
@@ -388,6 +394,12 @@ function normalizeDomainToken(token: string) {
     .replace(/\/.*$/, '')
     .replace(/\.+$/, '')
     .toLowerCase()
+}
+function parseDomainTokens(rawText: string) {
+  return String(rawText || '')
+    .split(/[\s,，;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 function getDomainList(rawDomains: string) {
   return String(rawDomains || '')
@@ -439,34 +451,88 @@ function refreshCreateDomainConflicts() {
     }
   }
 }
-function addDomainToken(rawToken: string) {
+function addDomainToken(rawToken: string, silentNotify = false) {
   const token = normalizeDomainToken(rawToken)
-  if (!token) return
+  if (!token) return { state: 'empty' as const, token: '' }
   if (!isValidDomainToken(token)) {
-    ElMessage.warning(t('si.invalidDomain'))
-    return
+    if (!silentNotify) ElMessage.warning(t('si.invalidDomain'))
+    return { state: 'invalid' as const, token }
   }
-  if (createForm.domains.some((d) => d.toLowerCase() === token.toLowerCase())) return
+  if (createForm.domains.some((d) => d.toLowerCase() === token.toLowerCase())) {
+    return { state: 'duplicate' as const, token }
+  }
   createForm.domains.push(token)
   const conflict = isDomainBound(token)
   if (conflict) {
     domainConflictMap[token] = true
-    ElMessage.warning(t('api.domainAlreadyExistsWithDetail', { domain: token }))
+    if (!silentNotify) ElMessage.warning(t('api.domainAlreadyExistsWithDetail', { domain: token }))
+    return { state: 'conflict' as const, token }
   } else {
     delete domainConflictMap[token]
+    return { state: 'added' as const, token }
+  }
+}
+function clearCreateDomainState() {
+  createForm.domains = []
+  domainInput.value = ''
+  for (const key of Object.keys(domainConflictMap)) {
+    delete domainConflictMap[key]
+  }
+  domainTagsAllSelected.value = false
+}
+function addDomainTokens(rawText: string, source: 'paste' | 'input') {
+  const tokens = parseDomainTokens(rawText)
+  if (!tokens.length) return
+  const conflicts: string[] = []
+  for (const token of tokens) {
+    const result = addDomainToken(token, true)
+    if (result.state === 'conflict') {
+      conflicts.push(result.token)
+    }
+  }
+  if (conflicts.length > 0) {
+    ElMessage.warning(t('api.domainAlreadyExistsWithDetail', { domain: conflicts[0] }))
+  }
+  if (source === 'paste') {
+    domainTagsAllSelected.value = false
   }
 }
 function commitDomainInput() {
   if (!domainInput.value.trim()) return
-  const tokens = domainInput.value
-    .split(/[\s,，;；]+/)
-    .map((d) => d.trim())
-    .filter(Boolean)
-  tokens.forEach(addDomainToken)
+  addDomainTokens(domainInput.value, 'input')
   domainInput.value = ''
+  domainTagsAllSelected.value = false
 }
 function handleDomainInputKeydown(event: KeyboardEvent) {
+  const key = event.key.toLowerCase()
+  const withModifier = event.ctrlKey || event.metaKey
+  if (withModifier && key === 'a') {
+    if (createForm.domains.length > 0) {
+      event.preventDefault()
+      domainTagsAllSelected.value = true
+    }
+    return
+  }
+  if (withModifier && key === 'c') {
+    if (domainTagsAllSelected.value && createForm.domains.length > 0) {
+      event.preventDefault()
+      void copySelectedDomainsToClipboard()
+    }
+    return
+  }
+  if (withModifier && key === 'x') {
+    if (domainTagsAllSelected.value && createForm.domains.length > 0) {
+      event.preventDefault()
+      void copySelectedDomainsToClipboard(true)
+    }
+    return
+  }
   if ((event.key === 'Backspace' || event.key === 'Delete') && !domainInput.value.trim()) {
+    if (domainTagsAllSelected.value && createForm.domains.length > 0) {
+      event.preventDefault()
+      clearCreateDomainState()
+      return
+    }
     const lastDomain = createForm.domains[createForm.domains.length - 1]
     if (lastDomain) {
       event.preventDefault()
@@ -479,10 +545,67 @@ function handleDomainInputKeydown(event: KeyboardEvent) {
     commitDomainInput()
   }
 }
+function handleDomainEditorClick() {
+  domainTagsAllSelected.value = false
+  focusDomainInput()
+}
 function focusDomainInput() { domainInputRef.value?.focus() }
 function removeDomain(domain: string) {
   createForm.domains = createForm.domains.filter((d) => d !== domain)
   delete domainConflictMap[domain]
+  domainTagsAllSelected.value = false
+}
+function handleDomainInputPaste(event: ClipboardEvent) {
+  const text = event.clipboardData?.getData('text') || ''
+  if (!text) return
+  event.preventDefault()
+  if (domainTagsAllSelected.value && createForm.domains.length > 0) {
+    clearCreateDomainState()
+  }
+  addDomainTokens(text, 'paste')
+}
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (!text) return false
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+  if (clipboard && typeof clipboard.writeText === 'function') {
+    try {
+      await clipboard.writeText(text)
+      return true
+    } catch {}
+  }
+
+  if (typeof document === 'undefined') return false
+  let textarea: HTMLTextAreaElement | null = null
+  try {
+    textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '-9999px'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    if (textarea?.parentNode) textarea.parentNode.removeChild(textarea)
+  }
+}
+async function copySelectedDomainsToClipboard(removeAfterCopy = false) {
+  const targets = domainTagsAllSelected.value ? [...createForm.domains] : []
+  if (!targets.length) return
+  const copied = await writeClipboardText(targets.join('\n'))
+  if (copied) {
+    ElMessage.success(t('fm.copiedN', { n: targets.length }))
+    if (removeAfterCopy) {
+      clearCreateDomainState()
+    }
+  } else {
+    ElMessage.error(t('fm.clipboardUnavailable'))
+  }
 }
 function handleSelectDir(path: string) {
   createForm.doc_root = path || '/'
@@ -667,13 +790,9 @@ async function doCreate() {
       ElMessage.success(t('si.created'))
       showCreate.value = false
       createForm.name = ''
-      createForm.domains = []
       createForm.doc_root = '/www/wwwroot'
       createForm.site_type = 'static'
-      domainInput.value = ''
-      for (const key of Object.keys(domainConflictMap)) {
-        delete domainConflictMap[key]
-      }
+      clearCreateDomainState()
       loadSites()
     }
   } finally { creating.value = false }
@@ -965,6 +1084,11 @@ onMounted(async () => {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+.domain-tag-selected {
+  border-color: rgba(79, 110, 247, 0.38) !important;
+  background: var(--lp-primary-bg) !important;
+  color: var(--lp-primary) !important;
 }
 .domain-tag-conflict {
   border-color: rgba(255, 77, 79, 0.48) !important;
