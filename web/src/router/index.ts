@@ -51,7 +51,8 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('token')
-  const isLoginRoute = to.path === '/login'
+  const normalizedPath = to.path.replace(/\/+$/, '') || '/'
+  const isLoginRoute = to.name === 'Login' || normalizedPath === '/login'
 
   if (!token && !to.meta.public) {
     next('/login')

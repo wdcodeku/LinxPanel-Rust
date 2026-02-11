@@ -368,6 +368,7 @@ const termCtxVisible = ref(false)
 const termCtxX = ref(0)
 const termCtxY = ref(0)
 const termCopyDisabled = ref(false)
+const termSelectionSnapshot = ref('')
 const ctxMenuRef = ref<HTMLElement>()
 const bgCtxMenuRef = ref<HTMLElement>()
 const termCtxMenuRef = ref<HTMLElement>()
@@ -1225,8 +1226,18 @@ function getTerminalSelectionText() {
   } catch {}
   return ''
 }
+function getBrowserSelectionText() {
+  try {
+    return window.getSelection?.()?.toString?.() || ''
+  } catch {
+    return ''
+  }
+}
 async function copyTerminalSelection() {
-  const text = getTerminalSelectionText()
+  const text =
+    getTerminalSelectionText() ||
+    termSelectionSnapshot.value ||
+    getBrowserSelectionText()
   if (!text) return
   const copied = await writeClipboardText(text)
   if (copied) {
@@ -1259,7 +1270,8 @@ function onTerminalContext(e: MouseEvent) {
   bgCtxVisible.value = false
   termCtxX.value = e.clientX
   termCtxY.value = e.clientY
-  termCopyDisabled.value = !getTerminalSelectionText()
+  termSelectionSnapshot.value = getTerminalSelectionText() || getBrowserSelectionText()
+  termCopyDisabled.value = !termSelectionSnapshot.value
   termCtxVisible.value = true
   adjustCtxMenuPos('term', e.clientX, e.clientY)
 }
@@ -1268,6 +1280,7 @@ function termCtxAction(action: 'copy' | 'paste' | 'clear') {
   if (action === 'copy') { void copyTerminalSelection() }
   else if (action === 'paste') { void pasteTerminalClipboard() }
   else if (action === 'clear') clearTerminalScreen()
+  termSelectionSnapshot.value = ''
 }
 function closeAllCtx() { ctxVisible.value = false; bgCtxVisible.value = false; termCtxVisible.value = false }
 
