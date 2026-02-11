@@ -87,6 +87,16 @@ async fn create_site(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "static".into());
+    if site_type != "proxy" {
+        let index_path = std::path::Path::new(&doc_root).join("index.html");
+        if !index_path.exists() {
+            let index_content = format!(
+                "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title></head><body><h1>{}</h1><p>LinxPanel site is ready.</p></body></html>",
+                name, name
+            );
+            let _ = std::fs::write(&index_path, index_content);
+        }
+    }
     let domains_str = domains.join(",");
 
     let result = sqlx::query(

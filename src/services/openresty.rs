@@ -474,7 +474,7 @@ pub async fn quick_install(state: &AppState) -> Result<OpenRestyInstallResult> {
 
 pub async fn sync_site(state: &AppState, site_id: i64) -> Result<()> {
     let _guard = state.openresty_lock.lock().await;
-    let runtime = load_runtime(&state.db).await?;
+    let runtime = load_runtime_for_sync(&state.db).await?;
     if !runtime.enabled {
         return Ok(());
     }
@@ -501,7 +501,7 @@ pub async fn sync_site(state: &AppState, site_id: i64) -> Result<()> {
 
 pub async fn remove_site(state: &AppState, site_id: i64) -> Result<()> {
     let _guard = state.openresty_lock.lock().await;
-    let runtime = load_runtime(&state.db).await?;
+    let runtime = load_runtime_for_sync(&state.db).await?;
     if !runtime.enabled {
         return Ok(());
     }
@@ -1701,6 +1701,56 @@ async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
         php_fpm_addr,
         listen_ipv6,
     })
+}
+
+async fn load_runtime_for_sync(db: &SqlitePool) -> Result<OpenRestyRuntime> {
+    let mut runtime = load_runtime(db).await?;
+
+    let resolved_binary = resolve_openresty_bin()
+        .or_else(|| resolve_nginx_bin(&runtime.nginx_bin))
+        .ok_or_else(|| anyhow!("OpenResty binary not found"))?;
+    if !is_openresty_binary_path(&resolved_binary)
+        && !detect_binary_version(&resolved_binary)
+            .ok()
+            .flatten()
+            .as_deref()
+            .map(version_mentions_openresty)
+            .unwrap_or(false)
+        && !run_binary_capture(&resolved_binary, ["-V"].as_slice())
+            .map(|text| version_mentions_openresty(&text))
+            .unwrap_or(false)
+    {
+        return Err(anyhow!(
+            "Detected nginx binary is not OpenResty: {}",
+            resolved_binary.display()
+        ));
+    }
+
+    runtime.nginx_bin = resolved_binary.to_string_lossy().to_string();
+
+    let conf_path = runtime
+        .nginx_conf
+        .clone()
+        .filter(|path| path.exists())
+        .or_else(|| detect_conf_path(&resolved_binary).ok().flatten())
+        .or_else(|| guess_conf_path_from_bin(&resolved_binary))
+        .ok_or_else(|| anyhow!("OpenResty main config was not detected"))?;
+    runtime.nginx_conf = Some(conf_path.clone());
+
+    let mut prepare_log = String::new();
+    let resolved_sites_dir = prepare_sites_dir(&conf_path, &runtime.sites_dir, &mut prepare_log)?;
+    runtime.sites_dir = resolved_sites_dir.clone();
+
+    save_setting(db, SETTING_OPENRESTY_BIN, &runtime.nginx_bin).await?;
+    save_setting(db, SETTING_OPENRESTY_SITES_DIR, &resolved_sites_dir.to_string_lossy()).await?;
+    save_setting(
+        db,
+        SETTING_OPENRESTY_CONF_PATH,
+        &conf_path.to_string_lossy(),
+    )
+    .await?;
+
+    Ok(runtime)
 }
 
 fn setting_or_env(
