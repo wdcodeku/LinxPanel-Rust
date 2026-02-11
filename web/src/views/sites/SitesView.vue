@@ -6,7 +6,7 @@
           type="button"
           class="category-item"
           :class="{ active: activeCategory === 'sites' }"
-          @click="activeCategory = 'sites'"
+          @click="setActiveCategory('sites')"
         >
           {{ t('si.tabSite') }}
         </button>
@@ -14,9 +14,17 @@
           type="button"
           class="category-item"
           :class="{ active: activeCategory === 'certs' }"
-          @click="activeCategory = 'certs'"
+          @click="setActiveCategory('certs')"
         >
           {{ t('si.tabCert') }}
+        </button>
+        <button
+          type="button"
+          class="category-item"
+          :class="{ active: activeCategory === 'openresty' }"
+          @click="setActiveCategory('openresty')"
+        >
+          {{ t('si.tabOpenresty') }}
         </button>
       </div>
       <el-button
@@ -54,7 +62,7 @@
           <el-button :disabled="!installLog" @click="installLogDialogVisible = true">
             {{ t('st.viewInstallLog') }}
           </el-button>
-          <el-button @click="router.push('/settings')">{{ t('si.openrestyGoSettings') }}</el-button>
+          <el-button @click="setActiveCategory('openresty')">{{ t('si.openrestyGoSettings') }}</el-button>
           <el-button @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
         </div>
       </div>
@@ -165,6 +173,78 @@
         </el-table-column>
       </el-table>
     </el-card>
+    <el-card v-else-if="activeCategory === 'openresty'" shadow="hover" class="openresty-settings-card">
+      <div class="openresty-settings-header">
+        <div class="openresty-settings-title">{{ t('st.openrestySettings') }}</div>
+        <div class="openresty-settings-actions">
+          <el-button size="small" @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            :disabled="!openrestyStatus.supported || openrestyStatus.installed"
+            :loading="installingOpenresty"
+            @click="handleQuickInstallOpenResty"
+          >
+            {{ t('st.quickInstallOpenresty') }}
+          </el-button>
+          <el-button size="small" :disabled="!installLog" @click="installLogDialogVisible = true">
+            {{ t('st.viewInstallLog') }}
+          </el-button>
+        </div>
+      </div>
+      <div class="openresty-status-box" v-loading="statusLoading || installingOpenresty">
+        <div class="openresty-status-tags">
+          <el-tag :type="openrestyStatus.installed ? 'success' : 'danger'" effect="dark" size="small">
+            {{ openrestyStatus.installed ? t('st.openrestyInstalled') : t('st.openrestyNotInstalled') }}
+          </el-tag>
+          <el-tag :type="openrestyForm.openresty_enabled ? 'success' : 'info'" size="small">
+            {{ t('st.openrestyEnabled') }}: {{ openrestyForm.openresty_enabled ? 'ON' : 'OFF' }}
+          </el-tag>
+          <el-tag v-if="openrestyStatus.version" type="info" size="small">
+            {{ openrestyStatus.version }}
+          </el-tag>
+        </div>
+        <div class="openresty-status-message">{{ openrestyStatus.message || '-' }}</div>
+        <div class="openresty-status-meta">
+          <span>{{ t('st.openrestyCurrentBin') }}: {{ openrestyStatus.nginx_bin || '-' }}</span>
+          <span>{{ t('st.openrestyCurrentConf') }}: {{ openrestyStatus.nginx_conf || '-' }}</span>
+          <span>{{ t('st.openrestyCurrentSitesDir') }}: {{ openrestyStatus.sites_dir || '-' }}</span>
+        </div>
+      </div>
+      <el-alert
+        v-if="!openrestyStatus.installed"
+        type="warning"
+        show-icon
+        :closable="false"
+        :title="t('si.openrestyRequiredTitle')"
+        :description="t('si.openrestyRequiredDesc')"
+      />
+      <el-form :model="openrestyForm" label-width="120px" label-position="left" class="openresty-settings-form">
+        <el-form-item :label="t('st.openrestyEnabled')">
+          <el-switch v-model="openrestyForm.openresty_enabled" />
+        </el-form-item>
+        <el-form-item :label="t('st.openrestyBin')">
+          <el-input v-model="openrestyForm.openresty_bin" :placeholder="t('st.openrestyBinPlaceholder')" />
+        </el-form-item>
+        <el-form-item :label="t('st.openrestySitesDir')">
+          <el-input v-model="openrestyForm.openresty_sites_dir" :placeholder="t('st.openrestySitesDirPlaceholder')" />
+        </el-form-item>
+        <el-form-item :label="t('st.openrestyConfPath')">
+          <el-input v-model="openrestyForm.openresty_conf_path" :placeholder="t('st.openrestyConfPathPlaceholder')" />
+        </el-form-item>
+        <el-form-item :label="t('st.phpFpmAddr')">
+          <el-input v-model="openrestyForm.php_fpm_addr" :placeholder="t('st.phpFpmAddrPlaceholder')" />
+        </el-form-item>
+        <el-form-item :label="t('st.openrestyIpv6')">
+          <el-switch v-model="openrestyForm.openresty_listen_ipv6" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="savingOpenresty" @click="saveOpenrestySettings">
+            {{ t('st.saveSettings') }}
+          </el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
     <el-card v-else shadow="hover">
       <el-empty :description="t('si.certComingSoon')" />
     </el-card>
@@ -199,7 +279,7 @@
         </el-form-item>
         <el-form-item :label="t('si.rootDir')">
           <div class="root-dir-row">
-            <el-input v-model="createForm.doc_root" placeholder="/www/sites/example" />
+            <el-input v-model="createForm.doc_root" placeholder="/www/wwwroot" />
             <el-tooltip :content="t('si.chooseDir')" :show-after="250">
               <el-button circle class="dir-picker-btn" @click="showDirPicker = true">
                 <el-icon><FolderOpened /></el-icon>
@@ -244,21 +324,33 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
-import { getSites, createSite, deleteSite, startSite, stopSite, getOpenRestyStatus, quickInstallOpenResty } from '@/api'
+import {
+  getSites,
+  createSite,
+  deleteSite,
+  startSite,
+  stopSite,
+  getSettings,
+  saveSettingsApi,
+  getOpenRestyStatus,
+  quickInstallOpenResty,
+} from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete, WarningFilled } from '@element-plus/icons-vue'
 
+const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const activeCategory = ref<'sites' | 'certs'>('sites')
+const activeCategory = ref<'sites' | 'certs' | 'openresty'>('sites')
 const sites = ref<any[]>([])
 const loading = ref(false)
 const showCreate = ref(false)
 const showDirPicker = ref(false)
 const creating = ref(false)
 const statusLoading = ref(false)
+const savingOpenresty = ref(false)
 const installingOpenresty = ref(false)
 const installLogDialogVisible = ref(false)
 const installLogStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
@@ -272,10 +364,19 @@ const openrestyStatus = ref<any>({
 })
 const canManageSites = computed(() => Boolean(openrestyStatus.value?.installed))
 
+const openrestyForm = reactive({
+  openresty_enabled: false,
+  openresty_bin: '/usr/local/openresty/nginx/sbin/nginx',
+  openresty_sites_dir: '/usr/local/openresty/nginx/conf/sites-enabled',
+  openresty_conf_path: '/usr/local/openresty/nginx/conf/nginx.conf',
+  php_fpm_addr: '127.0.0.1:9000',
+  openresty_listen_ipv6: true,
+})
+
 const createForm = reactive({
   name: '',
   domains: [] as string[],
-  doc_root: '/www/sites',
+  doc_root: '/www/wwwroot',
   site_type: 'static',
 })
 
@@ -346,17 +447,59 @@ function handleSelectDir(path: string) {
   showDirPicker.value = false
 }
 
+function parseBoolLike(value: unknown, fallback: boolean) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const text = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(text)) return true
+    if (['0', 'false', 'no', 'off'].includes(text)) return false
+  }
+  if (typeof value === 'number') return value !== 0
+  return fallback
+}
+
+function setActiveCategory(category: 'sites' | 'certs' | 'openresty') {
+  activeCategory.value = category
+  if (route.query.tab !== category) {
+    router.replace({ query: { ...route.query, tab: category } })
+  }
+}
+
+function applyOpenRestyStatus(status: Record<string, any> | null | undefined) {
+  const data = status || {}
+  openrestyStatus.value = {
+    supported: parseBoolLike(data.supported, true),
+    installed: parseBoolLike(data.installed, false),
+    message: String(data.message || ''),
+    ...data,
+  }
+}
+
+async function loadOpenrestySettings() {
+  try {
+    const res: any = await getSettings()
+    if (res.success && res.data) {
+      const data = res.data as Record<string, any>
+      openrestyForm.openresty_enabled = parseBoolLike(data.openresty_enabled, openrestyForm.openresty_enabled)
+      openrestyForm.openresty_bin = String(data.openresty_bin ?? openrestyForm.openresty_bin)
+      openrestyForm.openresty_sites_dir = String(data.openresty_sites_dir ?? openrestyForm.openresty_sites_dir)
+      openrestyForm.openresty_conf_path = String(data.openresty_conf_path ?? openrestyForm.openresty_conf_path)
+      openrestyForm.php_fpm_addr = String(data.php_fpm_addr ?? openrestyForm.php_fpm_addr)
+      openrestyForm.openresty_listen_ipv6 = parseBoolLike(data.openresty_listen_ipv6, openrestyForm.openresty_listen_ipv6)
+    }
+  } catch {}
+}
+
 async function loadOpenRestyStatus(showError = false) {
   statusLoading.value = true
   try {
     const res: any = await getOpenRestyStatus()
     if (res.success && res.data) {
-      openrestyStatus.value = {
-        supported: !!res.data.supported,
-        installed: !!res.data.installed,
-        message: String(res.data.message || ''),
-        ...res.data,
-      }
+      applyOpenRestyStatus(res.data)
+      openrestyForm.openresty_enabled = parseBoolLike(res.data.enabled, openrestyForm.openresty_enabled)
+      if (res.data.nginx_bin) openrestyForm.openresty_bin = String(res.data.nginx_bin)
+      if (res.data.sites_dir) openrestyForm.openresty_sites_dir = String(res.data.sites_dir)
+      if (res.data.nginx_conf) openrestyForm.openresty_conf_path = String(res.data.nginx_conf)
       if (!openrestyStatus.value.installed) {
         sites.value = []
       }
@@ -392,6 +535,10 @@ async function handleQuickInstallOpenResty() {
       installLog.value += String(res.data.log || '')
       if (!installLog.value.endsWith('\n')) installLog.value += '\n'
       installLogStatus.value = 'success'
+      if (res.data.status) {
+        applyOpenRestyStatus(res.data.status)
+      }
+      await loadOpenrestySettings()
       await loadOpenRestyStatus(true)
       if (canManageSites.value) {
         await loadSites()
@@ -423,6 +570,25 @@ async function loadSites() {
   finally { loading.value = false }
 }
 
+async function saveOpenrestySettings() {
+  if (openrestyForm.openresty_enabled && !openrestyStatus.value.installed) {
+    ElMessage.warning(t('st.openrestyNeedInstallFirst'))
+    return
+  }
+  savingOpenresty.value = true
+  try {
+    const res: any = await saveSettingsApi(openrestyForm as Record<string, any>)
+    if (res.success) {
+      ElMessage.success(t('st.saved'))
+      await loadOpenRestyStatus()
+    } else {
+      ElMessage.error(res.message || t('api.requestFailed'))
+    }
+  } finally {
+    savingOpenresty.value = false
+  }
+}
+
 async function doCreate() {
   if (!canManageSites.value) {
     ElMessage.warning(t('api.openrestyRequired'))
@@ -432,7 +598,7 @@ async function doCreate() {
   const payload = {
     name: createForm.name.trim(),
     domains: [...createForm.domains],
-    doc_root: createForm.doc_root.trim() || '/www/sites',
+    doc_root: createForm.doc_root.trim() || '/www/wwwroot',
     site_type: createForm.site_type,
   }
   if (!payload.name) {
@@ -451,11 +617,11 @@ async function doCreate() {
       showCreate.value = false
       createForm.name = ''
       createForm.domains = []
-      createForm.doc_root = '/www/sites'
+      createForm.doc_root = '/www/wwwroot'
       createForm.site_type = 'static'
       domainInput.value = ''
       loadSites()
-    } else ElMessage.error(res.message)
+    }
   } finally { creating.value = false }
 }
 
@@ -495,7 +661,11 @@ async function handleStop(id: number) {
 }
 
 onMounted(async () => {
-  await loadOpenRestyStatus()
+  const initialTab = String(route.query.tab || '').trim()
+  if (initialTab === 'sites' || initialTab === 'certs' || initialTab === 'openresty') {
+    activeCategory.value = initialTab
+  }
+  await Promise.all([loadOpenrestySettings(), loadOpenRestyStatus()])
   if (canManageSites.value) {
     await loadSites()
   }
@@ -540,6 +710,66 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.openresty-settings-card {
+  border: 1px solid var(--lp-border-light);
+  :deep(.el-card__body) {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+.openresty-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.openresty-settings-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lp-text-primary);
+}
+.openresty-settings-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.openresty-settings-form {
+  max-width: 760px;
+}
+.openresty-status-box {
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--lp-radius);
+  border: 1px solid var(--lp-border-light);
+  background: var(--lp-bg-page);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.openresty-status-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.openresty-status-message {
+  color: var(--lp-text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.openresty-status-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--lp-text-secondary);
+  span {
+    word-break: break-all;
+  }
 }
 .category-nav {
   display: inline-flex;

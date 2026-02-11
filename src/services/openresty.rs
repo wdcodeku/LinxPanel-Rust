@@ -393,7 +393,8 @@ struct OpenRestyRuntime {
 
 impl OpenRestyRuntime {
     fn site_conf_path(&self, site_id: i64) -> PathBuf {
-        self.sites_dir.join(format!("linxpanel-site-{}.conf", site_id))
+        self.sites_dir
+            .join(format!("linxpanel-site-{}.conf", site_id))
     }
 }
 
@@ -459,7 +460,13 @@ pub async fn quick_install(state: &AppState) -> Result<OpenRestyInstallResult> {
         .ok_or_else(|| anyhow!("OpenResty main config was not detected"))?;
 
     let sites_dir = prepare_sites_dir(&conf_path, &after_install.runtime.sites_dir, &mut log)?;
-    persist_install_settings(&state.db, &resolved_bin, Some(conf_path.as_path()), &sites_dir).await?;
+    persist_install_settings(
+        &state.db,
+        &resolved_bin,
+        Some(conf_path.as_path()),
+        &sites_dir,
+    )
+    .await?;
 
     let runtime = load_runtime(&state.db).await?;
     test_openresty(&runtime).context("OpenResty config test failed after install")?;
@@ -491,8 +498,8 @@ pub async fn sync_site(state: &AppState, site_id: i64) -> Result<()> {
         .context("Failed to load site data")?;
 
     let desired_config = match site {
-        Some(site) if site.status == "running" => Some(render_site_config(&state.db, &site, &runtime).await?),
-        _ => None,
+        Some(site) => Some(render_site_config(&state.db, &site, &runtime).await?),
+        None => None,
     };
 
     apply_site_config(&runtime, site_id, desired_config)?;
@@ -515,9 +522,17 @@ pub async fn remove_site(state: &AppState, site_id: i64) -> Result<()> {
     Ok(())
 }
 
-fn apply_site_config(runtime: &OpenRestyRuntime, site_id: i64, desired_config: Option<String>) -> Result<()> {
-    fs::create_dir_all(&runtime.sites_dir)
-        .with_context(|| format!("Failed to create OpenResty sites dir: {}", runtime.sites_dir.display()))?;
+fn apply_site_config(
+    runtime: &OpenRestyRuntime,
+    site_id: i64,
+    desired_config: Option<String>,
+) -> Result<()> {
+    fs::create_dir_all(&runtime.sites_dir).with_context(|| {
+        format!(
+            "Failed to create OpenResty sites dir: {}",
+            runtime.sites_dir.display()
+        )
+    })?;
 
     let conf_path = runtime.site_conf_path(site_id);
     let previous_content = fs::read_to_string(&conf_path).ok();
@@ -573,8 +588,9 @@ fn restore_file(path: &Path, previous: Option<&str>) -> Result<()> {
             .with_context(|| format!("Failed to restore previous config: {}", path.display()))?,
         None => {
             if path.exists() {
-                fs::remove_file(path)
-                    .with_context(|| format!("Failed to remove invalid config: {}", path.display()))?;
+                fs::remove_file(path).with_context(|| {
+                    format!("Failed to remove invalid config: {}", path.display())
+                })?;
             }
         }
     }
@@ -590,7 +606,9 @@ fn detect_install_privilege_mode() -> Result<bool> {
     if !uid_output.status.success() {
         return Err(anyhow!("Failed to check current user"));
     }
-    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    let uid = String::from_utf8_lossy(&uid_output.stdout)
+        .trim()
+        .to_string();
     if uid == "0" {
         return Ok(false);
     }
@@ -625,8 +643,8 @@ fn install_openresty_package() -> Result<String> {
         return Ok(text);
     }
 
-    let detail = last_non_empty_line(&text)
-        .unwrap_or_else(|| format!("Exit status: {}", output.status));
+    let detail =
+        last_non_empty_line(&text).unwrap_or_else(|| format!("Exit status: {}", output.status));
     let detail = summarize_linux_install_error(&text, detail);
     Err(anyhow!(detail))
 }
@@ -761,7 +779,9 @@ fn install_openresty_package() -> Result<String> {
 
     if !success {
         attempted = true;
-        log.push_str("[LinxPanel] Trying fallback install from official OpenResty Windows package...\n");
+        log.push_str(
+            "[LinxPanel] Trying fallback install from official OpenResty Windows package...\n",
+        );
         match install_openresty_from_official_zip() {
             Ok(fallback_log) => {
                 if !fallback_log.trim().is_empty() {
@@ -776,7 +796,10 @@ fn install_openresty_package() -> Result<String> {
                 }
             }
             Err(error) => {
-                log.push_str(&format!("[LinxPanel] Fallback installer failed: {}\n", error));
+                log.push_str(&format!(
+                    "[LinxPanel] Fallback installer failed: {}\n",
+                    error
+                ));
             }
         }
     }
@@ -813,7 +836,9 @@ fn is_windows_admin() -> Result<bool> {
     if !output.status.success() {
         return Ok(false);
     }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_ascii_lowercase();
+    let text = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_ascii_lowercase();
     Ok(text == "true")
 }
 
@@ -883,14 +908,21 @@ Write-Output '[LinxPanel] Fallback install completed.'
 "#;
 
     let output = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .output()
         .context("Failed to execute OpenResty fallback installer")?;
     let text = combine_output(&output);
     if output.status.success() {
         return Ok(text);
     }
-    let detail = last_non_empty_line(&text).unwrap_or_else(|| format!("Exit status: {}", output.status));
+    let detail =
+        last_non_empty_line(&text).unwrap_or_else(|| format!("Exit status: {}", output.status));
     Err(anyhow!(detail))
 }
 
@@ -917,14 +949,19 @@ fn last_non_empty_line(text: &str) -> Option<String> {
         .map(|line| line.trim().to_string())
 }
 
-fn prepare_sites_dir(conf_path: &Path, configured_sites_dir: &Path, log: &mut String) -> Result<PathBuf> {
+fn prepare_sites_dir(
+    conf_path: &Path,
+    configured_sites_dir: &Path,
+    log: &mut String,
+) -> Result<PathBuf> {
     if conf_path.exists() {
         let conf_content = fs::read_to_string(conf_path)
             .with_context(|| format!("Failed to read nginx config: {}", conf_path.display()))?;
         let include_dirs = parse_include_dirs(conf_path, &conf_content);
         if let Some(selected_dir) = pick_preferred_include_dir(&include_dirs) {
-            fs::create_dir_all(&selected_dir)
-                .with_context(|| format!("Failed to create include dir: {}", selected_dir.display()))?;
+            fs::create_dir_all(&selected_dir).with_context(|| {
+                format!("Failed to create include dir: {}", selected_dir.display())
+            })?;
             log.push_str(&format!(
                 "[LinxPanel] Using nginx include directory: {}\n",
                 selected_dir.display()
@@ -936,8 +973,12 @@ fn prepare_sites_dir(conf_path: &Path, configured_sites_dir: &Path, log: &mut St
             .parent()
             .map(|parent| parent.join("sites-enabled"))
             .unwrap_or_else(|| configured_sites_dir.to_path_buf());
-        fs::create_dir_all(&fallback_dir)
-            .with_context(|| format!("Failed to create sites directory: {}", fallback_dir.display()))?;
+        fs::create_dir_all(&fallback_dir).with_context(|| {
+            format!(
+                "Failed to create sites directory: {}",
+                fallback_dir.display()
+            )
+        })?;
 
         let changed = ensure_sites_include_in_http(conf_path, &fallback_dir)?;
         if changed {
@@ -953,8 +994,12 @@ fn prepare_sites_dir(conf_path: &Path, configured_sites_dir: &Path, log: &mut St
     } else {
         configured_sites_dir.to_path_buf()
     };
-    fs::create_dir_all(&fallback_dir)
-        .with_context(|| format!("Failed to create sites directory: {}", fallback_dir.display()))?;
+    fs::create_dir_all(&fallback_dir).with_context(|| {
+        format!(
+            "Failed to create sites directory: {}",
+            fallback_dir.display()
+        )
+    })?;
     log.push_str(&format!(
         "[LinxPanel] Main config not found ({}), using configured sites dir: {}\n",
         conf_path.display(),
@@ -1018,7 +1063,11 @@ fn pick_preferred_include_dir(dirs: &[PathBuf]) -> Option<PathBuf> {
     dirs.iter()
         .find(|path| path_contains(path, "sites-enabled"))
         .cloned()
-        .or_else(|| dirs.iter().find(|path| path_contains(path, "conf.d")).cloned())
+        .or_else(|| {
+            dirs.iter()
+                .find(|path| path_contains(path, "conf.d"))
+                .cloned()
+        })
         .or_else(|| dirs.first().cloned())
 }
 
@@ -1124,7 +1173,11 @@ fn normalize_path_for_compare(path: &Path) -> String {
     }
 }
 
-async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRuntime) -> Result<String> {
+async fn render_site_config(
+    db: &SqlitePool,
+    site: &Site,
+    runtime: &OpenRestyRuntime,
+) -> Result<String> {
     let domains = load_site_domains(db, site).await?;
     if domains.is_empty() {
         return Err(anyhow!("No valid domains available"));
@@ -1146,6 +1199,13 @@ async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRun
     let mut blocks = String::new();
     blocks.push_str("# Generated by LinxPanel\n");
     blocks.push_str(&format!("# site_id: {}\n", site.id));
+    let index_files =
+        normalize_index_files_for_nginx(site.index_files.as_str(), site.site_type.as_str());
+    let php_index_file = index_files
+        .split_whitespace()
+        .find(|item| item.ends_with(".php"))
+        .unwrap_or("index.php");
+    let is_stopped = site.status != "running";
 
     for (port, hosts) in grouped {
         blocks.push('\n');
@@ -1173,6 +1233,24 @@ async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRun
 
         blocks.push_str(&format!("    server_name {};\n", hosts.join(" ")));
 
+        if is_stopped {
+            let stop_html =
+                default_stopped_page_html(site.name.as_str(), site.stopped_page_html.as_deref());
+            blocks.push_str("    default_type text/html;\n");
+            blocks.push_str("    charset utf-8;\n");
+            blocks.push_str("    add_header Cache-Control \"no-store, no-cache, must-revalidate, max-age=0\" always;\n");
+            blocks.push_str("    add_header Pragma \"no-cache\" always;\n");
+            blocks.push_str("    add_header Expires \"0\" always;\n");
+            blocks.push_str("    location / {\n");
+            blocks.push_str(&format!(
+                "        return 200 {};\n",
+                quote_nginx_single(stop_html.as_str())
+            ));
+            blocks.push_str("    }\n");
+            blocks.push_str("}\n");
+            continue;
+        }
+
         match site.site_type.as_str() {
             "proxy" => {
                 let proxy = site.proxy_pass.as_deref().unwrap_or("").trim().to_string();
@@ -1186,26 +1264,39 @@ async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRun
                 blocks.push_str(&format!("        proxy_pass {};\n", proxy));
                 blocks.push_str("        proxy_set_header Host $host;\n");
                 blocks.push_str("        proxy_set_header X-Real-IP $remote_addr;\n");
-                blocks.push_str("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n");
+                blocks.push_str(
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n",
+                );
                 blocks.push_str("        proxy_set_header X-Forwarded-Proto $scheme;\n");
                 blocks.push_str("    }\n");
             }
             "php" => {
-                blocks.push_str(&format!("    root {};\n", quote_nginx_value(&site.doc_root)));
-                blocks.push_str("    index index.php index.html index.htm;\n");
+                blocks.push_str(&format!(
+                    "    root {};\n",
+                    quote_nginx_value(&site.doc_root)
+                ));
+                blocks.push_str(&format!("    index {};\n", index_files));
                 blocks.push_str("    location / {\n");
-                blocks.push_str("        try_files $uri $uri/ /index.php?$query_string;\n");
+                blocks.push_str(&format!(
+                    "        try_files $uri $uri/ /{}?$query_string;\n",
+                    php_index_file
+                ));
                 blocks.push_str("    }\n");
                 blocks.push_str("    location ~ \\.php$ {\n");
                 blocks.push_str("        include fastcgi_params;\n");
-                blocks.push_str("        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n");
-                blocks.push_str("        fastcgi_index index.php;\n");
+                blocks.push_str(
+                    "        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
+                );
+                blocks.push_str(&format!("        fastcgi_index {};\n", php_index_file));
                 blocks.push_str(&format!("        fastcgi_pass {};\n", runtime.php_fpm_addr));
                 blocks.push_str("    }\n");
             }
             _ => {
-                blocks.push_str(&format!("    root {};\n", quote_nginx_value(&site.doc_root)));
-                blocks.push_str("    index index.html index.htm index.php;\n");
+                blocks.push_str(&format!(
+                    "    root {};\n",
+                    quote_nginx_value(&site.doc_root)
+                ));
+                blocks.push_str(&format!("    index {};\n", index_files));
                 blocks.push_str("    location / {\n");
                 blocks.push_str("        try_files $uri $uri/ =404;\n");
                 blocks.push_str("    }\n");
@@ -1232,11 +1323,13 @@ async fn render_site_config(db: &SqlitePool, site: &Site, runtime: &OpenRestyRun
 }
 
 async fn load_site_domains(db: &SqlitePool, site: &Site) -> Result<Vec<String>> {
-    let rows = sqlx::query_as::<_, Domain>("SELECT * FROM domains WHERE site_id = ? ORDER BY sort_order ASC, id ASC")
-        .bind(site.id)
-        .fetch_all(db)
-        .await
-        .context("Failed to load site domains")?;
+    let rows = sqlx::query_as::<_, Domain>(
+        "SELECT * FROM domains WHERE site_id = ? ORDER BY sort_order ASC, id ASC",
+    )
+    .bind(site.id)
+    .fetch_all(db)
+    .await
+    .context("Failed to load site domains")?;
 
     if !rows.is_empty() {
         return Ok(rows.into_iter().map(|item| item.domain).collect());
@@ -1293,7 +1386,12 @@ async fn persist_install_settings(
 ) -> Result<()> {
     save_setting(db, SETTING_OPENRESTY_ENABLED, "true").await?;
     save_setting(db, SETTING_OPENRESTY_BIN, &nginx_bin.to_string_lossy()).await?;
-    save_setting(db, SETTING_OPENRESTY_SITES_DIR, &sites_dir.to_string_lossy()).await?;
+    save_setting(
+        db,
+        SETTING_OPENRESTY_SITES_DIR,
+        &sites_dir.to_string_lossy(),
+    )
+    .await?;
     save_setting(
         db,
         SETTING_OPENRESTY_CONF_PATH,
@@ -1320,7 +1418,8 @@ async fn save_setting(db: &SqlitePool, key: &str, value: &str) -> Result<()> {
 
 async fn inspect_runtime(db: &SqlitePool) -> Result<RuntimeInspection> {
     let runtime = load_runtime(db).await?;
-    let resolved_nginx_bin = resolve_openresty_bin().or_else(|| resolve_nginx_bin(&runtime.nginx_bin));
+    let resolved_nginx_bin =
+        resolve_openresty_bin().or_else(|| resolve_nginx_bin(&runtime.nginx_bin));
 
     let detected_conf_path = match runtime.nginx_conf.clone() {
         Some(path) => Some(path),
@@ -1403,7 +1502,9 @@ fn resolve_nginx_bin(preferred: &str) -> Option<PathBuf> {
     candidates.push(PathBuf::from(DEFAULT_OPENRESTY_BIN));
     #[cfg(target_os = "windows")]
     {
-        candidates.push(PathBuf::from("C:\\Program Files\\OpenResty\\nginx\\nginx.exe"));
+        candidates.push(PathBuf::from(
+            "C:\\Program Files\\OpenResty\\nginx\\nginx.exe",
+        ));
         candidates.push(PathBuf::from("C:\\openresty\\nginx\\nginx.exe"));
     }
     #[cfg(not(target_os = "windows"))]
@@ -1483,7 +1584,8 @@ fn resolve_openresty_bin() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn has_openresty_binary_now() -> bool {
-    let Some(binary) = resolve_openresty_bin().or_else(|| resolve_nginx_bin(DEFAULT_OPENRESTY_BIN)) else {
+    let Some(binary) = resolve_openresty_bin().or_else(|| resolve_nginx_bin(DEFAULT_OPENRESTY_BIN))
+    else {
         return false;
     };
     if is_openresty_binary_path(&binary) {
@@ -1504,9 +1606,7 @@ fn is_openresty_binary_path(path: &Path) -> bool {
 
 fn version_mentions_openresty(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.contains("openresty/")
-        || lower.contains("openresty ")
-        || lower.contains("openresty-")
+    lower.contains("openresty/") || lower.contains("openresty ") || lower.contains("openresty-")
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -1675,9 +1775,14 @@ async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
         "OPENRESTY_SITES_DIR",
         DEFAULT_OPENRESTY_SITES_DIR,
     ));
-    let nginx_conf = setting_or_env(&settings, SETTING_OPENRESTY_CONF_PATH, "OPENRESTY_CONF_PATH", "")
-        .trim()
-        .to_string();
+    let nginx_conf = setting_or_env(
+        &settings,
+        SETTING_OPENRESTY_CONF_PATH,
+        "OPENRESTY_CONF_PATH",
+        "",
+    )
+    .trim()
+    .to_string();
     let nginx_conf = if nginx_conf.is_empty() {
         None
     } else {
@@ -1742,7 +1847,12 @@ async fn load_runtime_for_sync(db: &SqlitePool) -> Result<OpenRestyRuntime> {
     runtime.sites_dir = resolved_sites_dir.clone();
 
     save_setting(db, SETTING_OPENRESTY_BIN, &runtime.nginx_bin).await?;
-    save_setting(db, SETTING_OPENRESTY_SITES_DIR, &resolved_sites_dir.to_string_lossy()).await?;
+    save_setting(
+        db,
+        SETTING_OPENRESTY_SITES_DIR,
+        &resolved_sites_dir.to_string_lossy(),
+    )
+    .await?;
     save_setting(
         db,
         SETTING_OPENRESTY_CONF_PATH,
@@ -1765,7 +1875,11 @@ fn setting_or_env(
         .filter(|value| !value.trim().is_empty())
         .map(str::trim)
         .map(ToOwned::to_owned)
-        .or_else(|| std::env::var(env_key).ok().map(|value| value.trim().to_string()))
+        .or_else(|| {
+            std::env::var(env_key)
+                .ok()
+                .map(|value| value.trim().to_string())
+        })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_value.to_string())
 }
@@ -1799,6 +1913,82 @@ fn quote_nginx_value(value: &str) -> String {
         }
     }
     format!("\"{}\"", escaped)
+}
+
+fn quote_nginx_single(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch == '\r' {
+            continue;
+        }
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '\'' => escaped.push_str("\\'"),
+            '\n' => escaped.push_str("\\n"),
+            other => escaped.push(other),
+        }
+    }
+    format!("'{}'", escaped)
+}
+
+fn default_index_files_by_type(site_type: &str) -> &'static str {
+    match site_type {
+        "php" => "index.php index.html index.htm",
+        "proxy" => "index.html index.htm",
+        _ => "index.html index.htm index.php",
+    }
+}
+
+fn normalize_index_files_for_nginx(raw: &str, site_type: &str) -> String {
+    let mut cleaned: Vec<String> = Vec::new();
+    for token in raw
+        .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        if token.starts_with('/')
+            || token.contains("..")
+            || !token.chars().all(|ch| {
+                ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' || ch == '/'
+            })
+        {
+            continue;
+        }
+        if !cleaned.iter().any(|item| item.eq_ignore_ascii_case(token)) {
+            cleaned.push(token.to_string());
+        }
+    }
+    if cleaned.is_empty() {
+        default_index_files_by_type(site_type).to_string()
+    } else {
+        cleaned.join(" ")
+    }
+}
+
+fn default_stopped_page_html(site_name: &str, custom_html: Option<&str>) -> String {
+    if let Some(custom) = custom_html.map(str::trim).filter(|value| !value.is_empty()) {
+        return custom.to_string();
+    }
+    let escaped_name = html_escape(site_name);
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{0} - Stopped</title><style>body{{margin:0;background:#0b1020;color:#d7e0ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif}}.wrap{{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}}.card{{max-width:520px;width:100%;border-radius:14px;border:1px solid rgba(96,130,255,.24);background:rgba(16,24,45,.84);padding:28px 26px;box-shadow:0 10px 30px rgba(0,0,0,.26)}}h1{{margin:0 0 10px;font-size:24px;line-height:1.3}}p{{margin:0;color:#9fb4e8;line-height:1.7}}</style></head><body><div class=\"wrap\"><div class=\"card\"><h1>{0}</h1><p>This site is currently stopped by LinxPanel. Start the site to resume access.</p></div></div></body></html>",
+        escaped_name
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 fn has_unsafe_nginx_chars(value: &str) -> bool {
@@ -1843,7 +2033,8 @@ fn parse_domain_binding(raw: &str) -> Option<DomainBinding> {
 
 fn split_host_port(value: &str) -> Option<(&str, Option<u16>)> {
     if let Some((host, port_raw)) = value.rsplit_once(':') {
-        if !host.is_empty() && !host.contains(':') && port_raw.chars().all(|ch| ch.is_ascii_digit()) {
+        if !host.is_empty() && !host.contains(':') && port_raw.chars().all(|ch| ch.is_ascii_digit())
+        {
             let port = port_raw.parse::<u16>().ok()?;
             if port == 0 {
                 return None;

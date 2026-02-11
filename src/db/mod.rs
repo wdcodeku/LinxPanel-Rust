@@ -23,11 +23,13 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
             domains TEXT NOT NULL,
             doc_root TEXT NOT NULL,
             site_type TEXT NOT NULL DEFAULT 'static',
+            index_files TEXT NOT NULL DEFAULT 'index.html index.htm index.php',
             status TEXT NOT NULL DEFAULT 'running',
             ssl_enabled INTEGER NOT NULL DEFAULT 0,
             ssl_cert_path TEXT,
             ssl_key_path TEXT,
             proxy_pass TEXT,
+            stopped_page_html TEXT,
             extra_config TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -50,10 +52,11 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
-    let has_sort_order: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM pragma_table_info('domains') WHERE name = 'sort_order' LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+    let has_sort_order: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM pragma_table_info('domains') WHERE name = 'sort_order' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
     if has_sort_order.is_none() {
         sqlx::query("ALTER TABLE domains ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             .execute(pool)
@@ -78,6 +81,30 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
                 .await?;
             index += 1;
         }
+    }
+
+    let has_index_files: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM pragma_table_info('sites') WHERE name = 'index_files' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_index_files.is_none() {
+        sqlx::query(
+            "ALTER TABLE sites ADD COLUMN index_files TEXT NOT NULL DEFAULT 'index.html index.htm index.php'",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let has_stopped_page_html: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM pragma_table_info('sites') WHERE name = 'stopped_page_html' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_stopped_page_html.is_none() {
+        sqlx::query("ALTER TABLE sites ADD COLUMN stopped_page_html TEXT")
+            .execute(pool)
+            .await?;
     }
 
     sqlx::query(

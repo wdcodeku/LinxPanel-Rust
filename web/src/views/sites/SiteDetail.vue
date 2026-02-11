@@ -18,7 +18,7 @@
         <el-button :disabled="!installLog" @click="installLogDialogVisible = true">
           {{ t('st.viewInstallLog') }}
         </el-button>
-        <el-button @click="router.push('/settings')">{{ t('si.openrestyGoSettings') }}</el-button>
+        <el-button @click="router.push({ path: '/sites', query: { tab: 'openresty' } })">{{ t('si.openrestyGoSettings') }}</el-button>
         <el-button @click="router.push('/sites')">{{ t('sites') }}</el-button>
       </div>
     </el-card>
@@ -79,8 +79,24 @@
         <el-form-item :label="t('si.rootDir')">
           <el-input v-model="editForm.doc_root" />
         </el-form-item>
+        <el-form-item :label="t('si.defaultIndexFiles')">
+          <el-input
+            v-model="editForm.index_files"
+            :placeholder="t('si.defaultIndexFilesPlaceholder')"
+          />
+          <div class="form-tip">{{ t('si.defaultIndexFilesTip') }}</div>
+        </el-form-item>
         <el-form-item v-if="editForm.site_type==='proxy'" :label="t('si.proxyAddress')">
           <el-input v-model="editForm.proxy_pass" />
+        </el-form-item>
+        <el-form-item :label="t('si.stoppedPageHtml')">
+          <el-input
+            v-model="editForm.stopped_page_html"
+            type="textarea"
+            :rows="6"
+            :placeholder="t('si.stoppedPageHtmlPlaceholder')"
+          />
+          <div class="form-tip">{{ t('si.stoppedPageHtmlTip') }}</div>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleSave">{{ t('save') }}</el-button>
@@ -270,7 +286,9 @@ const editForm = reactive({
   name: '',
   site_type: 'static',
   doc_root: '',
+  index_files: '',
   proxy_pass: '',
+  stopped_page_html: '',
   extra_config: '',
 })
 
@@ -349,7 +367,9 @@ async function loadSite() {
       name: siteRes.data.name,
       site_type: siteRes.data.site_type,
       doc_root: siteRes.data.doc_root,
+      index_files: siteRes.data.index_files || '',
       proxy_pass: siteRes.data.proxy_pass || '',
+      stopped_page_html: siteRes.data.stopped_page_html || '',
       extra_config: siteRes.data.extra_config || '',
     })
   }
@@ -397,6 +417,15 @@ async function handleSave() {
   const res: any = await updateSite(siteId, editForm)
   if (res.success) {
     site.value = res.data
+    Object.assign(editForm, {
+      name: res.data?.name || '',
+      site_type: res.data?.site_type || 'static',
+      doc_root: res.data?.doc_root || '',
+      index_files: res.data?.index_files || '',
+      proxy_pass: res.data?.proxy_pass || '',
+      stopped_page_html: res.data?.stopped_page_html || '',
+      extra_config: res.data?.extra_config || '',
+    })
     ElMessage.success(t('si.saved'))
   }
 }
@@ -657,6 +686,12 @@ async function handleRemoveDomain(id: number) {
 }
 .info-form {
   max-width: 640px;
+}
+.form-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lp-text-secondary);
 }
 .domain-toolbar {
   display: flex;

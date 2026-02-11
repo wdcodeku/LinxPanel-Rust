@@ -1,17 +1,17 @@
 use crate::models::*;
-use std::collections::VecDeque;
+#[cfg(target_os = "windows")]
+use serde::Deserialize;
 use std::cmp::Ordering;
+use std::collections::VecDeque;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
+use std::time::Instant;
 use sysinfo::{
     Networks, ProcessRefreshKind, ProcessesToUpdate, System, MINIMUM_CPU_UPDATE_INTERVAL,
 };
-#[cfg(target_os = "windows")]
-use serde::Deserialize;
-#[cfg(target_os = "windows")]
-use std::process::Command;
 
 const CPU_SMOOTH_WINDOW: usize = 4;
 #[cfg(target_os = "windows")]
@@ -346,7 +346,9 @@ pub fn get_system_info() -> SystemInfo {
         let base_frequency_mhz = cpu.frequency_mhz;
         if let Some(metrics) = read_windows_cpu_metrics_cached(&mut guard, now) {
             cpu.usage_percent = clamp_percent(metrics.usage_percent);
-            if metrics.per_core_usage.len() == cpu.logical_cores && !metrics.per_core_usage.is_empty() {
+            if metrics.per_core_usage.len() == cpu.logical_cores
+                && !metrics.per_core_usage.is_empty()
+            {
                 cpu.per_core_usage = metrics
                     .per_core_usage
                     .iter()
@@ -367,7 +369,8 @@ pub fn get_system_info() -> SystemInfo {
             if computed_frequency.is_none() {
                 if let Some(counter_frequency) = metrics.frequency_mhz {
                     if counter_frequency.is_finite() && counter_frequency > 1.0 {
-                        computed_frequency = Some(counter_frequency.round().clamp(1.0, 20000.0) as u64);
+                        computed_frequency =
+                            Some(counter_frequency.round().clamp(1.0, 20000.0) as u64);
                     }
                 }
             }

@@ -1,17 +1,16 @@
 pub mod auth;
-pub mod sites;
 pub mod domains;
 pub mod files;
 pub mod settings;
+pub mod sites;
 pub mod system;
 
-use std::sync::Arc;
-use axum::{Router, middleware as axum_mw};
 use crate::AppState;
+use axum::{middleware as axum_mw, Router};
+use std::sync::Arc;
 
 pub fn routes(state: Arc<AppState>) -> Router {
-    let public = Router::new()
-        .merge(auth::public_routes());
+    let public = Router::new().merge(auth::public_routes());
 
     let protected = Router::new()
         .merge(system::routes())

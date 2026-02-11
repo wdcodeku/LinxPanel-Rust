@@ -44,11 +44,13 @@ pub struct Site {
     pub domains: String,
     pub doc_root: String,
     pub site_type: String,
+    pub index_files: String,
     pub status: String,
     pub ssl_enabled: bool,
     pub ssl_cert_path: Option<String>,
     pub ssl_key_path: Option<String>,
     pub proxy_pass: Option<String>,
+    pub stopped_page_html: Option<String>,
     pub extra_config: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -61,6 +63,8 @@ pub struct CreateSiteRequest {
     pub doc_root: Option<String>,
     pub site_type: Option<String>,
     pub proxy_pass: Option<String>,
+    pub index_files: Option<String>,
+    pub stopped_page_html: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +74,8 @@ pub struct UpdateSiteRequest {
     pub doc_root: Option<String>,
     pub site_type: Option<String>,
     pub proxy_pass: Option<String>,
+    pub index_files: Option<String>,
+    pub stopped_page_html: Option<String>,
     pub extra_config: Option<String>,
 }
 

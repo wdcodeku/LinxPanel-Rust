@@ -1,8 +1,12 @@
-use axum::{extract::State, routing::{get, post}, Json, Router};
-use std::sync::Arc;
 use crate::models::*;
 use crate::services::openresty;
 use crate::AppState;
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
+use std::sync::Arc;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -95,6 +99,9 @@ async fn quick_install_openresty(
 ) -> Json<ApiResponse<openresty::OpenRestyInstallResult>> {
     match openresty::quick_install(state.as_ref()).await {
         Ok(result) => Json(ApiResponse::ok(result)),
-        Err(e) => Json(ApiResponse::err(&format!("OpenResty install failed: {}", e))),
+        Err(e) => Json(ApiResponse::err(&format!(
+            "OpenResty install failed: {}",
+            e
+        ))),
     }
 }

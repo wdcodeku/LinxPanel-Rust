@@ -1,9 +1,10 @@
+use crate::models::ApiResponse;
+use crate::AppState;
 use axum::{
     body::{Body, Bytes},
     extract::{
-        DefaultBodyLimit, Multipart,
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query,
+        DefaultBodyLimit, Multipart, Query,
     },
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -22,8 +23,6 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use crate::models::ApiResponse;
-use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -48,7 +47,9 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 #[derive(Debug, Deserialize)]
-struct PathQuery { path: String }
+struct PathQuery {
+    path: String,
+}
 
 #[derive(Debug, Serialize)]
 struct FileEntry {
@@ -80,10 +81,16 @@ struct UploadResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct WriteRequest { path: String, content: String }
+struct WriteRequest {
+    path: String,
+    content: String,
+}
 
 #[derive(Debug, Deserialize)]
-struct RenameRequest { from: String, to: String }
+struct RenameRequest {
+    from: String,
+    to: String,
+}
 
 #[derive(Debug, Serialize)]
 struct FileRootEntry {
@@ -250,23 +257,42 @@ async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntr
             for entry in rd.flatten() {
                 let meta = entry.metadata().ok();
                 let name = entry.file_name().to_string_lossy().to_string();
-                let path = entry.path().to_string_lossy().to_string().replace('\\', "/");
+                let path = entry
+                    .path()
+                    .to_string_lossy()
+                    .to_string()
+                    .replace('\\', "/");
                 let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                 let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = meta.as_ref()
+                let modified = meta
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .map(|t| {
                         let dt: chrono::DateTime<chrono::Local> = t.into();
                         dt.format("%Y-%m-%d %H:%M:%S").to_string()
                     })
                     .unwrap_or_default();
-                let permissions = meta
-                    .as_ref()
-                    .map(format_permissions)
-                    .unwrap_or_else(|| if is_dir { "755".into() } else { "644".into() });
-                entries.push(FileEntry { name, path, is_dir, size, modified, permissions });
+                let permissions = meta.as_ref().map(format_permissions).unwrap_or_else(|| {
+                    if is_dir {
+                        "755".into()
+                    } else {
+                        "644".into()
+                    }
+                });
+                entries.push(FileEntry {
+                    name,
+                    path,
+                    is_dir,
+                    size,
+                    modified,
+                    permissions,
+                });
             }
-            entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+            entries.sort_by(|a, b| {
+                b.is_dir
+                    .cmp(&a.is_dir)
+                    .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
             Json(ApiResponse::ok(entries))
         }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
@@ -374,7 +400,11 @@ async fn delete_path(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
     if !p.exists() {
         return Json(ApiResponse::err("Path not found"));
     }
-    let result = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+    let result = if p.is_dir() {
+        std::fs::remove_dir_all(p)
+    } else {
+        std::fs::remove_file(p)
+    };
     match result {
         Ok(_) => Json(ApiResponse::ok_msg("Deleted")),
         Err(e) => Json(ApiResponse::err(&e.to_string())),
@@ -397,12 +427,19 @@ async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
         return Json(ApiResponse::err("Path not found"));
     }
     let meta = std::fs::metadata(p).ok();
-    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
     let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let modified = meta.as_ref()
+    let modified = meta
+        .as_ref()
         .and_then(|m| m.modified().ok())
-        .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.format("%Y-%m-%d %H:%M:%S").to_string() })
+        .map(|t| {
+            let dt: chrono::DateTime<chrono::Local> = t.into();
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        })
         .unwrap_or_default();
     Json(ApiResponse::ok(FileEntry {
         name,
@@ -410,16 +447,21 @@ async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
         is_dir,
         size,
         modified,
-        permissions: meta
-            .as_ref()
-            .map(format_permissions)
-            .unwrap_or_else(|| if is_dir { "755".into() } else { "644".into() }),
+        permissions: meta.as_ref().map(format_permissions).unwrap_or_else(|| {
+            if is_dir {
+                "755".into()
+            } else {
+                "644".into()
+            }
+        }),
     }))
 }
 
-
 #[derive(Debug, Deserialize)]
-struct ChmodRequest { path: String, mode: String }
+struct ChmodRequest {
+    path: String,
+    mode: String,
+}
 
 async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
@@ -430,7 +472,11 @@ async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
     #[cfg(unix)]
     {
         let cmd_str = format!("chmod {} '{}'", req.mode, normalized_path);
-        match std::process::Command::new("sh").arg("-c").arg(&cmd_str).output() {
+        match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd_str)
+            .output()
+        {
             Ok(output) => {
                 if output.status.success() {
                     Json(ApiResponse::ok_msg("Permission changed"))
@@ -446,7 +492,9 @@ async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
     {
         // Windows doesn't use chmod, just return ok
         let _ = &req.mode;
-        Json(ApiResponse::ok_msg("Permission change not supported on Windows"))
+        Json(ApiResponse::ok_msg(
+            "Permission change not supported on Windows",
+        ))
     }
 }
 
@@ -809,7 +857,11 @@ async fn handle_terminal_socket(mut socket: WebSocket, cwd: String) {
     let output_reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(err) => {
-            send_terminal_error(&mut socket, &format!("open terminal reader failed: {}", err)).await;
+            send_terminal_error(
+                &mut socket,
+                &format!("open terminal reader failed: {}", err),
+            )
+            .await;
             let _ = child.kill();
             return;
         }
@@ -818,7 +870,11 @@ async fn handle_terminal_socket(mut socket: WebSocket, cwd: String) {
     let input_writer = match pair.master.take_writer() {
         Ok(writer) => writer,
         Err(err) => {
-            send_terminal_error(&mut socket, &format!("open terminal writer failed: {}", err)).await;
+            send_terminal_error(
+                &mut socket,
+                &format!("open terminal writer failed: {}", err),
+            )
+            .await;
             let _ = child.kill();
             return;
         }
@@ -828,7 +884,13 @@ async fn handle_terminal_socket(mut socket: WebSocket, cwd: String) {
     let (input_tx, input_rx) = std_mpsc::channel::<TerminalInputEvent>();
 
     spawn_terminal_output_reader(output_reader, output_tx.clone());
-    spawn_terminal_input_writer(pair.master, input_writer, input_rx, output_tx.clone(), cwd.clone());
+    spawn_terminal_input_writer(
+        pair.master,
+        input_writer,
+        input_rx,
+        output_tx.clone(),
+        cwd.clone(),
+    );
 
     let mut output_closed = false;
     loop {
@@ -895,10 +957,17 @@ async fn handle_terminal_socket(mut socket: WebSocket, cwd: String) {
 }
 
 #[derive(Debug, Deserialize)]
-struct ExecRequest { cmd: String, cwd: Option<String> }
+struct ExecRequest {
+    cmd: String,
+    cwd: Option<String>,
+}
 
 #[derive(Debug, Serialize)]
-struct ExecResult { stdout: String, stderr: String, exit_code: i32 }
+struct ExecResult {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
 
 #[derive(Debug, Serialize)]
 struct ExecStreamChunk {
@@ -917,7 +986,8 @@ fn stream_chunk_bytes(chunk_type: &str, data: &str, exit_code: Option<i32>, done
         done,
     };
     let mut line = serde_json::to_string(&payload).unwrap_or_else(|_| {
-        "{\"type\":\"err\",\"data\":\"serialize error\",\"exit_code\":-1,\"done\":false}".to_string()
+        "{\"type\":\"err\",\"data\":\"serialize error\",\"exit_code\":-1,\"done\":false}"
+            .to_string()
     });
     line.push('\n');
     Bytes::from(line)
@@ -974,8 +1044,7 @@ async fn stream_pipe_output<R>(
     mut reader: R,
     chunk_type: &'static str,
     tx: mpsc::Sender<Result<Bytes, Infallible>>,
-)
-where
+) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     let mut buf = [0_u8; 4096];
@@ -1035,7 +1104,11 @@ async fn exec_cmd(Json(req): Json<ExecRequest>) -> Json<ApiResponse<ExecResult>>
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let exit_code = output.status.code().unwrap_or(-1);
-            Json(ApiResponse::ok(ExecResult { stdout, stderr, exit_code }))
+            Json(ApiResponse::ok(ExecResult {
+                stdout,
+                stderr,
+                exit_code,
+            }))
         }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
@@ -1157,8 +1230,10 @@ async fn exec_cmd_stream(Json(req): Json<ExecRequest>) -> Response {
     let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(128);
 
     tokio::spawn(async move {
-        let stdout_task = stdout.map(|stream| tokio::spawn(stream_pipe_output(stream, "out", tx.clone())));
-        let stderr_task = stderr.map(|stream| tokio::spawn(stream_pipe_output(stream, "err", tx.clone())));
+        let stdout_task =
+            stdout.map(|stream| tokio::spawn(stream_pipe_output(stream, "out", tx.clone())));
+        let stderr_task =
+            stderr.map(|stream| tokio::spawn(stream_pipe_output(stream, "err", tx.clone())));
 
         let exit_code = match child.wait().await {
             Ok(status) => status.code().unwrap_or(-1),

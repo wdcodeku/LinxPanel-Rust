@@ -65,6 +65,11 @@ function localizeApiMessage(message: unknown): string {
   if (text.startsWith('Cannot read:')) {
     return t('api.cannotRead', { detail: text.replace(/^Cannot read:\s*/i, '') })
   }
+  if (text.startsWith('Domain already exists:')) {
+    return t('api.domainAlreadyExistsWithDetail', {
+      domain: text.replace(/^Domain already exists:\s*/i, ''),
+    })
+  }
   if (text.startsWith('Failed:')) {
     return t('api.failedWithDetail', { detail: text.replace(/^Failed:\s*/i, '') })
   }
