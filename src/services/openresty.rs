@@ -1320,7 +1320,7 @@ async fn save_setting(db: &SqlitePool, key: &str, value: &str) -> Result<()> {
 
 async fn inspect_runtime(db: &SqlitePool) -> Result<RuntimeInspection> {
     let runtime = load_runtime(db).await?;
-    let resolved_nginx_bin = resolve_nginx_bin(&runtime.nginx_bin);
+    let resolved_nginx_bin = resolve_openresty_bin().or_else(|| resolve_nginx_bin(&runtime.nginx_bin));
 
     let detected_conf_path = match runtime.nginx_conf.clone() {
         Some(path) => Some(path),
@@ -1337,7 +1337,10 @@ async fn inspect_runtime(db: &SqlitePool) -> Result<RuntimeInspection> {
             is_openresty_binary_path(bin)
                 || detected_version
                     .as_deref()
-                    .map(|value| value.to_ascii_lowercase().contains("openresty/"))
+                    .map(version_mentions_openresty)
+                    .unwrap_or(false)
+                || run_binary_capture(bin, ["-V"].as_slice())
+                    .map(|value| version_mentions_openresty(&value))
                     .unwrap_or(false)
         })
         .unwrap_or(false);
@@ -1432,9 +1435,55 @@ fn resolve_nginx_bin(preferred: &str) -> Option<PathBuf> {
     None
 }
 
+fn resolve_openresty_bin() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(PathBuf::from(DEFAULT_OPENRESTY_BIN));
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidates.push(PathBuf::from("/www/server/openresty/nginx/sbin/nginx"));
+        candidates.push(PathBuf::from("/usr/local/openresty/nginx/sbin/nginx"));
+        candidates.push(PathBuf::from("/usr/local/openresty/bin/openresty"));
+    }
+    candidates.push(PathBuf::from("/usr/sbin/openresty"));
+    candidates.push(PathBuf::from("/usr/bin/openresty"));
+    if let Some(path) = find_in_path("openresty") {
+        candidates.push(path);
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for candidate in candidates {
+        let normalized = normalize_path_for_compare(&candidate);
+        if !seen.insert(normalized) {
+            continue;
+        }
+        if !is_executable_file(&candidate) {
+            continue;
+        }
+        if is_openresty_binary_path(&candidate) {
+            return Some(candidate);
+        }
+        if detect_binary_version(&candidate)
+            .ok()
+            .flatten()
+            .as_deref()
+            .map(version_mentions_openresty)
+            .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+        if run_binary_capture(&candidate, ["-V"].as_slice())
+            .map(|text| version_mentions_openresty(&text))
+            .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "windows")]
 fn has_openresty_binary_now() -> bool {
-    let Some(binary) = resolve_nginx_bin(DEFAULT_OPENRESTY_BIN) else {
+    let Some(binary) = resolve_openresty_bin().or_else(|| resolve_nginx_bin(DEFAULT_OPENRESTY_BIN)) else {
         return false;
     };
     if is_openresty_binary_path(&binary) {
@@ -1443,7 +1492,7 @@ fn has_openresty_binary_now() -> bool {
     detect_binary_version(&binary)
         .ok()
         .flatten()
-        .map(|value| value.to_ascii_lowercase().contains("openresty/"))
+        .map(|value| version_mentions_openresty(&value))
         .unwrap_or(false)
 }
 
@@ -1451,6 +1500,13 @@ fn is_openresty_binary_path(path: &Path) -> bool {
     path.to_string_lossy()
         .to_ascii_lowercase()
         .contains("openresty")
+}
+
+fn version_mentions_openresty(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("openresty/")
+        || lower.contains("openresty ")
+        || lower.contains("openresty-")
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
