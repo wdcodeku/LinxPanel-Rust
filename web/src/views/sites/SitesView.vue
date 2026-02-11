@@ -261,7 +261,7 @@
               :key="domain"
               closable
               size="small"
-              class="domain-tag"
+              :class="['domain-tag', { 'domain-tag-conflict': domainConflictMap[domain] }]"
               @close="removeDomain(domain)"
             >
               {{ domain }}
@@ -357,6 +357,7 @@ const installLogStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
 const installLog = ref('')
 const domainInputRef = ref<HTMLInputElement>()
 const domainInput = ref('')
+const domainConflictMap = reactive<Record<string, boolean>>({})
 const openrestyStatus = ref<any>({
   supported: true,
   installed: false,
@@ -385,6 +386,8 @@ function normalizeDomainToken(token: string) {
     .trim()
     .replace(/^[a-z]+:\/\//i, '')
     .replace(/\/.*$/, '')
+    .replace(/\.+$/, '')
+    .toLowerCase()
 }
 function getDomainList(rawDomains: string) {
   return String(rawDomains || '')
@@ -413,6 +416,29 @@ function openDomain(domain: string) {
 function isValidDomainToken(token: string) {
   return token.length > 0 && !/[\s/]/.test(token)
 }
+function isDomainBound(domain: string) {
+  const normalized = normalizeDomainToken(domain)
+  if (!normalized) return false
+  for (const site of sites.value) {
+    const domains = getDomainList(String(site?.domains || ''))
+    for (const existing of domains) {
+      if (normalizeDomainToken(existing) === normalized) {
+        return true
+      }
+    }
+  }
+  return false
+}
+function refreshCreateDomainConflicts() {
+  for (const key of Object.keys(domainConflictMap)) {
+    delete domainConflictMap[key]
+  }
+  for (const domain of createForm.domains) {
+    if (isDomainBound(domain)) {
+      domainConflictMap[domain] = true
+    }
+  }
+}
 function addDomainToken(rawToken: string) {
   const token = normalizeDomainToken(rawToken)
   if (!token) return
@@ -422,6 +448,13 @@ function addDomainToken(rawToken: string) {
   }
   if (createForm.domains.some((d) => d.toLowerCase() === token.toLowerCase())) return
   createForm.domains.push(token)
+  const conflict = isDomainBound(token)
+  if (conflict) {
+    domainConflictMap[token] = true
+    ElMessage.warning(t('api.domainAlreadyExistsWithDetail', { domain: token }))
+  } else {
+    delete domainConflictMap[token]
+  }
 }
 function commitDomainInput() {
   if (!domainInput.value.trim()) return
@@ -433,6 +466,14 @@ function commitDomainInput() {
   domainInput.value = ''
 }
 function handleDomainInputKeydown(event: KeyboardEvent) {
+  if ((event.key === 'Backspace' || event.key === 'Delete') && !domainInput.value.trim()) {
+    const lastDomain = createForm.domains[createForm.domains.length - 1]
+    if (lastDomain) {
+      event.preventDefault()
+      removeDomain(lastDomain)
+    }
+    return
+  }
   if (event.key === 'Enter' || event.key === ',' || event.key === 'Tab') {
     event.preventDefault()
     commitDomainInput()
@@ -441,6 +482,7 @@ function handleDomainInputKeydown(event: KeyboardEvent) {
 function focusDomainInput() { domainInputRef.value?.focus() }
 function removeDomain(domain: string) {
   createForm.domains = createForm.domains.filter((d) => d !== domain)
+  delete domainConflictMap[domain]
 }
 function handleSelectDir(path: string) {
   createForm.doc_root = path || '/'
@@ -565,7 +607,10 @@ async function loadSites() {
   loading.value = true
   try {
     const res: any = await getSites()
-    if (res.success) sites.value = res.data || []
+    if (res.success) {
+      sites.value = res.data || []
+      refreshCreateDomainConflicts()
+    }
   } catch {}
   finally { loading.value = false }
 }
@@ -595,6 +640,12 @@ async function doCreate() {
     return
   }
   commitDomainInput()
+  refreshCreateDomainConflicts()
+  const conflictDomain = createForm.domains.find((domain) => domainConflictMap[domain])
+  if (conflictDomain) {
+    ElMessage.warning(t('api.domainAlreadyExistsWithDetail', { domain: conflictDomain }))
+    return
+  }
   const payload = {
     name: createForm.name.trim(),
     domains: [...createForm.domains],
@@ -620,6 +671,9 @@ async function doCreate() {
       createForm.doc_root = '/www/wwwroot'
       createForm.site_type = 'static'
       domainInput.value = ''
+      for (const key of Object.keys(domainConflictMap)) {
+        delete domainConflictMap[key]
+      }
       loadSites()
     }
   } finally { creating.value = false }
@@ -911,6 +965,11 @@ onMounted(async () => {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+.domain-tag-conflict {
+  border-color: rgba(255, 77, 79, 0.48) !important;
+  background: var(--lp-danger-bg) !important;
+  color: var(--lp-danger) !important;
 }
 .domain-input {
   flex: 1;
