@@ -90,60 +90,114 @@ install_openresty_from_source() {
     return 1
   fi
 
-  SRC_URL="${OPENRESTY_SOURCE_URL:-}"
-  if [ -z "$SRC_URL" ]; then
-    INDEX_HTML="$(curl -fsSL https://openresty.org/download/ || true)"
-    RELATIVE_PATH="$(printf "%s" "$INDEX_HTML" \
-      | grep -Eo 'download/openresty-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' \
-      | sort -u \
-      | sed -E 's#download/openresty-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz#\1 download/openresty-\1.tar.gz#' \
-      | sort -V \
-      | tail -n 1 \
-      | awk '{print $2}' || true)"
-    if [ -n "$RELATIVE_PATH" ]; then
-      SRC_URL="https://openresty.org/${RELATIVE_PATH}"
-    else
-      SRC_URL="https://openresty.org/download/openresty-1.27.1.2.tar.gz"
-    fi
-  fi
-
-  echo "[LinxPanel] OpenResty source package: ${SRC_URL}"
-  TMP_ROOT="/tmp/linxpanel-openresty-src-$$"
-  TAR_FILE="${TMP_ROOT}/openresty.tar.gz"
-  run rm -rf "$TMP_ROOT"
-  run mkdir -p "$TMP_ROOT"
-  trap 'run rm -rf "$TMP_ROOT" >/dev/null 2>&1 || true' INT TERM EXIT
-
-  run curl -fL "$SRC_URL" -o "$TAR_FILE"
-  run tar -xzf "$TAR_FILE" -C "$TMP_ROOT"
-  SRC_DIR="$(find "$TMP_ROOT" -maxdepth 2 -type d -name 'openresty-*' | head -n 1)"
-  if [ -z "$SRC_DIR" ]; then
-    echo "[LinxPanel] Cannot locate extracted OpenResty source directory."
-    trap - INT TERM EXIT
-    run rm -rf "$TMP_ROOT"
-    return 1
-  fi
-
+  OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-/usr/local/openresty}"
+  OPENRESTY_CONFIGURE_ARGS="${OPENRESTY_CONFIGURE_ARGS:---with-stream --with-http_v2_module --with-http_ssl_module --with-http_slice_module --with-http_stub_status_module --with-http_sub_module --with-http_realip_module --with-pcre-jit}"
   BUILD_JOBS="${OPENRESTY_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
   if [ -z "$BUILD_JOBS" ] || [ "$BUILD_JOBS" -lt 1 ] 2>/dev/null; then
     BUILD_JOBS=2
   fi
+  MAKE_BIN="make"
+  if command -v gmake >/dev/null 2>&1; then
+    MAKE_BIN="gmake"
+  fi
 
-  run sh -c "cd \"$SRC_DIR\" && ./configure --prefix=/usr/local/openresty --with-http_ssl_module --with-http_v2_module --with-pcre-jit"
-  run sh -c "cd \"$SRC_DIR\" && make -j${BUILD_JOBS}"
-  run sh -c "cd \"$SRC_DIR\" && make install"
+  SOURCE_CANDIDATES=""
+  add_source_candidate() {
+    local url="$1"
+    if [ -z "$url" ]; then
+      return 0
+    fi
+    case " $SOURCE_CANDIDATES " in
+      *" $url "*) ;;
+      *) SOURCE_CANDIDATES="$SOURCE_CANDIDATES $url" ;;
+    esac
+  }
 
-  if [ ! -x /usr/local/openresty/nginx/sbin/nginx ]; then
-    echo "[LinxPanel] OpenResty source install finished but nginx binary is missing."
-    trap - INT TERM EXIT
-    run rm -rf "$TMP_ROOT"
+  if [ -n "${OPENRESTY_SOURCE_URL:-}" ]; then
+    add_source_candidate "${OPENRESTY_SOURCE_URL}"
+  fi
+
+  if [ -n "${OPENRESTY_SOURCE_VERSION:-}" ]; then
+    add_source_candidate "https://openresty.org/download/openresty-${OPENRESTY_SOURCE_VERSION}.tar.gz"
+  fi
+
+  INDEX_HTML="$(curl -fsSL https://openresty.org/download/ || true)"
+  RELATIVE_PATH="$(printf "%s" "$INDEX_HTML" \
+    | grep -Eo 'download/openresty-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' \
+    | sort -u \
+    | sed -E 's#download/openresty-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz#\1 download/openresty-\1.tar.gz#' \
+    | sort -V \
+    | tail -n 1 \
+    | awk '{print $2}' || true)"
+  if [ -n "$RELATIVE_PATH" ]; then
+    add_source_candidate "https://openresty.org/${RELATIVE_PATH}"
+  fi
+
+  for version in 1.27.1.2 1.21.4.3 1.19.9.1 1.17.8.2; do
+    add_source_candidate "https://openresty.org/download/openresty-${version}.tar.gz"
+  done
+
+  try_source_candidate() {
+    local source_url="$1"
+    local tmp_root="/tmp/linxpanel-openresty-src-$$-$(date +%s)"
+    local tar_file="${tmp_root}/openresty.tar.gz"
+    local src_dir=""
+
+    echo "[LinxPanel] Trying source package: ${source_url}"
+    if ! run rm -rf "$tmp_root"; then return 1; fi
+    if ! run mkdir -p "$tmp_root"; then return 1; fi
+    if ! run curl -fL "$source_url" -o "$tar_file"; then run rm -rf "$tmp_root" || true; return 1; fi
+    if ! run tar -xzf "$tar_file" -C "$tmp_root"; then run rm -rf "$tmp_root" || true; return 1; fi
+
+    src_dir="$(find "$tmp_root" -maxdepth 2 -type d -name 'openresty-*' | head -n 1)"
+    if [ -z "$src_dir" ]; then
+      echo "[LinxPanel] Cannot locate extracted OpenResty source directory."
+      run rm -rf "$tmp_root" || true
+      return 1
+    fi
+
+    if ! run sh -c "cd \"$src_dir\" && ./configure --prefix=\"$OPENRESTY_PREFIX\" $OPENRESTY_CONFIGURE_ARGS"; then
+      echo "[LinxPanel] Configure failed for ${source_url}"
+      run rm -rf "$tmp_root" || true
+      return 1
+    fi
+    if ! run sh -c "cd \"$src_dir\" && ${MAKE_BIN} -j${BUILD_JOBS}"; then
+      echo "[LinxPanel] Build failed for ${source_url}"
+      run rm -rf "$tmp_root" || true
+      return 1
+    fi
+    if ! run sh -c "cd \"$src_dir\" && ${MAKE_BIN} install"; then
+      echo "[LinxPanel] Install failed for ${source_url}"
+      run rm -rf "$tmp_root" || true
+      return 1
+    fi
+
+    if [ ! -x "${OPENRESTY_PREFIX}/nginx/sbin/nginx" ]; then
+      echo "[LinxPanel] OpenResty install finished but nginx binary is missing at ${OPENRESTY_PREFIX}/nginx/sbin/nginx"
+      run rm -rf "$tmp_root" || true
+      return 1
+    fi
+
+    run mkdir -p /usr/local/bin
+    run ln -sf "${OPENRESTY_PREFIX}/nginx/sbin/nginx" /usr/local/bin/openresty || true
+    run rm -rf "$tmp_root" || true
+    echo "[LinxPanel] Source install succeeded with: ${source_url}"
+    return 0
+  }
+
+  SOURCE_SUCCESS=0
+  for source_url in $SOURCE_CANDIDATES; do
+    if try_source_candidate "$source_url"; then
+      SOURCE_SUCCESS=1
+      break
+    fi
+  done
+
+  if [ "$SOURCE_SUCCESS" != "1" ]; then
+    echo "[LinxPanel] All source packages failed."
     return 1
   fi
 
-  run mkdir -p /usr/local/bin
-  run ln -sf /usr/local/openresty/nginx/sbin/nginx /usr/local/bin/openresty || true
-  trap - INT TERM EXIT
-  run rm -rf "$TMP_ROOT"
   echo "[LinxPanel] OpenResty source build install completed."
   return 0
 }
@@ -584,9 +638,10 @@ fn summarize_linux_install_error(full_log: &str, fallback_detail: String) -> Str
     if lower.contains("openresty source fallback failed")
         || lower.contains("source build install")
             && (lower.contains("failed") || lower.contains("error"))
+        || lower.contains("all source packages failed")
     {
         return format!(
-            "OpenResty repository install was unavailable and source-build fallback also failed. Detail: {}. Please install build dependencies (gcc/make/perl/openssl/pcre/zlib) and retry.",
+            "OpenResty repository install was unavailable and source-build fallback also failed. Detail: {}. Please install build dependencies (gcc/make/perl/openssl/pcre/zlib), then retry or set OPENRESTY_SOURCE_VERSION (for example 1.17.8.2).",
             fallback_detail
         );
     }
@@ -1348,6 +1403,11 @@ fn resolve_nginx_bin(preferred: &str) -> Option<PathBuf> {
         candidates.push(PathBuf::from("C:\\Program Files\\OpenResty\\nginx\\nginx.exe"));
         candidates.push(PathBuf::from("C:\\openresty\\nginx\\nginx.exe"));
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidates.push(PathBuf::from("/www/server/openresty/nginx/sbin/nginx"));
+        candidates.push(PathBuf::from("/usr/local/openresty/bin/openresty"));
+    }
     candidates.push(PathBuf::from("/usr/sbin/openresty"));
     candidates.push(PathBuf::from("/usr/bin/openresty"));
     candidates.push(PathBuf::from("/usr/sbin/nginx"));
@@ -1503,6 +1563,9 @@ fn guess_conf_path_from_bin(binary: &Path) -> Option<PathBuf> {
             }
             return Some(PathBuf::from("C:\\openresty\\nginx\\conf\\nginx.conf"));
         }
+    }
+    if binary_text.contains("/www/server/openresty/") {
+        return Some(PathBuf::from("/www/server/openresty/nginx/conf/nginx.conf"));
     }
     if binary_text.contains("/usr/local/openresty/") {
         return Some(PathBuf::from("/usr/local/openresty/nginx/conf/nginx.conf"));
