@@ -31,41 +31,18 @@
           </el-form>
         </el-card>
       </el-col>
-      <el-col :xs="24" :lg="12">
-        <el-card shadow="never" class="setting-card">
-          <template #header>
-            <div class="card-hd"><el-icon><Lock /></el-icon> {{ t('st.changePassword') }}</div>
-          </template>
-          <el-form :model="pwForm" :rules="pwRules" ref="pwRef" label-width="100px" label-position="left">
-            <el-form-item :label="t('st.oldPassword')" prop="old_password">
-              <el-input v-model="pwForm.old_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item :label="t('st.newPassword')" prop="new_password">
-              <el-input v-model="pwForm.new_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item :label="t('st.confirmPassword')" prop="confirm_password">
-              <el-input v-model="pwForm.confirm_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="changePassword" :loading="changingPw">{{ t('st.updatePassword') }}</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
     </el-row>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useI18n } from '@/i18n'
-import { getSettings, saveSettingsApi, changePasswordApi } from '@/api'
+import { getSettings, saveSettingsApi } from '@/api'
 import { ElMessage } from 'element-plus'
 
 const { t } = useI18n()
 const saving = ref(false)
-const changingPw = ref(false)
-const pwRef = ref()
 
 const form = reactive({
   panel_name: 'LinxPanel',
@@ -73,18 +50,6 @@ const form = reactive({
   session_timeout: '24',
   api_url: '',
 })
-
-const pwForm = reactive({
-  old_password: '',
-  new_password: '',
-  confirm_password: '',
-})
-
-const pwRules = computed(() => ({
-  old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-  new_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-  confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-}))
 
 async function loadSettings() {
   try {
@@ -110,28 +75,6 @@ async function saveSettings() {
     }
   } finally {
     saving.value = false
-  }
-}
-
-async function changePassword() {
-  if (pwForm.new_password !== pwForm.confirm_password) {
-    ElMessage.warning(t('st.passwordMismatch'))
-    return
-  }
-  await pwRef.value?.validate()
-  changingPw.value = true
-  try {
-    const res: any = await changePasswordApi(pwForm as any)
-    if (res.success) {
-      ElMessage.success(t('st.passwordChanged'))
-      pwForm.old_password = ''
-      pwForm.new_password = ''
-      pwForm.confirm_password = ''
-    } else {
-      ElMessage.error(res.message)
-    }
-  } finally {
-    changingPw.value = false
   }
 }
 

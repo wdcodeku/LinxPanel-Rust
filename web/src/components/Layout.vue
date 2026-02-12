@@ -63,7 +63,10 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="handleLogout">
+                <el-dropdown-item @click="openChangePassword">
+                  <el-icon><Lock /></el-icon> {{ t('st.changePassword') }}
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="handleLogout">
                   <el-icon><SwitchButton /></el-icon> {{ t('logout') }}
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -79,15 +82,64 @@
         </router-view>
       </el-main>
     </el-container>
+    <el-dialog
+      v-model="showChangePassword"
+      :title="t('st.changePassword')"
+      width="460px"
+      class="change-password-dialog"
+      @closed="resetPasswordForm"
+    >
+      <el-form
+        ref="pwRef"
+        :model="pwForm"
+        :rules="pwRules"
+        label-position="top"
+        @submit.prevent
+      >
+        <el-form-item :label="t('st.oldPassword')" prop="old_password">
+          <el-input
+            v-model="pwForm.old_password"
+            type="password"
+            show-password
+            autocomplete="current-password"
+          />
+        </el-form-item>
+        <el-form-item :label="t('st.newPassword')" prop="new_password">
+          <el-input
+            v-model="pwForm.new_password"
+            type="password"
+            show-password
+            autocomplete="new-password"
+          />
+        </el-form-item>
+        <el-form-item :label="t('st.confirmPassword')" prop="confirm_password">
+          <el-input
+            v-model="pwForm.confirm_password"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            @keyup.enter="changePassword"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showChangePassword = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="changingPw" @click="changePassword">
+          {{ t('st.updatePassword') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useI18n } from '@/i18n'
 import type { Locale } from '@/i18n'
-import { getSystemInfo } from '@/api'
+import { getSystemInfo, changePasswordApi } from '@/api'
+import { ElMessage } from 'element-plus'
+import type { FormRules } from 'element-plus'
 import { Sunny, Moon, UserFilled, SwitchButton } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -96,6 +148,21 @@ const userStore = useUserStore()
 const { t, locale, setLocale } = useI18n()
 const isCollapse = ref(false)
 const platformInfo = ref<any>({})
+const showChangePassword = ref(false)
+const changingPw = ref(false)
+const pwRef = ref()
+
+const pwForm = reactive({
+  old_password: '',
+  new_password: '',
+  confirm_password: '',
+})
+
+const pwRules = computed<FormRules>(() => ({
+  old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+  new_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+  confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+}))
 
 const menuItems = [
   { path: '/dashboard', titleKey: 'dashboard', icon: 'Odometer' },
@@ -111,6 +178,46 @@ function toggleLang() {
   setLocale(locale.value === 'zh' ? 'en' : 'zh' as Locale)
 }
 function handleLogout() { userStore.logout(); router.push('/login') }
+function resetPasswordForm() {
+  pwForm.old_password = ''
+  pwForm.new_password = ''
+  pwForm.confirm_password = ''
+  pwRef.value?.clearValidate()
+}
+function openChangePassword() {
+  showChangePassword.value = true
+  nextTick(() => pwRef.value?.clearValidate())
+}
+async function changePassword() {
+  if (pwForm.new_password !== pwForm.confirm_password) {
+    ElMessage.warning(t('st.passwordMismatch'))
+    return
+  }
+  try {
+    await pwRef.value?.validate()
+  } catch {
+    return
+  }
+  changingPw.value = true
+  try {
+    const res: any = await changePasswordApi({
+      username: userStore.username,
+      old_password: pwForm.old_password,
+      new_password: pwForm.new_password,
+    })
+    if (res.success) {
+      ElMessage.success(t('st.passwordChanged'))
+      showChangePassword.value = false
+      resetPasswordForm()
+    } else {
+      ElMessage.error(res.message || t('api.requestFailed'))
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || t('api.requestFailed'))
+  } finally {
+    changingPw.value = false
+  }
+}
 function goTo(path: string) {
   if (route.path !== path) router.push(path)
 }
@@ -293,5 +400,8 @@ onUnmounted(() => clearInterval(timer))
   min-height: 0;
   overflow-y: auto;
   padding: 20px;
+}
+.change-password-dialog :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
 }
 </style>
