@@ -131,6 +131,84 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS apps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            runtime TEXT NOT NULL,
+            work_dir TEXT NOT NULL,
+            entry TEXT NOT NULL,
+            args TEXT NOT NULL DEFAULT '',
+            env TEXT NOT NULL DEFAULT '',
+            port INTEGER NOT NULL DEFAULT 0,
+            autostart INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Sites of an app type proxy to a managed application instead of a raw address.
+    let has_app_id: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM pragma_table_info('sites') WHERE name = 'app_id' LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
+    if has_app_id.is_none() {
+        sqlx::query("ALTER TABLE sites ADD COLUMN app_id INTEGER")
+            .execute(pool)
+            .await?;
+    }
+
+    let has_rewrite: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM pragma_table_info('sites') WHERE name = 'rewrite_rules' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_rewrite.is_none() {
+        sqlx::query("ALTER TABLE sites ADD COLUMN rewrite_rules TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS certificates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            domains TEXT NOT NULL DEFAULT '',
+            cert_path TEXT NOT NULL DEFAULT '',
+            key_path TEXT NOT NULL DEFAULT '',
+            issuer TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            not_before TEXT NOT NULL DEFAULT '',
+            not_after TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'uploaded',
+            auto_renew INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Opt-in HTTP->HTTPS redirect and HSTS, per site.
+    for column in ["force_https", "hsts"] {
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('sites') WHERE name = ? LIMIT 1",
+        )
+        .bind(column)
+        .fetch_optional(pool)
+        .await?;
+        if exists.is_none() {
+            sqlx::query(&format!(
+                "ALTER TABLE sites ADD COLUMN {} INTEGER NOT NULL DEFAULT 0",
+                column
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
+
     tracing::info!("Database migration completed");
     Ok(())
 }
@@ -151,4 +229,38 @@ pub async fn seed_admin(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Default admin user created (admin/linxpanel)");
     }
     Ok(())
+}
+
+/// Returns the persisted JWT signing secret, creating one on first boot.
+///
+/// A per-boot random secret would invalidate every session on restart, so the
+/// secret lives in the settings table. `JWT_SECRET` in the environment still wins.
+pub async fn resolve_jwt_secret(pool: &SqlitePool) -> anyhow::Result<String> {
+    if let Ok(secret) = std::env::var("JWT_SECRET") {
+        if !secret.trim().is_empty() {
+            return Ok(secret);
+        }
+    }
+
+    let existing: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+        .bind("jwt_secret")
+        .fetch_optional(pool)
+        .await?;
+    if let Some((secret,)) = existing {
+        if !secret.trim().is_empty() {
+            return Ok(secret);
+        }
+    }
+
+    let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .bind("jwt_secret")
+    .bind(&secret)
+    .execute(pool)
+    .await?;
+    tracing::info!("Generated and stored a new JWT secret");
+    Ok(secret)
 }

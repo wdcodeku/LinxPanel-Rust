@@ -1,66 +1,79 @@
 <template>
-  <el-container class="layout">
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
-      <div class="logo">
-        <svg viewBox="0 0 64 64" width="32" height="32">
-          <rect width="64" height="64" rx="12" fill="var(--lp-primary)"/>
-          <text x="32" y="44" font-family="Arial" font-size="32" font-weight="bold" fill="white" text-anchor="middle">LP</text>
+  <div class="shell" :class="{ 'shell--collapsed': collapsed, 'shell--nav-open': mobileNavOpen }">
+    <!-- Backdrop only exists on mobile, where the sidebar overlays content. -->
+    <div class="shell__scrim" @click="mobileNavOpen = false"></div>
+
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <svg class="sidebar__mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="var(--lp-accent)" />
+          <path d="M9 8v14h8" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          <circle cx="22" cy="11" r="2.6" fill="#fff" />
         </svg>
-        <transition name="fade">
-          <span v-show="!isCollapse" class="logo-text">LinxPanel</span>
-        </transition>
+        <span v-show="!collapsed" class="sidebar__name">LinxPanel</span>
       </div>
-      <el-scrollbar>
-        <nav class="sidebar-nav">
+
+      <nav class="sidebar__nav">
+        <template v-for="group in navGroups" :key="group.key">
+          <div v-show="!collapsed" class="sidebar__group">{{ t(group.titleKey) }}</div>
           <button
-            v-for="item in menuItems"
+            v-for="item in group.items"
             :key="item.path"
             type="button"
             class="nav-item"
-            :class="{ active: isMenuActive(item.path) }"
-            @click="goTo(item.path)"
+            :class="{ 'nav-item--active': isActive(item) }"
+            :title="collapsed ? t(item.titleKey) : undefined"
+            @click="go(item.path)"
           >
-            <el-icon><component :is="item.icon" /></el-icon>
-            <span v-show="!isCollapse" class="nav-label">{{ t(item.titleKey) }}</span>
+            <el-icon :size="17"><component :is="item.icon" /></el-icon>
+            <span v-show="!collapsed" class="nav-item__label">{{ t(item.titleKey) }}</span>
           </button>
-        </nav>
-      </el-scrollbar>
-      <div class="sidebar-footer" v-show="!isCollapse">
-        <span class="version">v0.1.0</span>
+        </template>
+      </nav>
+
+      <div class="sidebar__foot">
+        <span v-show="!collapsed" class="sidebar__version">v{{ panelVersion }}</span>
+        <button type="button" class="icon-btn" :title="t('nav.collapse')" @click="collapsed = !collapsed">
+          <el-icon :size="16"><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
+        </button>
       </div>
-    </el-aside>
-    <el-container>
-      <el-header class="header">
-        <div class="header-left">
-          <el-icon class="collapse-btn" @click="isCollapse = !isCollapse" :size="20">
-            <Fold v-if="!isCollapse" /><Expand v-else />
-          </el-icon>
-          <div class="platform-badges" v-if="platformInfo.hostname">
-            <span class="badge">
-              <el-icon :size="12"><Monitor /></el-icon>
-              {{ platformInfo.hostname }}
-            </span>
-            <span class="badge">{{ platformInfo.os_name }} {{ platformInfo.arch }}</span>
-            <span class="badge badge-success">
-              <el-icon :size="12"><Timer /></el-icon>
-              {{ formatUptime(platformInfo.uptime) }}
-            </span>
-          </div>
+    </aside>
+
+    <div class="shell__main">
+      <header class="topbar">
+        <button type="button" class="icon-btn topbar__menu" @click="mobileNavOpen = !mobileNavOpen">
+          <el-icon :size="18"><Expand /></el-icon>
+        </button>
+
+        <div class="topbar__host">
+          <span class="host-chip host-chip--name">
+            <el-icon :size="13"><Monitor /></el-icon>
+            {{ host.hostname || '—' }}
+          </span>
+          <span class="host-chip">{{ host.os }}</span>
+          <span class="host-chip host-chip--hide-sm">{{ t('nav.uptime') }} {{ host.uptime }}</span>
         </div>
-        <div class="header-right">
-          <el-tooltip :content="t('language')" :show-after="250">
-            <el-button circle size="small" @click="toggleLang" class="lang-toggle">
-              <span style="font-size:12px;font-weight:600">{{ locale === 'zh' ? 'EN' : '中' }}</span>
-            </el-button>
-          </el-tooltip>
-          <el-button circle size="small" @click="toggleTheme" class="theme-toggle">
+
+        <div class="topbar__right">
+          <!-- Connection state is the one thing that must never be silently wrong. -->
+          <span class="live" :class="`live--${realtime.state}`" :title="liveTitle">
+            <span class="live__dot"></span>
+            <span class="live__text">{{ liveLabel }}</span>
+          </span>
+
+          <button type="button" class="icon-btn" :title="t('language')" @click="toggleLang">
+            <span class="icon-btn__text">{{ locale === 'zh' ? 'EN' : '中' }}</span>
+          </button>
+          <button type="button" class="icon-btn" :title="t('nav.theme')" @click="toggleTheme">
             <el-icon :size="16"><Sunny v-if="userStore.theme === 'dark'" /><Moon v-else /></el-icon>
-          </el-button>
-          <el-dropdown trigger="click" popper-class="user-dropdown-popper">
-            <span class="user-info">
-              <el-avatar :size="28" :icon="UserFilled" />
-              <span class="user-name">{{ userStore.username }}</span>
-            </span>
+          </button>
+
+          <el-dropdown trigger="click">
+            <button type="button" class="user-btn">
+              <span class="user-btn__avatar">{{ initials }}</span>
+              <span class="user-btn__name">{{ userStore.username }}</span>
+              <el-icon :size="12"><ArrowDown /></el-icon>
+            </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="openChangePassword">
@@ -73,44 +86,29 @@
             </template>
           </el-dropdown>
         </div>
-      </el-header>
-      <el-main class="main-content">
+      </header>
+
+      <main class="shell__content">
         <router-view v-slot="{ Component }">
-          <transition name="slide" mode="out-in">
+          <transition name="fade" mode="out-in">
             <component :is="Component" />
           </transition>
         </router-view>
-      </el-main>
-    </el-container>
+      </main>
+    </div>
+
     <el-dialog
       v-model="showChangePassword"
       :title="t('st.changePassword')"
-      width="460px"
-      class="change-password-dialog"
+      width="440px"
       @closed="resetPasswordForm"
     >
-      <el-form
-        ref="pwRef"
-        :model="pwForm"
-        :rules="pwRules"
-        label-position="top"
-        @submit.prevent
-      >
+      <el-form ref="pwRef" :model="pwForm" :rules="pwRules" label-position="top" @submit.prevent>
         <el-form-item :label="t('st.oldPassword')" prop="old_password">
-          <el-input
-            v-model="pwForm.old_password"
-            type="password"
-            show-password
-            autocomplete="current-password"
-          />
+          <el-input v-model="pwForm.old_password" type="password" show-password autocomplete="current-password" />
         </el-form-item>
         <el-form-item :label="t('st.newPassword')" prop="new_password">
-          <el-input
-            v-model="pwForm.new_password"
-            type="password"
-            show-password
-            autocomplete="new-password"
-          />
+          <el-input v-model="pwForm.new_password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item :label="t('st.confirmPassword')" prop="confirm_password">
           <el-input
@@ -129,65 +127,141 @@
         </el-button>
       </template>
     </el-dialog>
-  </el-container>
+  </div>
 </template>
+
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useUserStore } from '@/stores/user'
-import { useI18n } from '@/i18n'
-import type { Locale } from '@/i18n'
-import { getSystemInfo, changePasswordApi } from '@/api'
 import { ElMessage } from 'element-plus'
 import type { FormRules } from 'element-plus'
-import { Sunny, Moon, UserFilled, SwitchButton } from '@element-plus/icons-vue'
+import {
+  ArrowDown, Expand, Fold, Lock, Monitor, Moon, Sunny, SwitchButton,
+} from '@element-plus/icons-vue'
+import { useUserStore } from '@/stores/user'
+import { useRealtimeStore } from '@/stores/realtime'
+import { useI18n } from '@/i18n'
+import type { Locale } from '@/i18n'
+import { changePasswordApi } from '@/api'
+import { formatDuration } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const realtime = useRealtimeStore()
 const { t, locale, setLocale } = useI18n()
-const isCollapse = ref(false)
-const platformInfo = ref<any>({})
+
+const COLLAPSE_KEY = 'lp.sidebar.collapsed'
+const collapsed = ref(localStorage.getItem(COLLAPSE_KEY) === '1')
+const mobileNavOpen = ref(false)
+
+watch(collapsed, (value) => {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, value ? '1' : '0')
+  } catch {
+    // Private mode / blocked storage: collapsing still works for this session.
+  }
+})
+
+const navGroups = [
+  {
+    key: 'monitor',
+    titleKey: 'nav.groupMonitor',
+    items: [
+      { path: '/dashboard', titleKey: 'dashboard', icon: 'Odometer' },
+      { path: '/processes', titleKey: 'nav.processes', icon: 'Histogram' },
+      { path: '/services', titleKey: 'nav.services', icon: 'SetUp' },
+    ],
+  },
+  {
+    key: 'server',
+    titleKey: 'nav.groupServer',
+    items: [
+      { path: '/sites', titleKey: 'sites', icon: 'Connection', match: '/sites' },
+      { path: '/runtime', titleKey: 'nav.runtime', icon: 'Box' },
+      { path: '/files', titleKey: 'fileManager', icon: 'FolderOpened' },
+      { path: '/terminal', titleKey: 'terminal', icon: 'Monitor' },
+      { path: '/cron', titleKey: 'nav.cron', icon: 'AlarmClock' },
+      { path: '/security', titleKey: 'nav.security', icon: 'Lock' },
+    ],
+  },
+  {
+    key: 'system',
+    titleKey: 'nav.groupSystem',
+    items: [{ path: '/settings', titleKey: 'settings', icon: 'Setting' }],
+  },
+]
+
+const panelVersion = computed(() => realtime.staticInfo?.panel_version || '0.1.0')
+
+const host = computed(() => {
+  const info = realtime.staticInfo
+  return {
+    hostname: info?.hostname || '',
+    os: info ? `${info.os_name} ${info.arch}` : '',
+    uptime: realtime.latest ? formatDuration(realtime.latest.uptime) : '—',
+  }
+})
+
+const liveLabel = computed(() => {
+  if (realtime.state === 'open') return t('nav.live')
+  if (realtime.state === 'connecting') return t('nav.connecting')
+  return t('nav.offline')
+})
+
+const liveTitle = computed(() =>
+  realtime.lastUpdate ? `${t('nav.lastUpdate')}: ${new Date(realtime.lastUpdate).toLocaleTimeString()}` : liveLabel.value,
+)
+
+const initials = computed(() => (userStore.username || '?').slice(0, 1).toUpperCase())
+
+function isActive(item: { path: string; match?: string }) {
+  if (item.match) return route.path === item.match || route.path.startsWith(`${item.match}/`)
+  return route.path === item.path
+}
+
+function go(path: string) {
+  mobileNavOpen.value = false
+  if (route.path !== path) router.push(path)
+}
+
+function toggleTheme() {
+  userStore.setTheme(userStore.theme === 'dark' ? 'default' : 'dark')
+}
+
+function toggleLang() {
+  setLocale(locale.value === 'zh' ? 'en' : ('zh' as Locale))
+}
+
+function handleLogout() {
+  realtime.reset()
+  userStore.logout()
+  router.push('/login')
+}
+
+// --- Change password ---
 const showChangePassword = ref(false)
 const changingPw = ref(false)
 const pwRef = ref()
-
-const pwForm = reactive({
-  old_password: '',
-  new_password: '',
-  confirm_password: '',
-})
-
+const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
 const pwRules = computed<FormRules>(() => ({
   old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
   new_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
   confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
 }))
 
-const menuItems = [
-  { path: '/dashboard', titleKey: 'dashboard', icon: 'Odometer' },
-  { path: '/sites', titleKey: 'sites', icon: 'Monitor' },
-  { path: '/files', titleKey: 'fileManager', icon: 'FolderOpened' },
-  { path: '/settings', titleKey: 'settings', icon: 'Setting' },
-]
-
-function toggleTheme() {
-  userStore.setTheme(userStore.theme === 'dark' ? 'default' : 'dark')
-}
-function toggleLang() {
-  setLocale(locale.value === 'zh' ? 'en' : 'zh' as Locale)
-}
-function handleLogout() { userStore.logout(); router.push('/login') }
 function resetPasswordForm() {
   pwForm.old_password = ''
   pwForm.new_password = ''
   pwForm.confirm_password = ''
   pwRef.value?.clearValidate()
 }
+
 function openChangePassword() {
   showChangePassword.value = true
   nextTick(() => pwRef.value?.clearValidate())
 }
+
 async function changePassword() {
   if (pwForm.new_password !== pwForm.confirm_password) {
     ElMessage.warning(t('st.passwordMismatch'))
@@ -209,8 +283,6 @@ async function changePassword() {
       ElMessage.success(t('st.passwordChanged'))
       showChangePassword.value = false
       resetPasswordForm()
-    } else {
-      ElMessage.error(res.message || t('api.requestFailed'))
     }
   } catch (err: any) {
     ElMessage.error(err?.message || t('api.requestFailed'))
@@ -218,190 +290,258 @@ async function changePassword() {
     changingPw.value = false
   }
 }
-function goTo(path: string) {
-  if (route.path !== path) router.push(path)
-}
-function isMenuActive(path: string) {
-  if (path === '/sites') return route.path === '/sites' || route.path.startsWith('/sites/')
-  return route.path === path
-}
 
-function formatUptime(s: number) {
-  if (!s) return '-'
-  const d = Math.floor(s / 86400)
-  const h = Math.floor((s % 86400) / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h`
-  return `${h}h ${m}m`
-}
-
-let timer: any
-async function fetchPlatform() {
-  try {
-    const res: any = await getSystemInfo()
-    if (res.success) platformInfo.value = res.data.platform
-  } catch {}
-}
-onMounted(() => { fetchPlatform(); timer = setInterval(fetchPlatform, 30000) })
-onUnmounted(() => clearInterval(timer))
+// The shell keeps one subscription open so the header stays live on every page.
+onMounted(() => realtime.subscribe())
+onUnmounted(() => realtime.unsubscribe())
 </script>
+
 <style scoped lang="scss">
-.layout { height: 100vh; overflow: hidden; }
-.sidebar {
-  background: var(--lp-sidebar-bg);
-  transition: width var(--lp-transition);
+.shell {
+  display: flex;
+  height: 100vh;
   overflow: hidden;
+  background: var(--lp-canvas);
+}
+
+.shell__scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: rgba(16, 24, 40, 0.45);
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(255,255,255,0.04);
-  .logo {
-    height: 56px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    flex-shrink: 0;
-  }
-  .logo-text {
-    color: #fff;
-    font-size: 17px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-  }
-  :deep(.el-scrollbar) { flex: 1; }
-  .sidebar-nav {
-    display: flex;
-    flex-direction: column;
-    padding: 4px 0;
-  }
-  .nav-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 42px;
-    width: calc(100% - 16px);
-    padding: 0 20px;
-    margin: 3px 8px;
-    border: 0;
-    border-radius: var(--lp-radius);
-    background: transparent;
-    color: var(--lp-sidebar-text);
-    text-decoration: none;
-    text-align: left;
-    font-size: 14px;
-    transition: all var(--lp-transition);
-    cursor: pointer;
-    &:hover:not(.active) { background: rgba(255,255,255,0.06); }
-    &.active {
-      background: var(--lp-sidebar-active-bg);
-      color: var(--lp-sidebar-active-text);
-      font-weight: 500;
-    }
-    .el-icon { font-size: 18px; }
-  }
-  .nav-label {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .sidebar-footer {
-    padding: 12px 16px;
-    text-align: center;
-    flex-shrink: 0;
-    .version { color: rgba(255,255,255,0.25); font-size: 11px; }
+  width: var(--lp-sidebar-w);
+  flex: none;
+  background: var(--lp-nav);
+  border-right: 1px solid var(--lp-line);
+  transition: width var(--lp-base);
+  z-index: 20;
+}
+.shell--collapsed .sidebar { width: var(--lp-sidebar-w-collapsed); }
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--lp-2);
+  height: var(--lp-header-h);
+  padding: 0 var(--lp-4);
+  flex: none;
+  border-bottom: 1px solid var(--lp-line-soft);
+}
+.sidebar__mark { width: 26px; height: 26px; flex: none; }
+.sidebar__name {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--lp-text);
+  white-space: nowrap;
+}
+
+.sidebar__nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--lp-3) var(--lp-2);
+}
+
+.sidebar__group {
+  padding: var(--lp-3) var(--lp-2) var(--lp-1);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-text-faint);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--lp-3);
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border: 0;
+  border-radius: var(--lp-r-sm);
+  background: transparent;
+  color: var(--lp-nav-text);
+  font-family: inherit;
+  font-size: var(--lp-text-base);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--lp-fast), color var(--lp-fast);
+
+  &:hover { background: var(--lp-surface-hover); color: var(--lp-text); }
+  &--active {
+    background: var(--lp-nav-active-bg);
+    color: var(--lp-nav-text-active);
+    font-weight: 600;
   }
 }
-.header {
-  background: var(--lp-header-bg);
-  border-bottom: 1px solid var(--lp-border-light);
+.shell--collapsed .nav-item { justify-content: center; padding: 9px 0; }
+
+.sidebar__foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  height: 48px;
-  box-shadow: var(--lp-shadow-sm);
-  z-index: 10;
-  flex-shrink: 0;
-  overflow: hidden;
+  gap: var(--lp-2);
+  padding: var(--lp-2) var(--lp-3);
+  flex: none;
+  border-top: 1px solid var(--lp-line-soft);
 }
-.header-left {
+.shell--collapsed .sidebar__foot { justify-content: center; }
+.sidebar__version { font-size: var(--lp-text-xs); color: var(--lp-text-faint); }
+
+/* ---------- Top bar ---------- */
+.shell__main {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+  flex-direction: column;
   flex: 1;
-  overflow: hidden;
+  min-width: 0;
 }
-.collapse-btn {
-  cursor: pointer;
-  color: var(--lp-text-secondary);
-  flex-shrink: 0;
-  transition: color var(--lp-transition);
-  &:hover { color: var(--lp-primary); }
-}
-.platform-badges {
+
+.topbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--lp-3);
+  height: var(--lp-header-h);
+  flex: none;
+  padding: 0 var(--lp-4);
+  background: var(--lp-surface);
+  border-bottom: 1px solid var(--lp-line);
+}
+
+.topbar__menu { display: none; }
+
+.topbar__host {
+  display: flex;
+  align-items: center;
+  gap: var(--lp-2);
   min-width: 0;
   overflow: hidden;
-  flex-shrink: 1;
 }
-.badge {
+
+.host-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 10px;
-  font-size: 12px;
-  line-height: 20px;
-  border-radius: 10px;
-  border: 1px solid var(--lp-border);
-  color: var(--lp-text-secondary);
-  background: var(--lp-card-bg);
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-surface-sunken);
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-soft);
   white-space: nowrap;
-  flex-shrink: 0;
-  .el-icon { color: var(--lp-primary); }
+
+  &--name { font-weight: 600; color: var(--lp-text); }
 }
-.badge-success {
-  color: var(--lp-success);
-  border-color: var(--lp-success);
-  .el-icon { color: var(--lp-success); }
-}
-.header-right {
+
+.topbar__right {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  margin-left: 12px;
+  gap: var(--lp-2);
+  margin-left: auto;
 }
-.user-info {
-  display: flex;
+
+.live {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--lp-r-full);
+  font-size: var(--lp-text-xs);
+  font-weight: 600;
+  background: var(--lp-muted-soft);
+  color: var(--lp-muted);
+}
+.live__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live--open { background: var(--lp-ok-soft); color: var(--lp-ok); }
+.live--open .live__dot { animation: live-pulse 2s ease-in-out infinite; }
+.live--connecting { background: var(--lp-warn-soft); color: var(--lp-warn); }
+.live--closed { background: var(--lp-danger-soft); color: var(--lp-danger); }
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--lp-r-sm);
+  background: transparent;
+  color: var(--lp-text-soft);
   cursor: pointer;
-  color: var(--lp-text-primary);
-  font-size: 13px;
-  white-space: nowrap;
+  transition: background var(--lp-fast), color var(--lp-fast);
+
+  &:hover { background: var(--lp-surface-hover); color: var(--lp-text); }
 }
-.user-name {
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.icon-btn__text { font-size: 11px; font-weight: 700; }
+
+.user-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--lp-r-full);
+  background: transparent;
+  color: var(--lp-text);
+  font-family: inherit;
+  font-size: var(--lp-text-base);
+  cursor: pointer;
+  transition: background var(--lp-fast);
+
+  &:hover { background: var(--lp-surface-hover); }
 }
-.theme-toggle, .lang-toggle {
-  border: 1px solid var(--lp-border) !important;
-  background: var(--lp-card-bg) !important;
-  color: var(--lp-text-secondary) !important;
-  &:hover { color: var(--lp-primary) !important; border-color: var(--lp-primary) !important; }
+.user-btn__avatar {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--lp-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
 }
-.main-content {
-  background: var(--lp-bg-page);
+[data-theme='dark'] .user-btn__avatar { color: var(--lp-text-invert); }
+.user-btn__name { font-weight: 500; }
+
+.shell__content {
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px;
 }
-.change-password-dialog :deep(.el-form-item:last-child) {
-  margin-bottom: 0;
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  .host-chip--hide-sm { display: none; }
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    transform: translateX(-100%);
+    box-shadow: var(--lp-shadow-lg);
+  }
+  .shell--nav-open .sidebar { transform: translateX(0); }
+  .shell--nav-open .shell__scrim { display: block; }
+  .topbar__menu { display: inline-flex; }
+  .user-btn__name { display: none; }
+  .live__text { display: none; }
+  .live { padding: 3px 7px; }
 }
 </style>

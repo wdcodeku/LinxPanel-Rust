@@ -158,6 +158,17 @@
                   <el-icon><VideoPlay v-if="row.status === 'stopped'" /><VideoPause v-else /></el-icon>
                 </el-button>
               </el-tooltip>
+              <el-tooltip :content="t('ct.sslSettings')" :show-after="250">
+                <el-button
+                  size="small"
+                  circle
+                  class="action-btn"
+                  :class="{ 'action-success': row.ssl_enabled }"
+                  @click="openSslDialog(row)"
+                >
+                  <el-icon><Lock /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip :content="t('si.config')" :show-after="250">
                 <el-button size="small" circle class="action-btn" @click="router.push(`/sites/${row.id}`)">
                   <el-icon><Setting /></el-icon>
@@ -245,9 +256,7 @@
         </el-form-item>
       </el-form>
     </el-card>
-    <el-card v-else shadow="hover">
-      <el-empty :description="t('si.certComingSoon')" />
-    </el-card>
+    <CertPanel v-else ref="certPanelRef" :sites="certSiteOptions" />
 
     <el-dialog v-model="showCreate" :title="t('si.addSite')" width="500px" v-drag :modal="false" :close-on-click-modal="false">
       <el-form :model="createForm" label-width="80px">
@@ -303,6 +312,52 @@
           </div>
           <div class="form-tip">{{ t('si.rootDirTip') }}</div>
         </el-form-item>
+
+        <el-form-item :label="t('si.siteType')">
+          <el-select v-model="createForm.site_type" style="width: 100%">
+            <el-option v-for="option in siteTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+          </el-select>
+          <div class="form-tip">{{ siteTypeTip }}</div>
+        </el-form-item>
+
+        <!-- App-backed types proxy to a managed application, so pick which one. -->
+        <el-form-item v-if="isAppSiteType" :label="t('si.linkedApp')">
+          <el-select v-model="createForm.app_id" style="width: 100%" :placeholder="t('si.selectApp')" clearable>
+            <el-option
+              v-for="app in matchingApps"
+              :key="app.id"
+              :label="`${app.name} — :${app.port}`"
+              :value="app.id"
+            />
+          </el-select>
+          <div class="form-tip">
+            {{ matchingApps.length ? t('si.linkedAppTip') : t('si.noMatchingApp') }}
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="createForm.site_type === 'proxy'" :label="t('si.proxyAddress')">
+          <el-input v-model="createForm.proxy_pass" placeholder="http://127.0.0.1:8080" class="lp-mono" />
+        </el-form-item>
+
+        <el-form-item :label="t('si.rewriteRules')">
+          <el-input
+            v-model="createForm.rewrite_rules"
+            type="textarea"
+            :rows="3"
+            class="lp-mono"
+            :placeholder="'rewrite ^/(.*)$ /index.php/$1 last;'"
+          />
+          <div class="rewrite-presets">
+            <button
+              v-for="preset in rewritePresets"
+              :key="preset.label"
+              type="button"
+              class="preset-chip"
+              @click="createForm.rewrite_rules = preset.value"
+            >{{ preset.label }}</button>
+          </div>
+          <div class="form-tip">{{ t('si.rewriteTip') }}</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreate = false">{{ t('cancel') }}</el-button>
@@ -335,12 +390,43 @@
       @clear="installLog = ''"
     />
   </div>
+
+    <el-dialog v-model="sslVisible" :title="sslTitle" width="520px">
+      <el-form label-position="top">
+        <el-form-item :label="t('ct.certificate')">
+          <el-select v-model="sslForm.cert_id" clearable style="width: 100%" :placeholder="t('ct.noCertBound')">
+            <el-option
+              v-for="cert in sslCertOptions"
+              :key="cert.id"
+              :label="`${cert.name} — ${cert.domains} (${cert.days_remaining}d)`"
+              :value="cert.id"
+            />
+          </el-select>
+          <div class="form-tip">{{ t('ct.bindHint') }}</div>
+        </el-form-item>
+
+        <el-form-item v-if="sslForm.cert_id">
+          <el-switch v-model="sslForm.force_https" :active-text="t('ct.forceHttps')" />
+          <div class="form-tip">{{ t('ct.forceHttpsHint') }}</div>
+        </el-form-item>
+
+        <el-form-item v-if="sslForm.cert_id">
+          <el-switch v-model="sslForm.hsts" :active-text="t('ct.hsts')" />
+          <div class="form-tip">{{ t('ct.hstsHint') }}</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="sslVisible = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="savingSsl" @click="submitSsl">{{ t('ct.save') }}</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
+import CertPanel from './CertPanel.vue'
 import {
   getSites,
   createSite,
@@ -351,9 +437,14 @@ import {
   saveSettingsApi,
   getOpenRestyStatus,
   quickInstallOpenResty,
+  getApps,
+  getCerts,
+  bindSiteSsl,
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete, WarningFilled } from '@element-plus/icons-vue'
+import {
+  Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete, WarningFilled, Lock,
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -397,7 +488,126 @@ const createForm = reactive({
   domains: [] as string[],
   doc_root: '/www/wwwroot',
   site_type: 'static',
+  app_id: undefined as number | undefined,
+  proxy_pass: '',
+  rewrite_rules: '',
 })
+
+type AppOption = { id: number; name: string; runtime: string; port: number }
+const appOptions = ref<AppOption[]>([])
+
+const siteTypeOptions = computed(() => [
+  { value: 'static', label: t('si.typeStatic') },
+  { value: 'php', label: 'PHP' },
+  { value: 'node', label: 'Node.js' },
+  { value: 'python', label: 'Python' },
+  { value: 'java', label: 'Java' },
+  { value: 'go', label: 'Go' },
+  { value: 'binary', label: t('si.typeBinary') },
+  { value: 'proxy', label: t('si.typeProxy') },
+])
+
+const APP_SITE_TYPES = ['node', 'python', 'java', 'go', 'binary']
+const isAppSiteType = computed(() => APP_SITE_TYPES.includes(createForm.site_type))
+
+/** Only offer applications whose runtime matches the chosen site type. */
+const matchingApps = computed(() =>
+  appOptions.value.filter((app) => app.runtime === createForm.site_type && app.port > 0),
+)
+
+const siteTypeTip = computed(() => {
+  if (isAppSiteType.value) return t('si.typeAppTip')
+  if (createForm.site_type === 'php') return t('si.typePhpTip')
+  if (createForm.site_type === 'proxy') return t('si.typeProxyTip')
+  return t('si.typeStaticTip')
+})
+
+const rewritePresets = computed(() => [
+  { label: t('si.presetNone'), value: '' },
+  { label: 'WordPress', value: 'rewrite ^/(.*)$ /index.php?$1 last;' },
+  { label: 'Laravel / ThinkPHP', value: 'rewrite ^/(.*)$ /index.php/$1 last;' },
+  { label: t('si.presetForceHttps'), value: 'if ($scheme = http) { return 301 https://$host$request_uri; }' },
+])
+
+
+// --- Certificates / SSL ---
+const certPanelRef = ref()
+const sslVisible = ref(false)
+const savingSsl = ref(false)
+const sslTarget = ref<any>(null)
+const sslCertOptions = ref<any[]>([])
+const sslForm = reactive({
+  cert_id: undefined as number | undefined,
+  force_https: false,
+  hsts: false,
+})
+
+/** The cert panel offers site webroots as ACME challenge directories. */
+const certSiteOptions = computed(() =>
+  sites.value.map((site: any) => ({ id: site.id, name: site.name, doc_root: site.doc_root })),
+)
+
+const sslTitle = computed(() =>
+  sslTarget.value ? `${sslTarget.value.name} — ${t('ct.sslSettings')}` : t('ct.sslSettings'),
+)
+
+async function openSslDialog(row: any) {
+  sslTarget.value = row
+  sslForm.cert_id = undefined
+  sslForm.force_https = !!row.force_https
+  sslForm.hsts = !!row.hsts
+  sslVisible.value = true
+
+  try {
+    const res: any = await getCerts()
+    if (res.success) {
+      sslCertOptions.value = res.data || []
+      // Preselect whichever certificate this site already points at.
+      const current = sslCertOptions.value.find((cert: any) => cert.cert_path === row.ssl_cert_path)
+      if (current) sslForm.cert_id = current.id
+    }
+  } catch {
+    // Interceptor reports it.
+  }
+}
+
+async function submitSsl() {
+  if (!sslTarget.value) return
+  savingSsl.value = true
+  try {
+    const res: any = await bindSiteSsl(sslTarget.value.id, {
+      cert_id: sslForm.cert_id ?? null,
+      force_https: sslForm.force_https,
+      hsts: sslForm.hsts,
+    })
+    if (res.success) {
+      ElMessage.success(t('ct.sslUpdated'))
+      sslVisible.value = false
+      await loadSites()
+      certPanelRef.value?.load?.()
+    }
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    savingSsl.value = false
+  }
+}
+
+async function loadAppOptions() {
+  try {
+    const res: any = await getApps()
+    if (res.success) {
+      appOptions.value = (res.data || []).map((app: any) => ({
+        id: app.id,
+        name: app.name,
+        runtime: app.runtime,
+        port: app.port,
+      }))
+    }
+  } catch {
+    // Non-fatal: the selector simply shows no options.
+  }
+}
 
 function normalizeDomainToken(token: string) {
   return token
@@ -771,6 +981,9 @@ async function doCreate() {
     name: createForm.name.trim(),
     domains: [...createForm.domains],
     doc_root: createForm.doc_root.trim() || '/www/wwwroot',
+    app_id: isAppSiteType.value ? createForm.app_id : undefined,
+    proxy_pass: createForm.site_type === 'proxy' ? createForm.proxy_pass.trim() : undefined,
+    rewrite_rules: createForm.rewrite_rules.trim() || undefined,
     site_type: createForm.site_type,
   }
   if (!payload.name) {
@@ -790,6 +1003,9 @@ async function doCreate() {
       createForm.name = ''
       createForm.doc_root = '/www/wwwroot'
       createForm.site_type = 'static'
+      createForm.app_id = undefined
+      createForm.proxy_pass = ''
+      createForm.rewrite_rules = ''
       clearCreateDomainState()
       loadSites()
     }
@@ -836,13 +1052,37 @@ onMounted(async () => {
   if (initialTab === 'sites' || initialTab === 'certs' || initialTab === 'openresty') {
     activeCategory.value = initialTab
   }
-  await Promise.all([loadOpenrestySettings(), loadOpenRestyStatus()])
+  await Promise.all([loadOpenrestySettings(), loadOpenRestyStatus(), loadAppOptions()])
   if (canManageSites.value) {
     await loadSites()
   }
 })
 </script>
 <style scoped lang="scss">
+.rewrite-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.preset-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r-full);
+  background: var(--lp-surface);
+  color: var(--lp-text-soft);
+  font-family: inherit;
+  font-size: var(--lp-text-xs);
+  cursor: pointer;
+  transition: all var(--lp-fast);
+
+  &:hover {
+    border-color: var(--lp-accent);
+    color: var(--lp-accent);
+    background: var(--lp-accent-soft);
+  }
+}
+
 .sites-view {
   display: flex;
   flex-direction: column;

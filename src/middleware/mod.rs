@@ -12,7 +12,7 @@ pub async fn auth(mut req: Request, next: Next) -> Result<Response, StatusCode> 
 
     let token = if let Some(t) = auth_header.strip_prefix("Bearer ") {
         t.to_string()
-    } else if req.uri().path().ends_with("/files/terminal/ws") {
+    } else if is_websocket_route(req.uri().path()) {
         req.uri()
             .query()
             .and_then(extract_token_from_query)
@@ -48,4 +48,9 @@ fn extract_token_from_query(query: &str) -> Option<&str> {
             _ => None,
         }
     })
+}
+
+/// Browsers cannot set headers on a WebSocket handshake, so these routes accept `?token=`.
+fn is_websocket_route(path: &str) -> bool {
+    path.ends_with("/files/terminal/ws") || path.ends_with("/realtime/ws")
 }

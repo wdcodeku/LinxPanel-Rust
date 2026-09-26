@@ -1,6 +1,13 @@
 pub mod auth;
+pub mod cert_api;
+pub mod cron_api;
 pub mod domains;
 pub mod files;
+pub mod firewall_api;
+pub mod processes;
+pub mod realtime;
+pub mod runtime_api;
+pub mod services_api;
 pub mod settings;
 pub mod sites;
 pub mod system;
@@ -14,6 +21,13 @@ pub fn routes(state: Arc<AppState>) -> Router {
 
     let protected = Router::new()
         .merge(system::routes())
+        .merge(realtime::routes())
+        .merge(processes::routes())
+        .merge(runtime_api::routes())
+        .merge(services_api::routes())
+        .merge(cron_api::routes())
+        .merge(cert_api::routes())
+        .merge(firewall_api::routes())
         .merge(sites::routes())
         .merge(domains::routes())
         .merge(files::routes())

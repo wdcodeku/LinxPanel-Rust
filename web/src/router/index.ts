@@ -21,6 +21,42 @@ const router = createRouter({
           meta: { title: 'Dashboard', icon: 'Odometer' },
         },
         {
+          path: 'processes',
+          name: 'Processes',
+          component: () => import('@/views/processes/ProcessesView.vue'),
+          meta: { title: 'Processes', icon: 'Histogram' },
+        },
+        {
+          path: 'services',
+          name: 'Services',
+          component: () => import('@/views/services/ServicesView.vue'),
+          meta: { title: 'Services', icon: 'SetUp' },
+        },
+        {
+          path: 'cron',
+          name: 'Cron',
+          component: () => import('@/views/cron/CronView.vue'),
+          meta: { title: 'Cron', icon: 'AlarmClock' },
+        },
+        {
+          path: 'security',
+          name: 'Security',
+          component: () => import('@/views/security/SecurityView.vue'),
+          meta: { title: 'Security', icon: 'Lock' },
+        },
+        {
+          path: 'runtime',
+          name: 'Runtime',
+          component: () => import('@/views/runtime/RuntimeView.vue'),
+          meta: { title: 'Runtime', icon: 'Box' },
+        },
+        {
+          path: 'terminal',
+          name: 'Terminal',
+          component: () => import('@/views/terminal/TerminalView.vue'),
+          meta: { title: 'Terminal', icon: 'Monitor' },
+        },
+        {
           path: 'sites',
           name: 'Sites',
           component: () => import('@/views/sites/SitesView.vue'),

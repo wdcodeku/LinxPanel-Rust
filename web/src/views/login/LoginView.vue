@@ -2,9 +2,10 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <svg viewBox="0 0 64 64" width="48" height="48">
-          <rect width="64" height="64" rx="12" fill="var(--lp-primary)"/>
-          <text x="32" y="44" font-family="Arial" font-size="32" font-weight="bold" fill="white" text-anchor="middle">LP</text>
+        <svg class="login-mark" viewBox="0 0 32 32" width="52" height="52" aria-hidden="true">
+          <rect width="32" height="32" rx="9" fill="var(--lp-accent)" />
+          <path d="M9 8v14h8" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          <circle cx="22" cy="11" r="2.6" fill="#fff" />
         </svg>
         <h1>{{ t('login.title') }}</h1>
         <p>{{ t('login.subtitle') }}</p>
@@ -64,32 +65,54 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--lp-primary) 0%, var(--lp-primary-dark) 100%);
+  padding: var(--lp-5);
+  background: var(--lp-canvas);
   position: relative;
   overflow: hidden;
 }
+
+/* Two soft accent washes give the page depth without a heavy gradient slab. */
 .login-page::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 30% 50%, rgba(255,255,255,0.08) 0%, transparent 60%),
-              radial-gradient(circle at 70% 80%, rgba(255,255,255,0.05) 0%, transparent 50%);
+  background:
+    radial-gradient(circle at 18% 22%, var(--lp-accent-soft) 0%, transparent 45%),
+    radial-gradient(circle at 82% 78%, var(--lp-accent-soft) 0%, transparent 40%);
   pointer-events: none;
 }
+
 .login-card {
-  width: 400px;
-  padding: 40px;
-  background: var(--lp-card-bg);
-  border-radius: var(--lp-radius-xl);
+  width: 100%;
+  max-width: 380px;
+  padding: var(--lp-8);
+  background: var(--lp-surface);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r-lg);
   box-shadow: var(--lp-shadow-lg);
   position: relative;
   z-index: 1;
-  backdrop-filter: blur(20px);
 }
+
 .login-header {
   text-align: center;
-  margin-bottom: 32px;
-  h1 { margin: 12px 0 4px; font-size: 24px; color: var(--lp-text-primary); }
-  p { color: var(--lp-text-secondary); font-size: 14px; }
+  margin-bottom: var(--lp-6);
+
+  h1 {
+    margin: var(--lp-3) 0 var(--lp-1);
+    font-size: var(--lp-text-xl);
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--lp-text);
+  }
+  p {
+    color: var(--lp-text-dim);
+    font-size: var(--lp-text-base);
+  }
 }
+
+.login-mark { display: block; margin: 0 auto; }
+
+:deep(.el-form-item) { margin-bottom: var(--lp-4); }
+:deep(.el-input__wrapper) { padding: 2px 11px; }
 </style>

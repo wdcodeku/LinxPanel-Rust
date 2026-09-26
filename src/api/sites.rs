@@ -62,6 +62,8 @@ async fn create_site(
         proxy_pass,
         index_files,
         stopped_page_html,
+        app_id,
+        rewrite_rules,
     } = req;
 
     let name = name.trim().to_string();
@@ -119,7 +121,7 @@ async fn create_site(
         }
     }
 
-    if site_type != "proxy" {
+    if !is_proxied_site_type(&site_type) {
         let index_path = std::path::Path::new(&doc_root).join("index.html");
         if !index_path.exists() {
             let index_content = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Hello World</title></head><body><h1>Hello World</h1></body></html>";
@@ -129,7 +131,8 @@ async fn create_site(
     let domains_str = domains.join(",");
 
     let result = sqlx::query(
-        "INSERT INTO sites (name, domains, doc_root, site_type, proxy_pass, index_files, stopped_page_html) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO sites (name, domains, doc_root, site_type, proxy_pass, index_files, stopped_page_html, app_id, rewrite_rules)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&name)
     .bind(&domains_str)
@@ -138,6 +141,8 @@ async fn create_site(
     .bind(&proxy_pass)
     .bind(&index_files)
     .bind(&stopped_page_html)
+    .bind(app_id)
+    .bind(&rewrite_rules)
     .execute(&state.db)
     .await;
 
@@ -215,9 +220,12 @@ async fn update_site(
         None => existing.stopped_page_html,
     };
     let extra_config = req.extra_config.or(existing.extra_config);
+    let app_id = req.app_id.or(existing.app_id);
+    let rewrite_rules = req.rewrite_rules.or(existing.rewrite_rules);
 
     let result = sqlx::query(
-        "UPDATE sites SET name=?, domains=?, doc_root=?, site_type=?, proxy_pass=?, index_files=?, stopped_page_html=?, extra_config=?, updated_at=datetime('now') WHERE id=?",
+        "UPDATE sites SET name=?, domains=?, doc_root=?, site_type=?, proxy_pass=?, index_files=?,
+         stopped_page_html=?, extra_config=?, app_id=?, rewrite_rules=?, updated_at=datetime('now') WHERE id=?",
     )
     .bind(&name)
     .bind(&domains)
@@ -227,6 +235,8 @@ async fn update_site(
     .bind(&index_files)
     .bind(&stopped_page_html)
     .bind(&extra_config)
+    .bind(app_id)
+    .bind(&rewrite_rules)
     .bind(id)
     .execute(&state.db)
     .await;
@@ -453,4 +463,12 @@ async fn stop_site(
         }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
+}
+
+/// Site types whose traffic is reverse-proxied rather than served from disk.
+fn is_proxied_site_type(site_type: &str) -> bool {
+    matches!(
+        site_type,
+        "proxy" | "node" | "python" | "java" | "go" | "binary"
+    )
 }

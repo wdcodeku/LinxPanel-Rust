@@ -50,6 +50,111 @@ LinxPanel 在构建时会将 `web/dist` 内嵌进 Rust 可执行文件，部署�
 - 若 `web/dist` 缺失，构建仍会成功，但会内嵌占位页面。
 - 生产环境请先执行前端构建，再执行 `cargo build --release`。
 
+### 实时监控内核
+
+面板内置单一采样引擎，后台每秒采样一次，所有连接的客户端共享同一份数据：
+
+- `GET /api/realtime/ws`：WebSocket 推送，连接即回填最近 10 分钟历史，随后每秒推送一帧
+- `GET /api/realtime/snapshot`：REST 快照（静态信息 + 历史 + 最新采样 + 磁盘/网卡明细）
+- 采样内容：CPU 总体与每核、内存/Swap、负载、网络上下行速率、磁盘读写速率
+- 速率在服务端按真实时间差计算，前端不再自行推算
+- 磁盘枚举与网卡明细每 5 秒刷新一次，CPU/内存每秒刷新，避免高频枚举开销
+- WebSocket 通过 `?token=` 携带 JWT；断线自动指数退避重连
+
+### 进程管理
+
+- `GET /api/processes`：支持关键字搜索、排序（cpu/memory/pid/name/run_time）、分页
+- `POST /api/processes/{pid}/signal`：发送 TERM / INT / HUP / KILL / STOP / CONT
+- 进程 CPU 归一化为「占整机百分比」，启动时预热基线，首次打开即有真实数值
+
+### 系统服务（Linux / systemd）
+
+- `GET /api/services`、`GET /api/services/backend`
+- `POST /api/services/action`：start / stop / restart / reload / enable / disable
+- `GET /api/services/{name}/status`、`GET /api/services/{name}/logs`（journalctl）
+- 无 root 或免密 sudo 时自动降级为只读；macOS 以 launchd 只读方式列出
+
+### 计划任务
+
+- `GET/POST /api/cron`、`POST /api/cron/{id}`、`DELETE /api/cron/{id}`、`POST /api/cron/{id}/toggle`
+- 通过 `crontab -` 原子写回，任务名以 `#LinxPanel:` 注释保存
+- 停用任务以注释形式保留，不会丢失原始内容
+
+### 防火墙与端口
+
+- `GET /api/firewall/status`、`GET/POST /api/firewall/rules`、`DELETE /api/firewall/rules/{id}`
+- `POST /api/firewall/toggle`：启停防火墙
+- 支持 ufw 与 firewalld，端口与来源地址均做白名单校验
+- `GET /api/network/ports`：列出监听端口及占用进程（ss → lsof → netstat 自动降级）
+- 只读探测在无 sudo 时自动降级为非特权执行，不会直接报错
+
+### 会话持久化
+
+JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先），**面板重启不再导致所有用户掉线**。
+
+### 运行环境与应用托管
+
+面板内置语言运行环境检测与安装，并托管应用进程：
+
+- `GET /api/runtimes`：检测 PHP / Node.js / Python / Java / Go 的版本、路径与配套工具（npm、pip、composer、maven…）
+- `POST /api/runtimes/install`：通过发行版包管理器安装（apt / dnf / yum / apk，macOS 用 brew），返回完整安装日志
+- 应用托管（`/api/apps`）支持 Node / Python / Java(jar) / Go / 二进制 / PHP-CLI：
+  - 工作目录、启动文件、启动参数、环境变量、端口
+  - 设置端口后自动注入 `PORT` 环境变量
+  - 崩溃自动重启，指数退避（2s → 60s），进程存活 30s 后退避重置
+  - stdout/stderr 落盘为日志，超过 8MB 自动截断
+  - 面板重启后按 `autostart` 自动拉起
+  - **面板收到 SIGTERM 时会先停掉所有托管进程**，不留孤儿进程占用端口
+
+### 网站类型与伪静态
+
+- 站点类型：静态 / PHP / Node / Python / Java / Go / 二进制 / 反向代理
+- 应用类站点绑定一个托管应用，自动生成反向代理配置（含 WebSocket 升级头透传）
+- 伪静态规则支持预设（WordPress、Laravel/ThinkPHP、强制 HTTPS）
+- 规则经白名单校验：仅允许 `rewrite` / `return` / `set` / `if` / `break`，拒绝花括号等可能逃逸 `server` 块的写法（含单元测试）
+
+### 终端
+
+- 独立终端页支持多标签，标签保持各自的会话与滚动历史
+- 终端封装为可复用组件 `web/src/components/TerminalPane.vue`，可内嵌到任意页面
+- 目录跳转、清屏、断开/重连，断线自动指数退避重连
+
+### 面板设置
+
+分为「基础 / 安全 / 告警 / 关于」四个标签页：
+
+- 基础：面板名称、端口、API 地址、OpenResty 路径与 PHP-FPM 地址
+- 安全：会话有效期、修改密码、安全自检（默认账号、HTTPS、会话时长、网络接口）
+- 告警：CPU / 内存 / 磁盘 阈值
+- 关于：面板版本与实时系统信息
+
+**`session_timeout` 现在真正生效**（此前存入数据库但被硬编码的 24 小时忽略）。
+
+### SSL 证书管理
+
+证书存放在 `data/certs/<id>/`（私钥 `0600`，证书 `0644`），元数据由 `openssl` 解析，不引入额外的 X.509 依赖。
+
+- `GET /api/certs`：列出证书，含域名(SAN)、颁发机构、有效期、剩余天数、状态与占用站点
+- `POST /api/certs/upload`：粘贴 PEM 证书链与私钥
+- `POST /api/certs/self-signed`：生成自签名证书（内网/测试用）
+- `POST /api/certs/acme`：Let's Encrypt 申请（HTTP-01 webroot 验证），支持 staging 试跑
+- `POST /api/certs/{id}/renew`：手动续期
+- `GET /api/certs/acme/status`：检测 acme.sh / certbot
+- `POST /api/sites/{id}/ssl`：绑定/解绑证书到站点
+
+安全与正确性：
+
+- **上传时校验私钥与证书是否匹配**，不匹配直接拒绝，避免 nginx 重载失败导致站点全挂
+- 域名与邮箱经严格白名单校验后才作为参数传给 openssl / ACME 客户端
+- 证书被站点占用时拒绝删除
+- **自动续期**：后台任务每天检查一次，剩余不足 30 天的 ACME 证书自动续期，并重载使用它的站点
+
+生成的 TLS 配置：
+
+- `TLSv1.2 TLSv1.3`，仅前向保密套件，`ssl_session_tickets off`
+- 可选强制 HTTPS 跳转（80 端口跳转 server，**保留 `.well-known/acme-challenge/` 不跳转**，否则续期会失败）
+- 可选 HSTS（一年、含子域名）
+
 ### OpenResty 实时落地
 
 网站/域名修改会自动落地到 OpenResty：
@@ -138,6 +243,111 @@ Notes:
 
 - If `web/dist` is missing, build still succeeds but embeds a placeholder page.
 - For production, always run web build before `cargo build --release`.
+
+### Realtime Metrics Engine
+
+A single background sampler ticks once per second and every connected client shares it:
+
+- `GET /api/realtime/ws`: WebSocket push; backfills the last 10 minutes on connect, then one frame per second
+- `GET /api/realtime/snapshot`: REST snapshot (static info + history + latest sample + disk/NIC detail)
+- Sampled: global and per-core CPU, memory/swap, load average, network rx/tx rates, disk read/write rates
+- Rates are computed server-side from real elapsed time; the client no longer derives them
+- Disk enumeration and NIC detail refresh every 5s while CPU/memory refresh every 1s
+- The WebSocket carries its JWT via `?token=`; the client reconnects with exponential backoff
+
+### Process Management
+
+- `GET /api/processes`: keyword search, sorting (cpu/memory/pid/name/run_time), pagination
+- `POST /api/processes/{pid}/signal`: TERM / INT / HUP / KILL / STOP / CONT
+- Process CPU is normalised to percent-of-machine, and the baseline is primed at startup
+
+### System Services (Linux / systemd)
+
+- `GET /api/services`, `GET /api/services/backend`
+- `POST /api/services/action`: start / stop / restart / reload / enable / disable
+- `GET /api/services/{name}/status`, `GET /api/services/{name}/logs` (journalctl)
+- Degrades to read-only without root or passwordless sudo; macOS lists launchd read-only
+
+### Cron Jobs
+
+- `GET/POST /api/cron`, `POST /api/cron/{id}`, `DELETE /api/cron/{id}`, `POST /api/cron/{id}/toggle`
+- Written back atomically through `crontab -`; job names persist as `#LinxPanel:` comments
+- Disabled jobs stay in the crontab as comments, so nothing is lost
+
+### Firewall & Ports
+
+- `GET /api/firewall/status`, `GET/POST /api/firewall/rules`, `DELETE /api/firewall/rules/{id}`
+- `POST /api/firewall/toggle` to enable/disable the firewall
+- Supports ufw and firewalld; ports and source addresses are validated against an allowlist
+- `GET /api/network/ports`: listening sockets with owning process (ss → lsof → netstat fallback)
+- Read-only probes fall back to unprivileged execution instead of erroring when sudo is unavailable
+
+### Session Persistence
+
+The JWT signing secret is persisted in the `settings` table (`JWT_SECRET` env wins), so **restarting the panel no longer logs everyone out**.
+
+### Runtimes and Managed Applications
+
+The panel detects and installs language runtimes, and supervises application processes:
+
+- `GET /api/runtimes`: detects PHP / Node.js / Python / Java / Go with versions, paths and companion tooling (npm, pip, composer, maven…)
+- `POST /api/runtimes/install`: installs through the distro package manager (apt / dnf / yum / apk, brew on macOS) and returns the full install log
+- Managed applications (`/api/apps`) support Node / Python / Java (jar) / Go / binary / PHP-CLI:
+  - working directory, entry point, arguments, environment variables, port
+  - a `PORT` environment variable is injected when a port is set
+  - crash auto-restart with exponential backoff (2s → 60s), reset once a process stays up 30s
+  - stdout/stderr captured to a log file, truncated past 8MB
+  - relaunched after a panel restart when `autostart` is set
+  - **SIGTERM stops every managed process first**, so no orphans keep holding ports
+
+### Site Types and Rewrite Rules
+
+- Site types: static / PHP / Node / Python / Java / Go / binary / reverse proxy
+- App-backed sites link to a managed application and generate the reverse proxy config, including WebSocket upgrade headers
+- Rewrite ("pseudo-static") presets for WordPress, Laravel/ThinkPHP and force-HTTPS
+- Rules are allowlisted: only `rewrite` / `return` / `set` / `if` / `break`, rejecting braces and anything else that could escape the generated `server` block (unit tested)
+
+### Terminal
+
+- A standalone terminal page with multiple tabs, each keeping its own session and scrollback
+- The terminal is a reusable component, `web/src/components/TerminalPane.vue`, embeddable anywhere
+- Directory jump, clear, disconnect/reconnect, and automatic exponential-backoff reconnect
+
+### Panel Settings
+
+Split into General / Security / Alerts / About:
+
+- General: panel name, port, API address, OpenResty paths and PHP-FPM address
+- Security: session lifetime, password change, and a security checklist (default account, HTTPS, session length, interfaces)
+- Alerts: CPU / memory / disk thresholds
+- About: panel version and live system information
+
+**`session_timeout` is now actually applied** — it was previously stored but ignored in favour of a hardcoded 24 hours.
+
+### SSL Certificate Management
+
+Certificates live in `data/certs/<id>/` (key `0600`, cert `0644`), and their metadata is read back with `openssl` rather than adding an X.509 parsing dependency.
+
+- `GET /api/certs`: lists certificates with SAN domains, issuer, validity, days remaining, status and the sites using them
+- `POST /api/certs/upload`: paste a PEM chain and private key
+- `POST /api/certs/self-signed`: generate a self-signed certificate for internal/test use
+- `POST /api/certs/acme`: issue via Let's Encrypt (HTTP-01 webroot), with a staging dry-run option
+- `POST /api/certs/{id}/renew`: manual renewal
+- `GET /api/certs/acme/status`: detects acme.sh / certbot
+- `POST /api/sites/{id}/ssl`: bind or unbind a certificate on a site
+
+Safety and correctness:
+
+- **Uploads verify that the key matches the certificate** and are rejected otherwise, so a bad pair cannot break the next nginx reload
+- Domains and emails are allowlist-validated before reaching openssl or the ACME client
+- A certificate still bound to a site cannot be deleted
+- **Auto-renewal**: a daily background sweep renews ACME certificates with under 30 days left and reloads the sites using them
+
+Generated TLS config:
+
+- `TLSv1.2 TLSv1.3`, forward-secrecy ciphers only, `ssl_session_tickets off`
+- Optional forced HTTPS redirect (a port-80 redirect server that **keeps `.well-known/acme-challenge/` un-redirected**, or renewals would fail)
+- Optional HSTS (one year, includeSubDomains)
 
 ### OpenResty Real-Time Apply
 

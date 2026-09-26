@@ -1,100 +1,444 @@
 <template>
-  <div class="settings-page">
-    <el-row :gutter="16">
-      <el-col :xs="24" :lg="12">
-        <el-card shadow="never" class="setting-card">
-          <template #header>
-            <div class="card-hd"><el-icon><Setting /></el-icon> {{ t('st.panelSettings') }}</div>
-          </template>
-          <el-form :model="form" label-width="100px" label-position="left">
-            <el-form-item :label="t('st.panelName')">
-              <el-input v-model="form.panel_name" placeholder="LinxPanel" />
-            </el-form-item>
-            <el-form-item :label="t('st.panelPort')">
-              <el-input-number v-model.number="form.panel_port" :min="1024" :max="65535" />
-            </el-form-item>
-            <el-form-item :label="t('st.sessionTimeout')">
-              <el-select v-model="form.session_timeout">
-                <el-option :label="t('st.hours1')" value="1" />
-                <el-option :label="t('st.hours6')" value="6" />
-                <el-option :label="t('st.hours12')" value="12" />
-                <el-option :label="t('st.hours24')" value="24" />
-                <el-option :label="t('st.days7')" value="168" />
-              </el-select>
-            </el-form-item>
-            <el-form-item :label="t('st.apiUrl')">
-              <el-input v-model="form.api_url" placeholder="http://0.0.0.0:7200" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="saveSettings" :loading="saving">{{ t('st.saveSettings') }}</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
-    </el-row>
+  <div class="lp-page">
+    <div class="lp-page-head">
+      <div>
+        <h1 class="lp-page-title">{{ t('settings') }}</h1>
+        <p class="lp-page-sub">{{ t('st.subtitle') }}</p>
+      </div>
+      <div class="lp-page-actions">
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
+        <el-button type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
+      </div>
+    </div>
+
+    <el-tabs v-model="tab">
+      <!-- ============ General ============ -->
+      <el-tab-pane :label="t('st.tabGeneral')" name="general">
+        <div class="setting-stack">
+          <section class="lp-card">
+            <header class="lp-card-head">
+              <h2 class="lp-card-title"><el-icon><Setting /></el-icon>{{ t('st.panelSettings') }}</h2>
+            </header>
+            <div class="lp-card-body">
+              <el-form label-position="top">
+                <div class="grid-2">
+                  <el-form-item :label="t('st.panelName')">
+                    <el-input v-model="form.panel_name" placeholder="LinxPanel" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.panelPort')">
+                    <el-input-number
+                      v-model.number="form.panel_port"
+                      :min="1"
+                      :max="65535"
+                      controls-position="right"
+                      style="width: 100%"
+                    />
+                    <span class="hint">{{ t('st.panelPortHint') }}</span>
+                  </el-form-item>
+                </div>
+                <el-form-item :label="t('st.apiUrl')">
+                  <el-input v-model="form.api_url" placeholder="http://0.0.0.0:7200" class="lp-mono" />
+                  <span class="hint">{{ t('st.apiUrlHint') }}</span>
+                </el-form-item>
+              </el-form>
+            </div>
+          </section>
+
+          <section class="lp-card">
+            <header class="lp-card-head">
+              <h2 class="lp-card-title"><el-icon><Connection /></el-icon>{{ t('st.openrestyTitle') }}</h2>
+              <span class="lp-pill" :class="openresty?.installed ? 'lp-pill--ok' : ''">
+                <span class="lp-pill__dot"></span>
+                {{ openresty?.installed ? openresty?.version || t('st.installed') : t('st.notInstalled') }}
+              </span>
+            </header>
+            <div class="lp-card-body">
+              <el-form label-position="top">
+                <div class="grid-2">
+                  <el-form-item :label="t('st.openrestyBin')">
+                    <el-input v-model="form.openresty_bin" placeholder="/usr/local/openresty/nginx/sbin/nginx" class="lp-mono" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.openrestyConfPath')">
+                    <el-input v-model="form.openresty_conf_path" placeholder="/usr/local/openresty/nginx/conf/nginx.conf" class="lp-mono" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.openrestySitesDir')">
+                    <el-input v-model="form.openresty_sites_dir" placeholder="/usr/local/openresty/nginx/conf/sites-enabled" class="lp-mono" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.phpFpmAddr')">
+                    <el-input v-model="form.php_fpm_addr" placeholder="127.0.0.1:9000" class="lp-mono" />
+                    <span class="hint">{{ t('st.phpFpmHint') }}</span>
+                  </el-form-item>
+                </div>
+                <el-form-item>
+                  <el-switch v-model="openrestyEnabled" :active-text="t('st.openrestyEnabled')" />
+                  <span class="hint hint--inline">{{ t('st.openrestyEnabledHint') }}</span>
+                </el-form-item>
+              </el-form>
+            </div>
+          </section>
+        </div>
+      </el-tab-pane>
+
+      <!-- ============ Security ============ -->
+      <el-tab-pane :label="t('st.tabSecurity')" name="security">
+        <div class="setting-stack">
+          <section class="lp-card">
+            <header class="lp-card-head">
+              <h2 class="lp-card-title"><el-icon><Lock /></el-icon>{{ t('st.sessionTitle') }}</h2>
+            </header>
+            <div class="lp-card-body">
+              <el-form label-position="top">
+                <el-form-item :label="t('st.sessionTimeout')">
+                  <el-select v-model="form.session_timeout" style="max-width: 260px">
+                    <el-option :label="t('st.hours1')" value="1" />
+                    <el-option :label="t('st.hours6')" value="6" />
+                    <el-option :label="t('st.hours12')" value="12" />
+                    <el-option :label="t('st.hours24')" value="24" />
+                    <el-option :label="t('st.days7')" value="168" />
+                  </el-select>
+                  <span class="hint">{{ t('st.sessionTimeoutHint') }}</span>
+                </el-form-item>
+              </el-form>
+            </div>
+          </section>
+
+          <section class="lp-card">
+            <header class="lp-card-head">
+              <h2 class="lp-card-title"><el-icon><User /></el-icon>{{ t('st.accountTitle') }}</h2>
+            </header>
+            <div class="lp-card-body">
+              <el-form ref="pwRef" :model="pwForm" :rules="pwRules" label-position="top">
+                <div class="grid-3">
+                  <el-form-item :label="t('st.oldPassword')" prop="old_password">
+                    <el-input v-model="pwForm.old_password" type="password" show-password autocomplete="current-password" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.newPassword')" prop="new_password">
+                    <el-input v-model="pwForm.new_password" type="password" show-password autocomplete="new-password" />
+                  </el-form-item>
+                  <el-form-item :label="t('st.confirmPassword')" prop="confirm_password">
+                    <el-input v-model="pwForm.confirm_password" type="password" show-password autocomplete="new-password" />
+                  </el-form-item>
+                </div>
+                <el-button type="primary" :loading="changingPw" @click="changePassword">
+                  {{ t('st.updatePassword') }}
+                </el-button>
+              </el-form>
+            </div>
+          </section>
+
+          <section class="lp-card">
+            <header class="lp-card-head">
+              <h2 class="lp-card-title"><el-icon><Warning /></el-icon>{{ t('st.exposureTitle') }}</h2>
+            </header>
+            <div class="lp-card-body">
+              <ul class="check-list">
+                <li v-for="check in securityChecks" :key="check.key" class="check">
+                  <span class="check__dot" :class="`check__dot--${check.level}`"></span>
+                  <div class="check__body">
+                    <span class="check__label">{{ check.label }}</span>
+                    <span class="check__detail">{{ check.detail }}</span>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </section>
+        </div>
+      </el-tab-pane>
+
+      <!-- ============ Alerts ============ -->
+      <el-tab-pane :label="t('st.tabAlerts')" name="alerts">
+        <section class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title"><el-icon><Bell /></el-icon>{{ t('st.alertTitle') }}</h2>
+          </header>
+          <div class="lp-card-body">
+            <p class="section-note">{{ t('st.alertHint') }}</p>
+            <el-form label-position="top">
+              <div class="grid-3">
+                <el-form-item v-for="item in alertFields" :key="item.key" :label="item.label">
+                  <el-slider
+                    v-model="alerts[item.key]"
+                    :min="50"
+                    :max="100"
+                    :marks="{ 70: '70', 90: '90' }"
+                    show-input
+                    :show-input-controls="false"
+                  />
+                </el-form-item>
+              </div>
+              <el-form-item>
+                <el-switch v-model="alertsEnabled" :active-text="t('st.alertEnabled')" />
+              </el-form-item>
+            </el-form>
+          </div>
+        </section>
+      </el-tab-pane>
+
+      <!-- ============ About ============ -->
+      <el-tab-pane :label="t('st.tabAbout')" name="about">
+        <section class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title"><el-icon><InfoFilled /></el-icon>{{ t('st.aboutTitle') }}</h2>
+          </header>
+          <div class="lp-card-body">
+            <dl class="about-grid">
+              <div><dt>{{ t('st.panelVersion') }}</dt><dd>v{{ info?.panel_version || '—' }}</dd></div>
+              <div><dt>{{ t('db.hostname') }}</dt><dd>{{ info?.hostname || '—' }}</dd></div>
+              <div><dt>{{ t('db.system') }}</dt><dd>{{ info?.os_version || info?.os_name || '—' }}</dd></div>
+              <div><dt>{{ t('db.kernel') }}</dt><dd class="lp-truncate">{{ info?.kernel_version || '—' }}</dd></div>
+              <div><dt>{{ t('db.platform') }}</dt><dd>{{ info?.platform || '—' }}</dd></div>
+              <div><dt>{{ t('db.processor') }}</dt><dd class="lp-truncate">{{ info?.cpu_model || '—' }}</dd></div>
+              <div><dt>{{ t('db.physCores') }}</dt><dd>{{ info?.physical_cores }} / {{ info?.logical_cores }}</dd></div>
+              <div><dt>{{ t('db.memory') }}</dt><dd>{{ formatBytes(info?.mem_total) }}</dd></div>
+            </dl>
+          </div>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useI18n } from '@/i18n'
-import { getSettings, saveSettingsApi } from '@/api'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
+import type { FormRules } from 'element-plus'
+import {
+  Bell, Connection, InfoFilled, Lock, Refresh, Setting, User, Warning,
+} from '@element-plus/icons-vue'
+import {
+  changePasswordApi, getOpenRestyStatus, getSettings, saveSettingsApi,
+} from '@/api'
+import { useI18n } from '@/i18n'
+import { useRealtimeStore } from '@/stores/realtime'
+import { useUserStore } from '@/stores/user'
+import { formatBytes } from '@/utils/format'
 
 const { t } = useI18n()
+const realtime = useRealtimeStore()
+const userStore = useUserStore()
+const { staticInfo: info, detail } = storeToRefs(realtime)
+
+const tab = ref('general')
+const loading = ref(false)
 const saving = ref(false)
+const openresty = ref<any>(null)
 
 const form = reactive({
   panel_name: 'LinxPanel',
   panel_port: 7200,
   session_timeout: '24',
   api_url: '',
+  openresty_bin: '',
+  openresty_conf_path: '',
+  openresty_sites_dir: '',
+  php_fpm_addr: '',
+})
+const openrestyEnabled = ref(true)
+const alertsEnabled = ref(false)
+const alerts = reactive<Record<string, number>>({ cpu: 90, memory: 90, disk: 85 })
+
+const alertFields = computed(() => [
+  { key: 'cpu', label: `${t('db.cpu')} (%)` },
+  { key: 'memory', label: `${t('db.memory')} (%)` },
+  { key: 'disk', label: `${t('db.disk')} (%)` },
+])
+
+/** Read-only posture summary built from data the panel already has. */
+const securityChecks = computed(() => {
+  const checks: { key: string; label: string; detail: string; level: 'ok' | 'warn' | 'danger' }[] = []
+
+  const isDefaultUser = userStore.username === 'admin'
+  checks.push({
+    key: 'account',
+    label: t('st.checkDefaultAccount'),
+    detail: isDefaultUser ? t('st.checkDefaultAccountWarn') : t('st.checkDefaultAccountOk'),
+    level: isDefaultUser ? 'warn' : 'ok',
+  })
+
+  const https = window.location.protocol === 'https:'
+  checks.push({
+    key: 'https',
+    label: t('st.checkHttps'),
+    detail: https ? t('st.checkHttpsOk') : t('st.checkHttpsWarn'),
+    level: https ? 'ok' : 'warn',
+  })
+
+  const hours = Number(form.session_timeout || 24)
+  checks.push({
+    key: 'session',
+    label: t('st.checkSession'),
+    detail: t('st.checkSessionDetail', { hours }),
+    level: hours > 24 ? 'warn' : 'ok',
+  })
+
+  const interfaces = detail.value?.interfaces?.length ?? 0
+  checks.push({
+    key: 'interfaces',
+    label: t('st.checkInterfaces'),
+    detail: t('st.checkInterfacesDetail', { n: interfaces }),
+    level: 'ok',
+  })
+
+  return checks
 })
 
-async function loadSettings() {
+async function load() {
+  loading.value = true
   try {
-    const res: any = await getSettings()
-    if (res.success && res.data) {
-      const data = res.data as Record<string, any>
-      form.panel_name = String(data.panel_name ?? form.panel_name)
-      form.panel_port = Number(data.panel_port ?? form.panel_port)
-      form.session_timeout = String(data.session_timeout ?? form.session_timeout)
-      form.api_url = String(data.api_url ?? form.api_url)
+    const [settingsRes, openrestyRes]: any[] = await Promise.all([
+      getSettings(),
+      getOpenRestyStatus().catch(() => ({ success: false })),
+    ])
+
+    if (settingsRes.success) {
+      const data = settingsRes.data || {}
+      form.panel_name = data.panel_name || 'LinxPanel'
+      form.panel_port = Number(data.panel_port || 7200)
+      form.session_timeout = String(data.session_timeout || '24')
+      form.api_url = data.api_url || ''
+      form.openresty_bin = data.openresty_bin || ''
+      form.openresty_conf_path = data.openresty_conf_path || ''
+      form.openresty_sites_dir = data.openresty_sites_dir || ''
+      form.php_fpm_addr = data.php_fpm_addr || ''
+      openrestyEnabled.value = data.openresty_enabled !== 'false'
+      alertsEnabled.value = data.alerts_enabled === 'true'
+      alerts.cpu = Number(data.alert_cpu || 90)
+      alerts.memory = Number(data.alert_memory || 90)
+      alerts.disk = Number(data.alert_disk || 85)
     }
-  } catch {}
+    if (openrestyRes.success) openresty.value = openrestyRes.data
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    loading.value = false
+  }
 }
 
-async function saveSettings() {
+async function save() {
   saving.value = true
   try {
-    const res: any = await saveSettingsApi(form as Record<string, any>)
-    if (res.success) {
-      ElMessage.success(t('st.saved'))
-    } else {
-      ElMessage.error(res.message || t('api.requestFailed'))
+    const payload: Record<string, string> = {
+      panel_name: form.panel_name,
+      panel_port: String(form.panel_port),
+      session_timeout: form.session_timeout,
+      api_url: form.api_url,
+      openresty_bin: form.openresty_bin,
+      openresty_conf_path: form.openresty_conf_path,
+      openresty_sites_dir: form.openresty_sites_dir,
+      php_fpm_addr: form.php_fpm_addr,
+      openresty_enabled: String(openrestyEnabled.value),
+      alerts_enabled: String(alertsEnabled.value),
+      alert_cpu: String(alerts.cpu),
+      alert_memory: String(alerts.memory),
+      alert_disk: String(alerts.disk),
     }
+    const res: any = await saveSettingsApi(payload)
+    if (res.success) ElMessage.success(t('st.saved'))
+  } catch {
+    // Interceptor reports it.
   } finally {
     saving.value = false
   }
 }
 
-onMounted(async () => {
-  await loadSettings()
-})
+// --- Password ---
+const pwRef = ref()
+const changingPw = ref(false)
+const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
+const pwRules = computed<FormRules>(() => ({
+  old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+  new_password: [
+    { required: true, message: t('st.passwordRequired'), trigger: 'blur' },
+    { min: 6, message: t('st.passwordTooShort'), trigger: 'blur' },
+  ],
+  confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+}))
+
+async function changePassword() {
+  if (pwForm.new_password !== pwForm.confirm_password) {
+    ElMessage.warning(t('st.passwordMismatch'))
+    return
+  }
+  try {
+    await pwRef.value?.validate()
+  } catch {
+    return
+  }
+  changingPw.value = true
+  try {
+    const res: any = await changePasswordApi({
+      username: userStore.username,
+      old_password: pwForm.old_password,
+      new_password: pwForm.new_password,
+    })
+    if (res.success) {
+      ElMessage.success(t('st.passwordChanged'))
+      pwForm.old_password = ''
+      pwForm.new_password = ''
+      pwForm.confirm_password = ''
+      pwRef.value?.clearValidate()
+    }
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    changingPw.value = false
+  }
+}
+
+onMounted(load)
 </script>
 
 <style scoped lang="scss">
-.settings-page { max-width: 1200px; }
-.setting-card {
-  background: var(--lp-card-bg);
-  border: 1px solid var(--lp-border-light);
-  border-radius: var(--lp-radius-lg);
-  :deep(.el-card__header) { padding: 14px 20px; border-bottom: 1px solid var(--lp-border-light); }
-  :deep(.el-card__body) { padding: 20px; }
+.setting-stack { display: flex; flex-direction: column; gap: var(--lp-4); }
+
+.grid-2,
+.grid-3 { display: grid; gap: 0 var(--lp-4); }
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+.hint {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-dim);
+  line-height: 1.5;
+
+  &--inline { display: inline; margin-left: var(--lp-3); }
 }
-.card-hd {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 15px; font-weight: 600; color: var(--lp-text-primary);
-  .el-icon { color: var(--lp-primary); }
+
+.section-note {
+  margin-bottom: var(--lp-4);
+  font-size: var(--lp-text-base);
+  color: var(--lp-text-dim);
+}
+
+/* Security checklist */
+.check-list { display: flex; flex-direction: column; gap: var(--lp-3); }
+.check { display: flex; align-items: flex-start; gap: var(--lp-3); }
+.check__dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex: none;
+  &--ok { background: var(--lp-ok); }
+  &--warn { background: var(--lp-warn); }
+  &--danger { background: var(--lp-danger); }
+}
+.check__body { display: flex; flex-direction: column; min-width: 0; }
+.check__label { font-size: var(--lp-text-base); font-weight: 500; color: var(--lp-text); }
+.check__detail { font-size: var(--lp-text-sm); color: var(--lp-text-dim); }
+
+/* About */
+.about-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--lp-4);
+  margin: 0;
+
+  div { min-width: 0; }
+  dt { font-size: var(--lp-text-xs); color: var(--lp-text-dim); margin-bottom: 3px; }
+  dd { margin: 0; font-size: var(--lp-text-base); font-weight: 500; color: var(--lp-text); }
 }
 </style>

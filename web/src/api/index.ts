@@ -6,8 +6,85 @@ export const login = (data: { username: string; password: string }) =>
 
 // System
 export const getSystemInfo = () => request.get('/system/info')
-export const getSystemProcesses = (limit = 15) =>
-  request.get('/system/processes', { params: { limit } })
+export const getSystemOverview = () => request.get('/system/overview')
+export const getRealtimeSnapshot = () => request.get('/realtime/snapshot')
+
+// Processes
+export type ProcessQuery = {
+  keyword?: string
+  sort_by?: string
+  order?: string
+  offset?: number
+  limit?: number
+}
+export const getProcesses = (params: ProcessQuery = {}) =>
+  request.get('/processes', { params })
+export const signalProcess = (pid: number, signal: string) =>
+  request.post(`/processes/${pid}/signal`, { signal })
+
+// Services
+export const getServiceBackend = () => request.get('/services/backend')
+export const getServices = () => request.get('/services')
+export const serviceAction = (data: { name: string; action: string }) =>
+  request.post('/services/action', data)
+export const getServiceStatus = (name: string) =>
+  request.get(`/services/${encodeURIComponent(name)}/status`)
+export const getServiceLogs = (name: string, lines = 200) =>
+  request.get(`/services/${encodeURIComponent(name)}/logs`, { params: { lines } })
+
+// Cron
+export type CronJobPayload = {
+  name: string
+  schedule: string
+  command: string
+  enabled: boolean
+}
+export const getCronBackend = () => request.get('/cron/backend')
+export const getCronJobs = () => request.get('/cron')
+export const createCronJob = (data: CronJobPayload) => request.post('/cron', data)
+export const updateCronJob = (id: number, data: CronJobPayload) => request.post(`/cron/${id}`, data)
+export const deleteCronJob = (id: number) => request.delete(`/cron/${id}`)
+export const toggleCronJob = (id: number, enabled: boolean) =>
+  request.post(`/cron/${id}/toggle`, { enabled })
+
+// Firewall & ports
+export const getFirewallStatus = () => request.get('/firewall/status')
+export const getFirewallRules = () => request.get('/firewall/rules')
+export const addFirewallRule = (data: {
+  port: string
+  protocol: string
+  action: string
+  source: string
+}) => request.post('/firewall/rules', data)
+export const deleteFirewallRule = (id: string) =>
+  request.delete(`/firewall/rules/${encodeURIComponent(id)}`)
+export const toggleFirewall = (enabled: boolean) => request.post('/firewall/toggle', { enabled })
+export const getListeningPorts = () => request.get('/network/ports')
+
+// Runtimes & managed applications
+export const getRuntimes = () => request.get('/runtimes')
+export const installRuntime = (kind: string) =>
+  request.post('/runtimes/install', { kind }, { timeout: 20 * 60 * 1000 })
+
+export type AppPayload = {
+  name: string
+  runtime: string
+  work_dir: string
+  entry: string
+  args: string
+  env: string
+  port: number
+  autostart: boolean
+}
+export const getApps = () => request.get('/apps')
+export const createApp = (data: AppPayload) => request.post('/apps', data)
+export const updateApp = (id: number, data: AppPayload) => request.post(`/apps/${id}`, data)
+export const deleteApp = (id: number) => request.delete(`/apps/${id}`)
+export const appAction = (id: number, action: 'start' | 'stop' | 'restart') =>
+  request.post(`/apps/${id}/${action}`)
+export const getAppLogs = (id: number, lines = 300) =>
+  request.get(`/apps/${id}/logs`, { params: { lines } })
+export const clearAppLogs = (id: number) => request.delete(`/apps/${id}/logs`)
 
 // Sites
 export const getSites = () => request.get('/sites')
@@ -17,6 +94,28 @@ export const updateSite = (id: number, data: any) => request.put(`/sites/${id}`,
 export const deleteSite = (id: number) => request.delete(`/sites/${id}`)
 export const startSite = (id: number) => request.post(`/sites/${id}/start`)
 export const stopSite = (id: number) => request.post(`/sites/${id}/stop`)
+
+// Certificates
+export const getCerts = () => request.get('/certs')
+export const getAcmeStatus = () => request.get('/certs/acme/status')
+export const uploadCert = (data: { name: string; cert_pem: string; key_pem: string }) =>
+  request.post('/certs/upload', data)
+export const createSelfSignedCert = (data: { name: string; domains: string[]; days: number }) =>
+  request.post('/certs/self-signed', data)
+export const issueAcmeCert = (data: {
+  name: string
+  domains: string[]
+  email: string
+  webroot: string
+  staging: boolean
+}) => request.post('/certs/acme', data, { timeout: 12 * 60 * 1000 })
+export const renewCert = (id: number) =>
+  request.post(`/certs/${id}/renew`, {}, { timeout: 12 * 60 * 1000 })
+export const deleteCert = (id: number) => request.delete(`/certs/${id}`)
+export const bindSiteSsl = (
+  siteId: number,
+  data: { cert_id: number | null; force_https: boolean; hsts: boolean },
+) => request.post(`/sites/${siteId}/ssl`, data)
 
 // Domains
 export const getDomains = (siteId: number) => request.get(`/sites/${siteId}/domains`)

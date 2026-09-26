@@ -1,0 +1,237 @@
+/* ============================================================
+   LinxPanel design tokens
+   Single source of truth for color, space, type, radius, motion.
+   Element Plus is themed by mapping its own --el-* vars onto these,
+   which is why the component overrides below need almost no !important.
+   ============================================================ */
+
+:root {
+  /* --- Brand ramp --- */
+  --lp-accent-50:  #eef2ff;
+  --lp-accent-100: #dbe3ff;
+  --lp-accent-200: #bccbff;
+  --lp-accent-300: #94a9fd;
+  --lp-accent-400: #6b83f8;
+  --lp-accent-500: #4f63e8;
+  --lp-accent-600: #3f4ed0;
+  --lp-accent-700: #333fa8;
+
+  --lp-accent: var(--lp-accent-500);
+  --lp-accent-hover: var(--lp-accent-400);
+  --lp-accent-active: var(--lp-accent-600);
+  --lp-accent-soft: rgba(79, 99, 232, 0.10);
+  --lp-accent-ring: rgba(79, 99, 232, 0.28);
+
+  /* --- Status --- */
+  --lp-ok: #16a34a;
+  --lp-ok-soft: rgba(22, 163, 74, 0.10);
+  --lp-warn: #d97706;
+  --lp-warn-soft: rgba(217, 119, 6, 0.10);
+  --lp-danger: #dc2626;
+  --lp-danger-soft: rgba(220, 38, 38, 0.10);
+  --lp-muted: #64748b;
+  --lp-muted-soft: rgba(100, 116, 139, 0.10);
+
+  /* --- Chart series (color-blind safe, ordered by first use) --- */
+  --lp-series-1: #4f63e8;
+  --lp-series-2: #0d9488;
+  --lp-series-3: #d97706;
+  --lp-series-4: #be185d;
+  --lp-series-5: #7c3aed;
+  --lp-series-6: #0284c7;
+
+  /* --- Surfaces (light) --- */
+  --lp-canvas: #f6f7f9;
+  --lp-surface: #ffffff;
+  --lp-surface-raised: #ffffff;
+  --lp-surface-sunken: #f1f3f6;
+  --lp-surface-hover: #f5f7fa;
+  --lp-nav: #ffffff;
+  --lp-nav-text: #495468;
+  --lp-nav-text-active: var(--lp-accent-600);
+  --lp-nav-active-bg: var(--lp-accent-soft);
+
+  /* --- Text --- */
+  --lp-text: #101828;
+  --lp-text-soft: #475467;
+  --lp-text-dim: #8a94a6;
+  --lp-text-faint: #b4bcc9;
+  --lp-text-invert: #ffffff;
+
+  /* --- Lines --- */
+  --lp-line: #e4e7ec;
+  --lp-line-soft: #eef0f3;
+  --lp-line-strong: #d0d5dd;
+
+  /* --- Space scale (4px base) --- */
+  --lp-1: 4px;
+  --lp-2: 8px;
+  --lp-3: 12px;
+  --lp-4: 16px;
+  --lp-5: 20px;
+  --lp-6: 24px;
+  --lp-8: 32px;
+  --lp-10: 40px;
+
+  /* --- Type scale --- */
+  --lp-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --lp-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --lp-text-xs: 11px;
+  --lp-text-sm: 12px;
+  --lp-text-base: 13px;
+  --lp-text-md: 14px;
+  --lp-text-lg: 16px;
+  --lp-text-xl: 20px;
+  --lp-text-2xl: 26px;
+
+  /* --- Radius --- */
+  --lp-r-sm: 6px;
+  --lp-r: 10px;
+  --lp-r-lg: 14px;
+  --lp-r-full: 999px;
+
+  /* --- Elevation --- */
+  --lp-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --lp-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --lp-shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.10), 0 4px 8px rgba(16, 24, 40, 0.05);
+
+  /* --- Motion --- */
+  --lp-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --lp-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* --- Layout --- */
+  --lp-sidebar-w: 216px;
+  --lp-sidebar-w-collapsed: 64px;
+  --lp-header-h: 56px;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --lp-accent-50:  #1a1f3d;
+  --lp-accent-100: #232a52;
+  --lp-accent-200: #2f3a73;
+  --lp-accent-300: #4553a8;
+  --lp-accent-400: #6376e0;
+  --lp-accent-500: #7b8bf0;
+  --lp-accent-600: #94a2f5;
+  --lp-accent-700: #b3bdf8;
+
+  --lp-accent: var(--lp-accent-500);
+  --lp-accent-hover: var(--lp-accent-600);
+  --lp-accent-active: var(--lp-accent-400);
+  --lp-accent-soft: rgba(123, 139, 240, 0.14);
+  --lp-accent-ring: rgba(123, 139, 240, 0.32);
+
+  --lp-ok: #4ade80;
+  --lp-ok-soft: rgba(74, 222, 128, 0.14);
+  --lp-warn: #fbbf24;
+  --lp-warn-soft: rgba(251, 191, 36, 0.14);
+  --lp-danger: #f87171;
+  --lp-danger-soft: rgba(248, 113, 113, 0.14);
+  --lp-muted: #94a3b8;
+  --lp-muted-soft: rgba(148, 163, 184, 0.14);
+
+  --lp-series-1: #7b8bf0;
+  --lp-series-2: #2dd4bf;
+  --lp-series-3: #fbbf24;
+  --lp-series-4: #f472b6;
+  --lp-series-5: #a78bfa;
+  --lp-series-6: #38bdf8;
+
+  --lp-canvas: #0b0d12;
+  --lp-surface: #14171f;
+  --lp-surface-raised: #1a1e28;
+  --lp-surface-sunken: #0f1218;
+  --lp-surface-hover: #1e2330;
+  --lp-nav: #14171f;
+  --lp-nav-text: #98a2b3;
+  --lp-nav-text-active: #ffffff;
+  --lp-nav-active-bg: rgba(123, 139, 240, 0.16);
+
+  --lp-text: #e7eaf0;
+  --lp-text-soft: #b6bdca;
+  --lp-text-dim: #7d8797;
+  --lp-text-faint: #58616f;
+  --lp-text-invert: #0b0d12;
+
+  --lp-line: #252a35;
+  --lp-line-soft: #1c2029;
+  --lp-line-strong: #333a48;
+
+  --lp-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lp-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lp-shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55), 0 4px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ============================================================
+   Legacy aliases
+   The Sites / Files / Settings views were written against the previous
+   variable names. Mapping them onto the new tokens means those screens
+   pick up the redesigned palette (including dark mode) without a rewrite.
+   Prefer the tokens above in new code; these exist so nothing renders unstyled.
+   ============================================================ */
+:root,
+[data-theme='dark'] {
+  --lp-primary: var(--lp-accent);
+  --lp-primary-light: var(--lp-accent-hover);
+  --lp-primary-dark: var(--lp-accent-active);
+  --lp-primary-bg: var(--lp-accent-soft);
+
+  --lp-success: var(--lp-ok);
+  --lp-success-bg: var(--lp-ok-soft);
+  --lp-warning: var(--lp-warn);
+  --lp-warning-bg: var(--lp-warn-soft);
+  --lp-danger-bg: var(--lp-danger-soft);
+  --lp-info: var(--lp-muted);
+
+  --lp-bg: var(--lp-canvas);
+  --lp-bg-page: var(--lp-canvas);
+  --lp-card-bg: var(--lp-surface);
+  --lp-card-hover: var(--lp-surface-hover);
+  --lp-header-bg: var(--lp-surface);
+  --lp-sidebar-bg: var(--lp-nav);
+  --lp-sidebar-text: var(--lp-nav-text);
+  --lp-sidebar-active-bg: var(--lp-nav-active-bg);
+  --lp-sidebar-active-text: var(--lp-nav-text-active);
+
+  --lp-text-primary: var(--lp-text);
+  --lp-text-regular: var(--lp-text-soft);
+  --lp-text-secondary: var(--lp-text-dim);
+  --lp-text-placeholder: var(--lp-text-faint);
+
+  --lp-border: var(--lp-line);
+  --lp-border-light: var(--lp-line-soft);
+  --lp-border-strong: var(--lp-line-strong);
+  --lp-divider: var(--lp-line);
+
+  --lp-radius-sm: var(--lp-r-sm);
+  --lp-radius: var(--lp-r-sm);
+  --lp-radius-lg: var(--lp-r);
+  --lp-radius-xl: var(--lp-r-lg);
+
+  --lp-transition: var(--lp-base);
+
+  --lp-gauge-low: var(--lp-ok);
+  --lp-gauge-mid: var(--lp-warn);
+  --lp-gauge-high: var(--lp-danger);
+
+  --lp-input-bg: var(--lp-surface);
+  --lp-input-border: var(--lp-line-strong);
+  --lp-table-header-bg: var(--lp-surface-sunken);
+  --lp-table-row-hover: var(--lp-surface-hover);
+  --lp-table-border: var(--lp-line-soft);
+  --lp-dialog-bg: var(--lp-surface-raised);
+  --lp-mask-bg: rgba(16, 24, 40, 0.45);
+  --lp-popover-bg: var(--lp-surface-raised);
+  --lp-scrollbar-thumb: var(--lp-line-strong);
+  --lp-tag-bg: var(--lp-accent-soft);
+  --lp-tag-text: var(--lp-accent);
+  --lp-tag-border: transparent;
+}
+
+[data-theme='dark'] {
+  --lp-mask-bg: rgba(0, 0, 0, 0.65);
+}
