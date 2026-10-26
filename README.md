@@ -11,7 +11,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 默认行为：
 
 - 首个提示选择语言（默认英文），第二个提示选择安装方式（默认二进制安装）
-- **二进制安装**：下载 GitHub Release 中的静态编译包（约 5MB，musl 静态链接，任意发行版/glibc 版本均可运行，x86_64 与 aarch64），并做 SHA256 校验，通常十几秒完成；无可用发布包时自动回退为编译安装
+- **二进制安装**：下载 GitHub Release 中的静态编译包（约 6MB，musl 静态链接，任意发行版 / glibc 版本均可运行，支持 x86_64、ARM64、ARMv7、x86 32 位、RISC-V 64、龙芯 LoongArch64、ppc64le、s390x，按 `uname -m` 自动选择），并做 SHA256 校验，通常十几秒完成；无可用发布包时自动回退为编译安装
 - **编译安装**：自动安装构建依赖；系统 Node.js 低于 18 时自动安装官方 Node.js，`cargo` 过旧时自动安装 `rustup stable`；内存小于 2GB 时单线程编译以避免 OOM
 - 安装目录：`/opt/linxpanel`，监听端口：`7200`（安装前检测端口占用）
 - **首次安装会生成随机管理员密码**并在结束时显示，不再使用公开的默认密码
@@ -35,6 +35,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 | `LINXPANEL_ENTRANCE=random\|off\|/自定义路径` | 安全入口（首次安装默认 `random`） |
 | `LINXPANEL_SSL=1\|0` | 面板 HTTPS（首次安装默认 `1`，自签证书） |
 | `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | GitHub 加速代理前缀（国内服务器下载慢时使用；代理可看到并提供下载内容，请仅使用可信代理） |
+| `LINXPANEL_RELEASE_BASE_URL=https://dl.example.com/linxpanel/v0.1.0` | 从自建镜像 / CDN 下载发布包（目录内放 `linxpanel-linux-<架构>.tar.gz` 与 `.sha256`，即 Release 附件），不经过 GitHub |
 | `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | 编译安装时的 Node.js 下载镜像 |
 | `LINXPANEL_OPEN_FIREWALL=0` | 不自动放行防火墙端口 |
 | `LINXPANEL_PUBLIC_IP=1.2.3.4` | 手动指定输出的访问 IP |
@@ -61,7 +62,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 
 ### 发布预编译包（维护者）
 
-推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会触发 `.github/workflows/release.yml`，自动构建 x86_64 / aarch64 静态二进制并发布到 GitHub Release，一键安装脚本会直接下载它。**在发布第一个 Release 之前，一键安装只能走编译安装（较慢）。**
+推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会触发 `.github/workflows/release.yml`，自动构建全部 8 种架构的静态二进制（每种都在 qemu 中实际启动并做 HTTP 冒烟测试后才发布），附带 SHA256SUMS，发布到 GitHub Release，一键安装脚本会直接下载它。**在发布第一个 Release 之前，一键安装只能走编译安装（较慢）。**
 
 ### 单文件部署（内嵌 Web）
 
@@ -305,7 +306,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 Defaults:
 
 - The first prompt asks for a language (English by default), the second for the install mode (binary by default)
-- **Binary install** downloads the static release package from GitHub Releases (~5MB, musl static, runs on any distro/glibc, x86_64 and aarch64) and verifies its SHA256 — usually done in seconds. Falls back to a source build when no release asset is available
+- **Binary install** downloads the static release package from GitHub Releases (~6MB, musl static, runs on any distro / glibc; x86_64, ARM64, ARMv7, 32-bit x86, RISC-V 64, LoongArch64, ppc64le and s390x, picked by `uname -m`) and verifies its SHA256 — usually done in seconds. Falls back to a source build when no release asset is available
 - **Source build** installs build dependencies, installs official Node.js when the system one is older than 18, switches to `rustup stable` when `cargo` is too old, and compiles single-threaded under 2GB RAM to avoid OOM
 - Install path `/opt/linxpanel`, port `7200` (checked for conflicts before installing)
 - **A fresh install generates a random admin password** and prints it at the end instead of using a published default
@@ -329,6 +330,7 @@ Optional environment variables:
 | `LINXPANEL_ENTRANCE=random\|off\|/custom-path` | Security entrance (fresh install default: `random`) |
 | `LINXPANEL_SSL=1\|0` | Panel HTTPS (fresh install default: `1`, self-signed) |
 | `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | Prefix for github.com downloads where GitHub is slow (the proxy sees and serves the files, so only use one you trust) |
+| `LINXPANEL_RELEASE_BASE_URL=https://dl.example.com/linxpanel/v0.1.0` | Download release packages from your own mirror / CDN (a directory with the release's `linxpanel-linux-<arch>.tar.gz` and `.sha256` files) instead of GitHub |
 | `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | Node.js download mirror for source builds |
 | `LINXPANEL_OPEN_FIREWALL=0` | Do not open the firewall port |
 | `LINXPANEL_PUBLIC_IP=1.2.3.4` | Override the printed access IP |
@@ -353,7 +355,7 @@ Optional environment variables:
 
 ### Publishing Prebuilt Binaries (maintainers)
 
-Pushing a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) runs `.github/workflows/release.yml`, which builds static x86_64 / aarch64 binaries and attaches them to a GitHub Release that the installer downloads. **Until the first release exists, the installer can only build from source (slow).**
+Pushing a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) runs `.github/workflows/release.yml`, which builds static binaries for all 8 architectures (each one is started under qemu and smoke-tested over HTTP before publishing), with SHA256SUMS, and attaches them to a GitHub Release that the installer downloads. **Until the first release exists, the installer can only build from source (slow).**
 
 ### Single Binary Deployment (Embedded Web)
 

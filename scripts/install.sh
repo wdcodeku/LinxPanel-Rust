@@ -18,6 +18,9 @@ REPO_URL="${LINXPANEL_REPO_URL:-https://github.com/${GITHUB_REPO}.git}"
 RELEASE_API_URL="${LINXPANEL_RELEASE_API_URL:-https://api.github.com/repos/${GITHUB_REPO}/releases/latest}"
 LP_CLI_RAW_URL="${LINXPANEL_LP_CLI_RAW_URL:-https://raw.githubusercontent.com/${GITHUB_REPO}/main/scripts/lp}"
 VERSION="${LINXPANEL_VERSION:-latest}"
+# Self-hosted mirror of the release packages (a directory holding
+# linxpanel-linux-<arch>.tar.gz and .sha256 files), e.g. on your own CDN.
+RELEASE_BASE_URL="${LINXPANEL_RELEASE_BASE_URL:-}"
 INSTALL_ROOT="${LINXPANEL_INSTALL_ROOT:-/opt/linxpanel}"
 PORT="${LINXPANEL_PORT:-}"
 # Whether the port was asked for explicitly (it then overrides one saved in the panel).
@@ -565,6 +568,13 @@ detect_arch() {
   case "${machine}" in
     x86_64 | amd64) echo "x86_64" ;;
     aarch64 | arm64) echo "aarch64" ;;
+    # armv8l: a 32-bit userland on a 64-bit ARM kernel runs armv7 binaries.
+    armv7* | armv8l | armhf) echo "armv7" ;;
+    i386 | i486 | i586 | i686) echo "i686" ;;
+    riscv64) echo "riscv64" ;;
+    loongarch64) echo "loongarch64" ;;
+    ppc64le) echo "ppc64le" ;;
+    s390x) echo "s390x" ;;
     *) echo "" ;;
   esac
 }
@@ -632,12 +642,16 @@ download_binary_release() {
   local extract_dir="${tmp_dir}/release-extract"
   local binary_path=""
 
-  if [[ "${VERSION}" == "latest" ]]; then
-    base_url="https://github.com/${GITHUB_REPO}/releases/latest/download"
+  if [[ -n "${RELEASE_BASE_URL}" ]]; then
+    asset_url="${RELEASE_BASE_URL%/}/${asset_name}"
   else
-    base_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+    if [[ "${VERSION}" == "latest" ]]; then
+      base_url="https://github.com/${GITHUB_REPO}/releases/latest/download"
+    else
+      base_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+    fi
+    asset_url="$(github_url "${base_url}/${asset_name}")"
   fi
-  asset_url="$(github_url "${base_url}/${asset_name}")"
   asset_file="${tmp_dir}/${asset_name}"
 
   logf download_release_asset "${asset_url}"
