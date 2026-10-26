@@ -213,7 +213,7 @@ status_cmd() {
   fi
   if is_running; then
     echo "LinxPanel is running (PID: $(running_pids | tr '\n' ' '))."
-    echo "URL: http://$(detect_ip):$(current_port)"
+    echo "URL: $(panel_url)"
   else
     echo "LinxPanel is not running."
   fi
@@ -273,19 +273,75 @@ update_cmd() {
     bash -c "${script}"
 }
 
-reset_password_cmd() {
-  local user="${1:-admin}"
-  echo "Resetting password for '${user}'..."
+# Runs a `linxpanel` subcommand against the installed database.
+panel_cli() {
   run_sudo env \
     DATABASE_URL="$(current_database_url)" \
     RUST_LOG=error \
-    "${BIN_PATH}" reset-password --user "${user}"
-  # Keep the database owned by the service account after a root-run reset.
+    "${BIN_PATH}" "$@"
+}
+
+# A key from `linxpanel info`; empty on binaries that predate the command.
+# Those ignore unknown arguments and start the server, hence the timeout.
+panel_info() {
+  local timeout_cmd=()
+  has_cmd timeout && timeout_cmd=(timeout 5)
+  run_sudo env DATABASE_URL="$(current_database_url)" RUST_LOG=error \
+    ${timeout_cmd[@]+"${timeout_cmd[@]}"} "${BIN_PATH}" info 2>/dev/null \
+    | sed -n -E "s/^$1=(.*)$/\1/p" | head -n1 || true
+}
+
+# Subcommands run as root; keep the data owned by the service account.
+fix_data_owner() {
   local owner=""
   owner="$(read_service_value "User" || true)"
   if [[ -n "${owner}" ]]; then
     run_sudo chown -R "${owner}" "${INSTALL_ROOT}/data" 2>/dev/null || true
   fi
+}
+
+panel_url() {
+  local scheme=""
+  scheme="$(panel_info scheme)"
+  printf '%s://%s:%s%s' "${scheme:-http}" "$(detect_ip)" "$(current_port)" "$(panel_info entrance)"
+}
+
+# Restarts the panel so entrance / HTTPS changes take effect.
+apply_restart() {
+  if systemd_available; then
+    run_sudo systemctl restart "${SERVICE_NAME}"
+  elif is_running; then
+    stop_no_systemd
+    start_no_systemd
+  else
+    return
+  fi
+  echo "LinxPanel restarted. URL: $(panel_url)"
+}
+
+entrance_cmd() {
+  local action="${1:-show}"
+  panel_cli entrance "$@" | grep -v "^Restart the panel"
+  fix_data_owner
+  if [[ "${action}" != "show" && "${action}" != "status" ]]; then
+    apply_restart
+  fi
+}
+
+ssl_cmd() {
+  local action="${1:-status}"
+  panel_cli ssl "$@" | grep -v "^Restart the panel"
+  fix_data_owner
+  if [[ "${action}" != "status" ]]; then
+    apply_restart
+  fi
+}
+
+reset_password_cmd() {
+  local user="${1:-admin}"
+  echo "Resetting password for '${user}'..."
+  panel_cli reset-password --user "${user}"
+  fix_data_owner
 }
 
 uninstall_cmd() {
@@ -334,7 +390,7 @@ info_cmd() {
   echo "Logs: ${LOG_OUT} | ${LOG_ERR}"
   echo "Version: $(version_text)"
   echo "Port: $(current_port)"
-  echo "URL: http://$(detect_ip):$(current_port)"
+  echo "URL: $(panel_url)"
   if is_running; then
     echo "Status: running (PID: $(running_pids | tr '\n' ' '))"
   else
@@ -364,6 +420,9 @@ Usage:
   Lp info                   Show runtime info
   Lp update [binary|build]  Upgrade/reinstall LinxPanel (data is kept)
   Lp reset-password [user]  Set a new random password (default user: admin)
+  Lp entrance [show|off|random|/path]
+                            Show or change the security entrance
+  Lp ssl [status|on|off]    Show or change panel HTTPS (self-signed by default)
   Lp version                Show installed version
   Lp enable                 Enable systemd service
   Lp disable                Disable systemd service
@@ -378,7 +437,7 @@ cmd="${1:-help}"
 
 require_binary=0
 case "${cmd}" in
-  start|restart|logs|info|reset-password|version) require_binary=1 ;;
+  start|restart|logs|info|reset-password|version|entrance|ssl) require_binary=1 ;;
 esac
 
 if [[ "${require_binary}" == "1" && ! -x "${BIN_PATH}" ]]; then
@@ -424,6 +483,14 @@ case "${cmd}" in
     ;;
   update)
     update_cmd "${2:-binary}"
+    ;;
+  entrance)
+    shift
+    entrance_cmd "$@"
+    ;;
+  ssl)
+    shift
+    ssl_cmd "$@"
     ;;
   reset-password|resetpwd)
     reset_password_cmd "${2:-admin}"

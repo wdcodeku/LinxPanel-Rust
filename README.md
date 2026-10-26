@@ -15,6 +15,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 - **编译安装**：自动安装构建依赖；系统 Node.js 低于 18 时自动安装官方 Node.js，`cargo` 过旧时自动安装 `rustup stable`；内存小于 2GB 时单线程编译以避免 OOM
 - 安装目录：`/opt/linxpanel`，监听端口：`7200`（安装前检测端口占用）
 - **首次安装会生成随机管理员密码**并在结束时显示，不再使用公开的默认密码
+- **首次安装默认启用随机安全入口和面板 HTTPS**（自签证书，HTTP 访问自动跳转 HTTPS），未带安全入口的访问一律返回 404
 - 自动在已启用的 ufw / firewalld 中放行面板端口，配置 logrotate 日志轮转
 - 自动创建并启动 `systemd` 服务（无 systemd 时使用 nohup）
 - 启动后进行健康检查，确认面板可访问才显示「部署完成」
@@ -31,6 +32,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 | `LINXPANEL_PORT=8888` | 面板端口 |
 | `LINXPANEL_VERSION=v0.1.0` | 安装指定版本（默认最新） |
 | `LINXPANEL_ADMIN_PASSWORD=...` | 指定管理员密码（默认随机生成） |
+| `LINXPANEL_ENTRANCE=random\|off\|/自定义路径` | 安全入口（首次安装默认 `random`） |
+| `LINXPANEL_SSL=1\|0` | 面板 HTTPS（首次安装默认 `1`，自签证书） |
 | `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | GitHub 加速代理前缀（国内服务器下载慢时使用；代理可看到并提供下载内容，请仅使用可信代理） |
 | `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | 编译安装时的 Node.js 下载镜像 |
 | `LINXPANEL_OPEN_FIREWALL=0` | 不自动放行防火墙端口 |
@@ -45,7 +48,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 - `Lp logs [out|err|all|service]`：查看日志
 - `Lp info`：查看版本、安装路径、端口与访问地址
 - `Lp update [binary|build]`：一键升级（默认二进制，失败自动回滚）
-- `Lp reset-password [用户名]`：重置密码（生成新的随机密码）
+- `Lp reset-password [用户名]`：重置密码（生成新的随机密码，并让该用户所有已登录会话失效）
+- `Lp entrance [show|off|random|/路径]`：查看或修改安全入口（修改后自动重启面板）
+- `Lp ssl [status|on|off]`：查看或开关面板 HTTPS（修改后自动重启面板）
 - `Lp version`：查看版本
 - `Lp uninstall [--purge]`：卸载（默认保留数据，`--purge` 同时删除数据）
 
@@ -109,6 +114,13 @@ LinxPanel 在构建时会将 `web/dist` 内嵌进 Rust 可执行文件，部署�
 - 支持 ufw 与 firewalld，端口与来源地址均做白名单校验
 - `GET /api/network/ports`：列出监听端口及占用进程（ss → lsof → netstat 自动降级）
 - 只读探测在无 sudo 时自动降级为非特权执行，不会直接报错
+
+### 面板访问安全
+
+- **安全入口**：设置后，必须先访问 `https://IP:端口/入口路径` 才能打开面板，其它路径（包括登录接口）一律返回 404，避免面板被扫描发现。入口通过签名 Cookie 记住 30 天，修改入口会让其它浏览器的 Cookie 失效
+- **面板 HTTPS**：使用自签证书或证书库中的任意证书；HTTP 请求会被 301 跳转到 HTTPS；证书无法加载时自动退回 HTTP 并记录错误，避免面板无法访问
+- **登录保护**：同一 IP 15 分钟内失败 5 次即锁定；修改密码后该用户其它所有会话立即失效
+- 在「面板设置 → 安全 → 面板访问」中修改，systemd 下可直接在页面重启面板；忘记入口或证书出错时在服务器执行 `Lp entrance` / `Lp ssl off`
 
 ### 会话持久化
 
@@ -230,6 +242,7 @@ Defaults:
 - **Source build** installs build dependencies, installs official Node.js when the system one is older than 18, switches to `rustup stable` when `cargo` is too old, and compiles single-threaded under 2GB RAM to avoid OOM
 - Install path `/opt/linxpanel`, port `7200` (checked for conflicts before installing)
 - **A fresh install generates a random admin password** and prints it at the end instead of using a published default
+- **A fresh install enables a random security entrance and panel HTTPS** (self-signed, HTTP redirects to HTTPS); requests without the entrance get a 404
 - Opens the panel port in an active ufw / firewalld, and sets up logrotate
 - Creates and starts a `systemd` service (nohup when systemd is unavailable)
 - Health-checks the panel and only reports success once it answers
@@ -246,6 +259,8 @@ Optional environment variables:
 | `LINXPANEL_PORT=8888` | Panel port |
 | `LINXPANEL_VERSION=v0.1.0` | Install a specific release (default: latest) |
 | `LINXPANEL_ADMIN_PASSWORD=...` | Set the admin password (default: random) |
+| `LINXPANEL_ENTRANCE=random\|off\|/custom-path` | Security entrance (fresh install default: `random`) |
+| `LINXPANEL_SSL=1\|0` | Panel HTTPS (fresh install default: `1`, self-signed) |
 | `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | Prefix for github.com downloads where GitHub is slow (the proxy sees and serves the files, so only use one you trust) |
 | `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | Node.js download mirror for source builds |
 | `LINXPANEL_OPEN_FIREWALL=0` | Do not open the firewall port |
@@ -258,7 +273,9 @@ Optional environment variables:
 - `Lp logs [out|err|all|service]`: tail logs
 - `Lp info`: show version, install path, port, and access URL
 - `Lp update [binary|build]`: one-command upgrade (default: binary, rolls back on failure)
-- `Lp reset-password [user]`: set a new random password
+- `Lp reset-password [user]`: set a new random password and sign out that user's sessions
+- `Lp entrance [show|off|random|/path]`: show or change the security entrance (restarts the panel)
+- `Lp ssl [status|on|off]`: show or toggle panel HTTPS (restarts the panel)
 - `Lp version`: show the installed version
 - `Lp uninstall [--purge]`: remove LinxPanel (data is kept unless `--purge`)
 
@@ -323,6 +340,13 @@ A single background sampler ticks once per second and every connected client sha
 - Supports ufw and firewalld; ports and source addresses are validated against an allowlist
 - `GET /api/network/ports`: listening sockets with owning process (ss → lsof → netstat fallback)
 - Read-only probes fall back to unprivileged execution instead of erroring when sudo is unavailable
+
+### Panel Access Security
+
+- **Security entrance**: when set, the panel only opens after visiting `https://IP:port/<entrance>`; every other path, including the login API, returns 404 so scanners cannot find the panel. A signed cookie remembers the browser for 30 days, and changing the entrance revokes other browsers' cookies
+- **Panel HTTPS**: a self-signed certificate or any certificate from the certificate store; plain HTTP requests get a 301 to HTTPS; a certificate that fails to load falls back to HTTP with a logged error instead of locking you out
+- **Login protection**: 5 failures from one IP within 15 minutes locks that IP out; changing a password signs out every other session of that user
+- Managed under Settings → Security → Panel access, with an in-page restart under systemd; locked out? run `Lp entrance` / `Lp ssl off` on the server
 
 ### Session Persistence
 

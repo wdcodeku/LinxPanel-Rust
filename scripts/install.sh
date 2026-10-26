@@ -29,6 +29,10 @@ LANGUAGE="${LINXPANEL_LANG:-}"
 INSTALL_MODE="${LINXPANEL_INSTALL_MODE:-}"
 ADMIN_PASSWORD="${LINXPANEL_ADMIN_PASSWORD:-}"
 OPEN_FIREWALL="${LINXPANEL_OPEN_FIREWALL:-1}"
+# Security entrance: random (default on fresh installs) | off | /custom-path.
+ENTRANCE_MODE="${LINXPANEL_ENTRANCE:-}"
+# Panel HTTPS with a self-signed certificate: 1 (default on fresh installs) | 0.
+SSL_MODE="${LINXPANEL_SSL:-}"
 HEALTH_TIMEOUT="${LINXPANEL_HEALTH_TIMEOUT:-30}"
 SERVICE_NAME="linxpanel"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -174,6 +178,11 @@ msg() {
       panel_user) echo "用户名：  %s" ;;
       panel_password) echo "密码：    %s" ;;
       password_unchanged) echo "密码：    （未修改，沿用原密码）" ;;
+      entrance_invalid) echo "安全入口无效，已跳过：%s" ;;
+      ssl_failed) echo "启用面板 HTTPS 失败，将继续使用 HTTP。" ;;
+      https_notice) echo "面板使用自签证书：浏览器提示「不安全」时，点击「高级」→「继续访问」即可。" ;;
+      entrance_notice) echo "必须通过上面带安全入口的完整地址访问，直接访问 IP:端口 会返回 404。忘记入口：Lp entrance" ;;
+      entrance_hint) echo "未启用安全入口，建议执行：Lp entrance random" ;;
       password_notice) echo "请立即保存以上密码，它不会再次显示。忘记密码可执行：Lp reset-password" ;;
       cloud_notice) echo "若无法访问，请在云服务器安全组中放行 TCP 端口 %s。" ;;
       lp_hint) echo "管理命令：Lp status | Lp restart | Lp logs | Lp update | Lp help" ;;
@@ -245,6 +254,11 @@ msg() {
       panel_user) echo "Username:     %s" ;;
       panel_password) echo "Password:     %s" ;;
       password_unchanged) echo "Password:     (unchanged)" ;;
+      entrance_invalid) echo "Invalid security entrance, skipped: %s" ;;
+      ssl_failed) echo "Could not enable panel HTTPS; continuing with HTTP." ;;
+      https_notice) echo "Self-signed certificate: when the browser warns, choose Advanced -> Proceed." ;;
+      entrance_notice) echo "Open the full URL above including its entrance path; bare IP:port returns 404. Forgot it? Lp entrance" ;;
+      entrance_hint) echo "No security entrance is set; consider: Lp entrance random" ;;
       password_notice) echo "Save this password now; it is not shown again. Forgot it? Run: Lp reset-password" ;;
       cloud_notice) echo "Cannot connect? Allow TCP port %s in your cloud provider's security group." ;;
       lp_hint) echo "Manage with: Lp status | Lp restart | Lp logs | Lp update | Lp help" ;;
@@ -781,6 +795,41 @@ set_admin_password() {
   fi
 }
 
+# Security entrance and panel HTTPS: on by default for fresh installs; upgrades
+# keep their settings unless LINXPANEL_ENTRANCE / LINXPANEL_SSL are given.
+configure_access() {
+  local entrance="${ENTRANCE_MODE}"
+  local ssl="${SSL_MODE}"
+  local sans=()
+  if [[ "${IS_UPGRADE}" == "0" ]]; then
+    entrance="${entrance:-random}"
+    ssl="${ssl:-1}"
+  fi
+
+  case "${entrance}" in
+    "") ;;
+    random) panel_cli entrance random >/dev/null || logf entrance_invalid "${entrance}" ;;
+    off | 0) panel_cli entrance off >/dev/null || true ;;
+    *) panel_cli entrance set "${entrance}" >/dev/null || logf entrance_invalid "${entrance}" ;;
+  esac
+
+  case "${ssl}" in
+    "") ;;
+    0 | off) panel_cli ssl off >/dev/null || true ;;
+    *)
+      # Cover the addresses the panel will be opened at.
+      [[ -n "${PUBLIC_IP}" ]] && sans+=(--san "${PUBLIC_IP}")
+      [[ -n "${INTERNAL_IP}" ]] && sans+=(--san "${INTERNAL_IP}")
+      panel_cli ssl on ${sans[@]+"${sans[@]}"} >/dev/null || logf ssl_failed
+      ;;
+  esac
+}
+
+# Reads a key from `linxpanel info` (scheme, entrance, version).
+panel_info() {
+  panel_cli info 2>/dev/null | sed -n -E "s/^$1=(.*)$/\1/p" | head -n1 || true
+}
+
 install_lp_cli() {
   local source_cli=""
   local cli_tmp="${TMP_DIR}/lp"
@@ -885,12 +934,26 @@ start_panel() {
   fi
 }
 
+# Whether the panel answers locally. /api/health bypasses the security entrance;
+# `/` covers versions that predate it (a rollback target).
+probe_panel() {
+  local url=""
+  for url in "https://127.0.0.1:${PORT}/api/health" "http://127.0.0.1:${PORT}/api/health" \
+    "http://127.0.0.1:${PORT}/"; do
+    if require_cmd curl; then
+      curl -kfsS --connect-timeout 2 --max-time 4 -o /dev/null "${url}" 2>/dev/null && return 0
+    elif require_cmd wget; then
+      wget -q --no-check-certificate -T 4 -O /dev/null "${url}" 2>/dev/null && return 0
+    fi
+  done
+  return 1
+}
+
 health_check() {
-  local url="http://127.0.0.1:${PORT}/"
   local waited=0
   logf health_wait
   while [[ "${waited}" -lt "${HEALTH_TIMEOUT}" ]]; do
-    if [[ -n "$(fetch_text "${url}")" ]]; then
+    if probe_panel; then
       logf health_ok
       return 0
     fi
@@ -923,24 +986,25 @@ open_firewall_port() {
 }
 
 print_summary() {
-  local public_ip=""
-  local internal_ip=""
   local title="deploy_complete"
-  public_ip="$(detect_public_ip)"
-  internal_ip="$(detect_internal_ip)"
+  local scheme=""
+  local entrance=""
   [[ "${IS_UPGRADE}" == "1" ]] && title="upgrade_complete"
+  scheme="$(panel_info scheme)"
+  entrance="$(panel_info entrance)"
+  scheme="${scheme:-http}"
 
   {
     echo
     echo "=================================================================="
     printf ' LinxPanel %s — %s\n' "$(bin_version "${INSTALL_ROOT}/bin/linxpanel")" "$(msg "${title}")"
     echo "=================================================================="
-    if [[ -n "${public_ip}" ]]; then
+    if [[ -n "${PUBLIC_IP}" ]]; then
       # shellcheck disable=SC2059
-      printf " $(msg panel_url_public)\n" "http://$(format_host_for_url "${public_ip}"):${PORT}"
+      printf " $(msg panel_url_public)\n" "${scheme}://$(format_host_for_url "${PUBLIC_IP}"):${PORT}${entrance}"
     fi
     # shellcheck disable=SC2059
-    printf " $(msg panel_url_internal)\n" "http://$(format_host_for_url "${internal_ip}"):${PORT}"
+    printf " $(msg panel_url_internal)\n" "${scheme}://$(format_host_for_url "${INTERNAL_IP}"):${PORT}${entrance}"
     # shellcheck disable=SC2059
     printf " $(msg panel_user)\n" "admin"
     if [[ -n "${ADMIN_PASSWORD}" ]]; then
@@ -951,6 +1015,12 @@ print_summary() {
     fi
     echo "------------------------------------------------------------------"
     [[ -n "${ADMIN_PASSWORD}" ]] && echo " $(msg password_notice)"
+    if [[ -n "${entrance}" ]]; then
+      echo " $(msg entrance_notice)"
+    else
+      echo " $(msg entrance_hint)"
+    fi
+    [[ "${scheme}" == "https" ]] && echo " $(msg https_notice)"
     # shellcheck disable=SC2059
     printf " $(msg cloud_notice)\n" "${PORT}"
     echo " $(msg lp_hint)"
@@ -1060,12 +1130,14 @@ ${SUDO} mv -f "${INSTALL_ROOT}/bin/linxpanel.new" "${INSTALL_ROOT}/bin/linxpanel
 if [[ "${IS_UPGRADE}" == "0" || -n "${ADMIN_PASSWORD}" ]]; then
   set_admin_password
 fi
+PUBLIC_IP="$(detect_public_ip)"
+INTERNAL_IP="$(detect_internal_ip)"
+configure_access
 
 ${SUDO} chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}"
 ${SUDO} chmod 700 "${INSTALL_ROOT}/data"
 
 write_env_file
-install_lp_cli
 write_logrotate
 if [[ "${USE_SYSTEMD}" == "1" ]]; then
   write_systemd_unit
@@ -1088,5 +1160,7 @@ if ! health_check; then
   exit 1
 fi
 
+# Only now: after a rollback, Lp must keep matching the binary that is running.
+install_lp_cli
 open_firewall_port
 print_summary
