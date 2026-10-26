@@ -155,6 +155,24 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
   - 面板重启后按 `autostart` 自动拉起
   - **面板收到 SIGTERM 时会先停掉所有托管进程**，不留孤儿进程占用端口
 
+### 数据库、应用商店与备份
+
+- **数据库**（侧边栏「数据库」）：MySQL（MariaDB）、PostgreSQL、Redis 一键安装、启动并开机自启
+  - 新建数据库同时创建同名用户与随机密码，可选访问权限（本机 / 所有 / 指定 IP）；密码可查看、复制、重置
+  - 安装 MySQL 时自动创建面板专用管理账号；已有 MySQL 可输入 root 密码接管
+  - 备份为 `.sql.gz`（mysqldump / pg_dump），支持下载、一键恢复、删除
+  - Redis 可设置访问密码
+  - 所有库名、用户名、密码均经白名单校验，SQL 与密码通过 stdin 传给客户端，不会出现在进程列表中
+- **应用商店**：一键部署 WordPress、Typecho、Adminer
+  - 自动检查 OpenResty / PHP / MySQL，自动建库、下载解压、写入配置（WordPress 自动生成 `wp-config.php` 与安全密钥）、设置目录属主并创建站点
+  - 任何一步失败都会回滚已创建的数据库、文件和站点
+  - 可填写自定义下载地址（国内镜像）
+- **PHP 网站开箱即用**：安装 PHP 时自动安装常用扩展（mysql、gd、curl、mbstring、zip、intl 等）、启动 PHP-FPM，并自动识别其 socket 地址、放开 socket 权限（此前固定 `127.0.0.1:9000`，在 Debian/Ubuntu/RHEL 上 PHP 站点会 502）；已安装的 PHP 可在「运行环境」中一键「检查修复」
+- **站点默认加固**：上传上限 256MB、禁止访问 `.env` / `.git` 等隐藏文件、FastCGI 超时 300 秒；服务器未启用 IPv6 时不再生成 `listen [::]`（否则 nginx 无法启动）
+- **项目依赖**（运行环境 → 应用 →「安装依赖」）：Python 自动创建 `.venv` 并 `pip install -r requirements.txt`；Node 按锁文件使用 npm / pnpm / yarn 安装并执行 build；PHP 执行 `composer install`。可在应用环境变量中设置 `PIP_INDEX_URL`、`npm_config_registry` 使用镜像
+  - 启动入口支持 `main.py`、`-m uvicorn main:app`、`gunicorn app:app`、`npm start`、`next start` 等写法，自动使用项目的 `.venv` 与 `node_modules/.bin`
+- **备份**：站点详情「备份」页可立即备份整站目录（`.tar.gz`）、下载、恢复（恢复失败自动还原原目录）；计划任务新增「备份网站 / 备份数据库」类型，可设置保留份数（底层为 `linxpanel backup site|db ... --keep N`）
+
 ### 网站类型与伪静态
 
 - 站点类型：静态 / PHP / Node / Python / Java / Go / 二进制 / 反向代理
@@ -241,6 +259,19 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
   - 自动解压并部署到 `C:\openresty`
 - 前端通用日志弹窗组件：
   - `web/src/components/OperationLogDialog.vue`
+
+### 生产环境就绪度
+
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
+
+与宝塔 / 1Panel 相比仍缺少（后续计划）：
+
+- Docker 与容器应用商店（1Panel 的核心能力）
+- 多 PHP 版本共存（目前使用发行版默认版本）、MySQL 版本选择
+- 资源告警通知（阈值设置已有，尚未接入邮件 / Webhook）、操作审计日志
+- 备份上传到远程存储（S3 / OSS / FTP）
+- 网站访问日志分析、WAF / 防 CC
+- 多用户与权限管理
 
 ## English
 
@@ -396,6 +427,24 @@ The panel detects and installs language runtimes, and supervises application pro
   - relaunched after a panel restart when `autostart` is set
   - **SIGTERM stops every managed process first**, so no orphans keep holding ports
 
+### Databases, App Store and Backups
+
+- **Databases** (sidebar → Databases): one-click MySQL (MariaDB), PostgreSQL and Redis - installed, started and enabled at boot
+  - New databases get a same-named user with a random password and an access scope (localhost / anywhere / IP); passwords can be shown, copied and reset
+  - Installing MySQL creates a panel-owned admin login; an existing MySQL can be connected with its root password
+  - Backups as `.sql.gz` (mysqldump / pg_dump) with download, one-click restore and delete
+  - Redis password setting
+  - Names, users and passwords are allowlisted; SQL and passwords reach the clients on stdin, never in the process list
+- **App Store**: one-click WordPress, Typecho and Adminer
+  - Checks OpenResty / PHP / MySQL, creates the database, downloads and unpacks, writes the config (`wp-config.php` with fresh keys for WordPress), sets ownership and creates the site
+  - Any failure rolls back the database, files and site it created
+  - A custom download URL (mirror) can be given
+- **PHP sites work out of the box**: installing PHP adds common extensions (mysql, gd, curl, mbstring, zip, intl...), starts PHP-FPM, detects its socket and opens it to nginx (the fixed `127.0.0.1:9000` used before gave every PHP site a 502 on Debian/Ubuntu/RHEL); an installed PHP can be repaired with "Check & repair" under Runtimes
+- **Hardened site defaults**: 256MB uploads, dotfiles (`.env`, `.git`) denied, 300s FastCGI timeout; no `listen [::]` on hosts without IPv6 (nginx would refuse to start)
+- **Project dependencies** (Runtimes → Apps → "Install dependencies"): Python gets a `.venv` and `pip install -r requirements.txt`; Node uses npm / pnpm / yarn per lockfile and runs the build script; PHP runs `composer install`. Set `PIP_INDEX_URL` / `npm_config_registry` in the app's environment for mirrors
+  - Entries such as `main.py`, `-m uvicorn main:app`, `gunicorn app:app`, `npm start` or `next start` work, using the project's `.venv` and `node_modules/.bin`
+- **Backups**: the site's Backups tab archives the whole directory (`.tar.gz`), downloads and restores it (a failed restore puts the old files back); cron gains "Back up website / database" job types with retention (`linxpanel backup site|db ... --keep N` underneath)
+
 ### Site Types and Rewrite Rules
 
 - Site types: static / PHP / Node / Python / Java / Go / binary / reverse proxy
@@ -482,3 +531,16 @@ Runtime keys (panel settings / `settings` table / env):
   - extract and deploy to `C:\openresty`
 - Reusable frontend operation log dialog component:
   - `web/src/components/OperationLogDialog.vue`
+
+### Production Readiness
+
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
+
+Still missing compared with BaoTa / 1Panel (planned):
+
+- Docker and a container app store (1Panel's core)
+- Multiple PHP versions side by side (the distro's version is used), MySQL version choice
+- Alert notifications (thresholds exist but are not wired to email / webhooks), an audit log
+- Off-site backup targets (S3 / OSS / FTP)
+- Access-log analytics, WAF / CC protection
+- Multiple users and roles

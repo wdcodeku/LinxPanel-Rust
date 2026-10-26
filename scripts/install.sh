@@ -417,11 +417,26 @@ ensure_base_deps() {
   fi
   require_cmd tar || missing+=(tar)
   require_cmd sha256sum || missing+=(coreutils)
+  require_cmd gzip || missing+=(gzip)
+  # Scheduled jobs and backups run from cron; minimal images ship without it.
+  if ! require_cmd crontab; then
+    if require_cmd apt-get; then
+      missing+=(cron)
+    elif require_cmd dnf || require_cmd yum; then
+      missing+=(cronie)
+    elif require_cmd zypper; then
+      missing+=(cron)
+    fi
+  fi
   if [[ ${#missing[@]} -eq 0 ]]; then
     return
   fi
   logf install_base_deps "${missing[*]}"
   pkg_install ca-certificates "${missing[@]}" || true
+  if [[ "${USE_SYSTEMD}" == "1" ]]; then
+    ${SUDO} systemctl enable --now cron >/dev/null 2>&1 \
+      || ${SUDO} systemctl enable --now crond >/dev/null 2>&1 || true
+  fi
 }
 
 get_cargo_version() {
