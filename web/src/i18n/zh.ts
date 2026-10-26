@@ -672,6 +672,8 @@ export default {
     mirror: '镜像地址',
     mirrorHint: '存放某个 Release 全部文件的目录：latest.json、install.sh 以及 linxpanel-linux-*.tar.gz 安装包和对应的 .sha256。',
     saved: '更新设置已保存',
+    resultOk: '已升级到 {tag}',
+    resultFail: '升级到 {tag} 失败，仍在运行原版本',
     badge: '新版本 {tag}',
     alreadyRunning: '已有升级正在进行',
     alreadyLatest: '已是最新版本',

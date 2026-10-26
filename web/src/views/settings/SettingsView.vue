@@ -7,7 +7,8 @@
       </div>
       <div class="lp-page-actions">
         <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
-        <el-button type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
+        <!-- Security and update tabs save their own settings. -->
+        <el-button v-if="!['security', 'update'].includes(tab)" type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
       </div>
     </div>
 

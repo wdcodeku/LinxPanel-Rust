@@ -672,6 +672,8 @@ export default {
     mirror: 'Mirror address',
     mirrorHint: 'A directory holding a copy of a release: latest.json, install.sh and the linxpanel-linux-*.tar.gz packages with their .sha256 files.',
     saved: 'Update settings saved',
+    resultOk: 'Updated to {tag}',
+    resultFail: 'Update to {tag} failed; the previous version is still running',
     badge: 'New {tag}',
     alreadyRunning: 'An update is already running',
     alreadyLatest: 'Already up to date',

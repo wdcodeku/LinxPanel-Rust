@@ -10,7 +10,8 @@
     <el-alert
       v-if="lastResult"
       :type="lastResult.success ? 'success' : 'error'"
-      :title="lastResult.message"
+      :title="lastResult.success ? t('upd.resultOk', { tag: lastResult.target }) : t('upd.resultFail', { tag: lastResult.target })"
+      :description="lastResult.success ? '' : lastResult.message"
       show-icon
       @close="lastResultDismissed = true"
     />
@@ -19,7 +20,7 @@
     <section class="lp-card">
       <header class="lp-card-head">
         <h2 class="lp-card-title"><el-icon><Upload /></el-icon>{{ t('upd.title') }}</h2>
-        <el-button size="small" :icon="Refresh" :loading="checking" :disabled="busy" @click="check">
+        <el-button size="small" :icon="Refresh" :loading="checking" :disabled="busy" @click="check()">
           {{ t('upd.check') }}
         </el-button>
       </header>
@@ -165,12 +166,13 @@ async function load() {
   }
 }
 
-async function check() {
+async function check(quiet = false) {
   checking.value = true
   try {
     const res: any = await checkUpdate()
     if (res.success) {
       applyStatus(res.data)
+      if (quiet) return
       ElMessage.success(res.data.check?.has_update ? t('upd.foundNew', { tag: res.data.check.latest.tag }) : t('upd.upToDate'))
     }
   } catch {
@@ -274,6 +276,8 @@ function formatTime(unix: number) {
 
 onMounted(async () => {
   await load()
+  // After a restart nothing is cached yet: look it up now rather than show "not checked".
+  if (status.value && !status.value.check && !status.value.running) check(true)
   // An update started elsewhere (or automatically) is followed too.
   if (status.value?.running) {
     startedFrom.value = status.value.current

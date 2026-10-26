@@ -486,10 +486,12 @@ pub async fn progress(pool: &SqlitePool, data_dir: &Path) -> (Option<RunState>, 
             state.target
         )
     } else {
+        // The installer's own last message says why (not the wrapper's exit line).
         let last = log
             .lines()
             .rev()
-            .find(|l| !l.trim().is_empty())
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.contains("installer exited with status"))
             .unwrap_or("no log")
             .to_string();
         format!(
