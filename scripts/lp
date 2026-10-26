@@ -2,7 +2,9 @@
 set -euo pipefail
 
 DEFAULT_INSTALL_ROOT="__INSTALL_ROOT__"
-if [[ "${DEFAULT_INSTALL_ROOT}" == "__INSTALL_ROOT__" ]]; then
+# The installer substitutes the placeholder above; the split literal below keeps
+# that substitution from also rewriting this comparison.
+if [[ "${DEFAULT_INSTALL_ROOT}" == "__INSTALL""_ROOT__" ]]; then
   DEFAULT_INSTALL_ROOT="/opt/linxpanel"
 fi
 
@@ -14,6 +16,7 @@ LOG_OUT="${LINXPANEL_LOG_OUT:-${LOG_DIR}/linxpanel.out.log}"
 LOG_ERR="${LINXPANEL_LOG_ERR:-${LOG_DIR}/linxpanel.err.log}"
 PID_FILE="${LINXPANEL_PID_FILE:-${INSTALL_ROOT}/linxpanel.pid}"
 INSTALL_SCRIPT_URL="${LINXPANEL_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh}"
+GITHUB_PROXY="${LINXPANEL_GITHUB_PROXY:-}"
 
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -61,6 +64,15 @@ read_service_env() {
   grep -E "^Environment=${key}=" "${service_file}" | head -n1 | sed -E "s/^Environment=${key}=//" || true
 }
 
+# Settings the installer saves for nohup mode, where there is no unit file to read.
+read_env_file() {
+  local key="$1"
+  local env_file="${INSTALL_ROOT}/linxpanel.env"
+  if [[ -f "${env_file}" ]]; then
+    sed -n -E "s/^${key}=(.*)$/\1/p" "${env_file}" | head -n1
+  fi
+}
+
 sync_paths_from_service() {
   local exec_start=""
   exec_start="$(read_service_value "ExecStart" || true)"
@@ -96,6 +108,11 @@ current_port() {
     printf '%s' "${value}"
     return
   fi
+  value="$(read_env_file "PORT")"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
   printf '%s' "7200"
 }
 
@@ -111,11 +128,17 @@ current_database_url() {
     printf '%s' "${value}"
     return
   fi
+  value="$(read_env_file "DATABASE_URL")"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
   printf '%s' "sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc"
 }
 
 running_pids() {
-  pgrep -f "${BIN_PATH}" 2>/dev/null || true
+  # Anchored so `Lp`, editors or `tail` on the binary path do not count as the panel.
+  pgrep -f "^${BIN_PATH}( |$)" 2>/dev/null || true
 }
 
 is_running() {
@@ -198,6 +221,11 @@ status_cmd() {
 
 logs_cmd() {
   local kind="${1:-out}"
+  # Older systemd (< 240) cannot append to files, so the panel logs to journald there.
+  if [[ "${kind}" != "service" && ! -f "${LOG_OUT}" && ! -f "${LOG_ERR}" ]] \
+    && systemd_available && has_cmd journalctl; then
+    kind="service"
+  fi
   case "${kind}" in
     out) tail -f "${LOG_OUT}" ;;
     err) tail -f "${LOG_ERR}" ;;
@@ -232,11 +260,65 @@ update_cmd() {
     echo "curl is required for update command." >&2
     exit 1
   fi
+  local script=""
+  if ! script="$(curl -fsSL --retry 3 --connect-timeout 10 "${GITHUB_PROXY}${INSTALL_SCRIPT_URL}")" \
+    || [[ -z "${script}" ]]; then
+    echo "Failed to download installer: ${INSTALL_SCRIPT_URL}" >&2
+    exit 1
+  fi
   env \
     LINXPANEL_INSTALL_ROOT="${INSTALL_ROOT}" \
     LINXPANEL_PORT="$(current_port)" \
     LINXPANEL_INSTALL_MODE="${mode}" \
-    bash -c "$(curl -sSL "${INSTALL_SCRIPT_URL}")"
+    bash -c "${script}"
+}
+
+reset_password_cmd() {
+  local user="${1:-admin}"
+  echo "Resetting password for '${user}'..."
+  run_sudo env \
+    DATABASE_URL="$(current_database_url)" \
+    RUST_LOG=error \
+    "${BIN_PATH}" reset-password --user "${user}"
+  # Keep the database owned by the service account after a root-run reset.
+  local owner=""
+  owner="$(read_service_value "User" || true)"
+  if [[ -n "${owner}" ]]; then
+    run_sudo chown -R "${owner}" "${INSTALL_ROOT}/data" 2>/dev/null || true
+  fi
+}
+
+uninstall_cmd() {
+  local purge="${1:-}"
+  echo "This removes the LinxPanel service, binary and Lp command."
+  if [[ "${purge}" == "--purge" ]]; then
+    echo "--purge: the panel database, certificates and logs in ${INSTALL_ROOT} are deleted too."
+  else
+    echo "Data in ${INSTALL_ROOT}/data is kept (use --purge to delete it)."
+  fi
+  local answer=""
+  read -r -p "Type 'yes' to continue: " answer || true
+  if [[ "${answer}" != "yes" ]]; then
+    echo "Aborted."
+    exit 1
+  fi
+  if systemd_available; then
+    run_sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    local service_file=""
+    service_file="$(get_service_file || true)"
+    [[ -n "${service_file}" ]] && run_sudo rm -f "${service_file}"
+    run_sudo systemctl daemon-reload || true
+  else
+    stop_no_systemd
+  fi
+  run_sudo rm -f /etc/logrotate.d/linxpanel
+  if [[ "${purge}" == "--purge" ]]; then
+    run_sudo rm -rf "${INSTALL_ROOT}"
+  else
+    run_sudo rm -rf "${INSTALL_ROOT}/bin" "${INSTALL_ROOT}/backup"
+  fi
+  run_sudo rm -f /usr/local/bin/Lp /usr/local/bin/lp
+  echo "LinxPanel uninstalled."
 }
 
 info_cmd() {
@@ -250,12 +332,21 @@ info_cmd() {
   echo "Install root: ${INSTALL_ROOT}"
   echo "Binary: ${BIN_PATH}"
   echo "Logs: ${LOG_OUT} | ${LOG_ERR}"
+  echo "Version: $(version_text)"
   echo "Port: $(current_port)"
   echo "URL: http://$(detect_ip):$(current_port)"
   if is_running; then
     echo "Status: running (PID: $(running_pids | tr '\n' ' '))"
   else
     echo "Status: stopped"
+  fi
+}
+
+version_text() {
+  if has_cmd timeout; then
+    timeout 5 "${BIN_PATH}" --version 2>/dev/null | awk '/^linxpanel / {print $2}' || true
+  else
+    "${BIN_PATH}" --version 2>/dev/null | awk '/^linxpanel / {print $2}' || true
   fi
 }
 
@@ -271,9 +362,12 @@ Usage:
   Lp logs [out|err|all|service]
                             View logs
   Lp info                   Show runtime info
-  Lp update [binary|build]  Upgrade/reinstall LinxPanel
+  Lp update [binary|build]  Upgrade/reinstall LinxPanel (data is kept)
+  Lp reset-password [user]  Set a new random password (default user: admin)
+  Lp version                Show installed version
   Lp enable                 Enable systemd service
   Lp disable                Disable systemd service
+  Lp uninstall [--purge]    Remove LinxPanel (--purge also deletes data)
   Lp help                   Show this help
 EOF
 }
@@ -284,7 +378,7 @@ cmd="${1:-help}"
 
 require_binary=0
 case "${cmd}" in
-  start|restart|logs|info) require_binary=1 ;;
+  start|restart|logs|info|reset-password|version) require_binary=1 ;;
 esac
 
 if [[ "${require_binary}" == "1" && ! -x "${BIN_PATH}" ]]; then
@@ -330,6 +424,15 @@ case "${cmd}" in
     ;;
   update)
     update_cmd "${2:-binary}"
+    ;;
+  reset-password|resetpwd)
+    reset_password_cmd "${2:-admin}"
+    ;;
+  version|-v|--version)
+    echo "LinxPanel $(version_text)"
+    ;;
+  uninstall)
+    uninstall_cmd "${2:-}"
     ;;
   enable)
     if systemd_available; then

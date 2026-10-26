@@ -28,3 +28,7 @@ include_dir = "0.7"
 mime_guess = "2"
 tokio-stream = "0.1"
 portable-pty = "0.9"
+
+[profile.release]
+# Smaller download for the one-click installer; symbols are not needed in production.
+strip = true

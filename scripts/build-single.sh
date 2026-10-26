@@ -43,6 +43,7 @@ logf() {
   local template
   template="$(msg "${key}")"
   printf "[LinxPanel] "
+  # shellcheck disable=SC2059 # templates come from msg(), not user input
   printf "${template}\n" "$@"
 }
 
@@ -57,7 +58,7 @@ fi
 logf build_web
 cd "${REPO_ROOT}/web"
 if [[ -f package-lock.json ]]; then
-  npm ci
+  npm ci --no-audit --no-fund
 else
   npm install
 fi
@@ -65,7 +66,7 @@ npm run build
 
 logf build_backend
 cd "${REPO_ROOT}"
-"${CARGO_BIN[@]}" build --release
+"${CARGO_BIN[@]}" build --release --locked
 
 BINARY_PATH="${REPO_ROOT}/target/release/linxpanel"
 if [[ ! -f "${BINARY_PATH}" ]]; then
@@ -73,5 +74,5 @@ if [[ ! -f "${BINARY_PATH}" ]]; then
   exit 1
 fi
 
-logf done
+logf "done"
 echo "  ${BINARY_PATH}"

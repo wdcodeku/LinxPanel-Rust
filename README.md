@@ -4,32 +4,54 @@
 
 ### Linux 一键自动部署
 
-可直接使用以下命令自动安装依赖、构建并部署 LinxPanel：
-
-- `bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"
+```
 
 默认行为：
 
-- 首个提示会让你选择语言（默认英文）
-- 第二个提示会让你选择安装方式（默认二进制安装）
-- 安装目录：`/opt/linxpanel`
-- 监听端口：`7200`
-- 自动创建并启动 `systemd` 服务（若系统支持）
-- 若系统 `cargo` 过旧，会自动安装/切换到 `rustup stable`
-- 安装结束会自动输出真实访问 IP（优先公网 IP）
+- 首个提示选择语言（默认英文），第二个提示选择安装方式（默认二进制安装）
+- **二进制安装**：下载 GitHub Release 中的静态编译包（约 5MB，musl 静态链接，任意发行版/glibc 版本均可运行，x86_64 与 aarch64），并做 SHA256 校验，通常十几秒完成；无可用发布包时自动回退为编译安装
+- **编译安装**：自动安装构建依赖；系统 Node.js 低于 18 时自动安装官方 Node.js，`cargo` 过旧时自动安装 `rustup stable`；内存小于 2GB 时单线程编译以避免 OOM
+- 安装目录：`/opt/linxpanel`，监听端口：`7200`（安装前检测端口占用）
+- **首次安装会生成随机管理员密码**并在结束时显示，不再使用公开的默认密码
+- 自动在已启用的 ufw / firewalld 中放行面板端口，配置 logrotate 日志轮转
+- 自动创建并启动 `systemd` 服务（无 systemd 时使用 nohup）
+- 启动后进行健康检查，确认面板可访问才显示「部署完成」
 - 自动安装命令行工具：`Lp`（别名：`lp`）
-- 无交互部署可指定语言：
-  - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
-  - 指定安装方式：`LINXPANEL_INSTALL_MODE=binary` 或 `LINXPANEL_INSTALL_MODE=build`
-  - 如需手动指定输出 IP：`LINXPANEL_PUBLIC_IP=1.2.3.4`
+
+重复执行同一命令即为**升级**：保留端口和数据，升级前备份二进制和数据库到 `/opt/linxpanel/backup/`（保留最近 5 份），新版本启动失败会**自动回滚**。
+
+可选环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `LINXPANEL_LANG=zh` | 语言（无交互部署时使用） |
+| `LINXPANEL_INSTALL_MODE=binary\|build` | 安装方式 |
+| `LINXPANEL_PORT=8888` | 面板端口 |
+| `LINXPANEL_VERSION=v0.1.0` | 安装指定版本（默认最新） |
+| `LINXPANEL_ADMIN_PASSWORD=...` | 指定管理员密码（默认随机生成） |
+| `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | GitHub 加速代理前缀（国内服务器下载慢时使用；代理可看到并提供下载内容，请仅使用可信代理） |
+| `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | 编译安装时的 Node.js 下载镜像 |
+| `LINXPANEL_OPEN_FIREWALL=0` | 不自动放行防火墙端口 |
+| `LINXPANEL_PUBLIC_IP=1.2.3.4` | 手动指定输出的访问 IP |
+
+示例：`LINXPANEL_LANG=zh LINXPANEL_PORT=8888 bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
 
 ### Lp 命令行工具
 
 - `Lp status`：查看服务状态
 - `Lp start|stop|restart`：启停/重启服务
 - `Lp logs [out|err|all|service]`：查看日志
-- `Lp info`：查看安装路径、端口与访问地址
-- `Lp update [binary|build]`：一键更新（默认二进制）
+- `Lp info`：查看版本、安装路径、端口与访问地址
+- `Lp update [binary|build]`：一键升级（默认二进制，失败自动回滚）
+- `Lp reset-password [用户名]`：重置密码（生成新的随机密码）
+- `Lp version`：查看版本
+- `Lp uninstall [--purge]`：卸载（默认保留数据，`--purge` 同时删除数据）
+
+### 发布预编译包（维护者）
+
+推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会触发 `.github/workflows/release.yml`，自动构建 x86_64 / aarch64 静态二进制并发布到 GitHub Release，一键安装脚本会直接下载它。**在发布第一个 Release 之前，一键安装只能走编译安装（较慢）。**
 
 ### 单文件部署（内嵌 Web）
 
@@ -197,32 +219,52 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### One-Command Auto Deploy (Linux)
 
-Use the command below to install dependencies, build, and deploy LinxPanel:
-
-- `bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"
+```
 
 Defaults:
 
-- The first prompt asks language choice (English by default)
-- The second prompt asks install mode (binary install by default)
-- Install path: `/opt/linxpanel`
-- Port: `7200`
-- Auto-create and start `systemd` service (if available)
-- If system `cargo` is too old, installer auto switches to `rustup stable`
-- Installer prints a real access IP at the end (prefers public IP)
-- Installs CLI tool automatically: `Lp` (alias: `lp`)
-- For non-interactive deployment, set language explicitly:
-  - `LINXPANEL_LANG=zh bash -c "$(curl -sSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/main/scripts/install.sh)"`
-  - Set install mode: `LINXPANEL_INSTALL_MODE=binary` or `LINXPANEL_INSTALL_MODE=build`
-  - To force output IP manually: `LINXPANEL_PUBLIC_IP=1.2.3.4`
+- The first prompt asks for a language (English by default), the second for the install mode (binary by default)
+- **Binary install** downloads the static release package from GitHub Releases (~5MB, musl static, runs on any distro/glibc, x86_64 and aarch64) and verifies its SHA256 — usually done in seconds. Falls back to a source build when no release asset is available
+- **Source build** installs build dependencies, installs official Node.js when the system one is older than 18, switches to `rustup stable` when `cargo` is too old, and compiles single-threaded under 2GB RAM to avoid OOM
+- Install path `/opt/linxpanel`, port `7200` (checked for conflicts before installing)
+- **A fresh install generates a random admin password** and prints it at the end instead of using a published default
+- Opens the panel port in an active ufw / firewalld, and sets up logrotate
+- Creates and starts a `systemd` service (nohup when systemd is unavailable)
+- Health-checks the panel and only reports success once it answers
+- Installs the CLI tool `Lp` (alias `lp`)
+
+Running the same command again **upgrades** in place: the port and data are kept, the binary and database are backed up to `/opt/linxpanel/backup/` (last 5 kept), and a new version that fails to start is **rolled back automatically**.
+
+Optional environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `LINXPANEL_LANG=zh` | Language (for non-interactive runs) |
+| `LINXPANEL_INSTALL_MODE=binary\|build` | Install mode |
+| `LINXPANEL_PORT=8888` | Panel port |
+| `LINXPANEL_VERSION=v0.1.0` | Install a specific release (default: latest) |
+| `LINXPANEL_ADMIN_PASSWORD=...` | Set the admin password (default: random) |
+| `LINXPANEL_GITHUB_PROXY=https://ghfast.top/` | Prefix for github.com downloads where GitHub is slow (the proxy sees and serves the files, so only use one you trust) |
+| `LINXPANEL_NODE_MIRROR=https://npmmirror.com/mirrors/node` | Node.js download mirror for source builds |
+| `LINXPANEL_OPEN_FIREWALL=0` | Do not open the firewall port |
+| `LINXPANEL_PUBLIC_IP=1.2.3.4` | Override the printed access IP |
 
 ### Lp CLI Tool
 
 - `Lp status`: show service status
 - `Lp start|stop|restart`: manage service lifecycle
 - `Lp logs [out|err|all|service]`: tail logs
-- `Lp info`: show install path, port, and access URL
-- `Lp update [binary|build]`: one-command upgrade (default: binary)
+- `Lp info`: show version, install path, port, and access URL
+- `Lp update [binary|build]`: one-command upgrade (default: binary, rolls back on failure)
+- `Lp reset-password [user]`: set a new random password
+- `Lp version`: show the installed version
+- `Lp uninstall [--purge]`: remove LinxPanel (data is kept unless `--purge`)
+
+### Publishing Prebuilt Binaries (maintainers)
+
+Pushing a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) runs `.github/workflows/release.yml`, which builds static x86_64 / aarch64 binaries and attaches them to a GitHub Release that the installer downloads. **Until the first release exists, the installer can only build from source (slow).**
 
 ### Single Binary Deployment (Embedded Web)
 
