@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, Mutex};
 
-use super::runtime;
+use super::{runtime, shell};
 
 /// How long to wait after a crash before restarting, and the ceiling for backoff.
 const RESTART_DELAY: Duration = Duration::from_secs(2);
@@ -253,23 +253,83 @@ pub async fn delete(pool: &sqlx::SqlitePool, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Project-local tool directories, searched before the system PATH: a Python
+/// virtualenv and Node's node_modules/.bin.
+fn project_bin_dirs(work_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    [".venv/bin", "venv/bin", "node_modules/.bin"]
+        .iter()
+        .map(|dir| work_dir.join(dir))
+        .filter(|dir| dir.is_dir())
+        .collect()
+}
+
+fn find_project_bin(work_dir: &std::path::Path, name: &str) -> Option<String> {
+    if name.contains('/') {
+        return None;
+    }
+    project_bin_dirs(work_dir)
+        .into_iter()
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+/// The project's virtualenv interpreter, else the system one.
+fn python_for(work_dir: &std::path::Path) -> String {
+    for venv in [".venv", "venv"] {
+        let python = work_dir.join(venv).join("bin/python");
+        if python.is_file() {
+            return python.to_string_lossy().to_string();
+        }
+    }
+    runtime::interpreter_path("python").unwrap_or_else(|| "python3".into())
+}
+
 /// Builds the command line for an app. Returns (program, args).
+///
+/// Besides a script/jar/binary path, the entry may be a command line:
+/// `-m uvicorn main:app`, `gunicorn app:app` (from the virtualenv),
+/// `npm start`, `pnpm start` or `next start` (from node_modules/.bin).
 fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
     let entry = record.entry.trim().to_string();
     let extra: Vec<String> = shell_split(&record.args);
+    let work_dir = std::path::Path::new(&record.work_dir);
+    // An entry naming an existing file is used whole, even with spaces in it.
+    let tokens = if work_dir.join(&entry).is_file() || std::path::Path::new(&entry).is_file() {
+        vec![entry.clone()]
+    } else {
+        shell_split(&entry)
+    };
+    let (first, rest) = tokens
+        .split_first()
+        .map(|(first, rest)| (first.clone(), rest.to_vec()))
+        .ok_or("Entry point is required")?;
 
     let (program, mut args) = match record.runtime.as_str() {
-        "node" => (
-            runtime::interpreter_path("node").unwrap_or_else(|| "node".into()),
-            vec![entry],
-        ),
-        "python" => (
-            runtime::interpreter_path("python").unwrap_or_else(|| "python3".into()),
-            vec![entry],
-        ),
+        "python" => {
+            if first.starts_with('-') || first.ends_with(".py") {
+                (python_for(work_dir), tokens.clone())
+            } else if let Some(bin) = find_project_bin(work_dir, &first) {
+                (bin, rest)
+            } else {
+                (python_for(work_dir), tokens.clone())
+            }
+        }
+        "node" => {
+            if matches!(first.as_str(), "npm" | "pnpm" | "yarn" | "npx") {
+                (first, rest)
+            } else if let Some(bin) = find_project_bin(work_dir, &first) {
+                (bin, rest)
+            } else {
+                (
+                    runtime::interpreter_path("node").unwrap_or_else(|| "node".into()),
+                    tokens.clone(),
+                )
+            }
+        }
         "php" => (
             runtime::interpreter_path("php").unwrap_or_else(|| "php".into()),
-            vec![entry],
+            tokens.clone(),
         ),
         "java" => (
             runtime::interpreter_path("java").unwrap_or_else(|| "java".into()),
@@ -281,6 +341,121 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
     };
     args.extend(extra);
     Ok((program, args))
+}
+
+/// PATH with the project's tool directories first.
+fn project_path(work_dir: &std::path::Path) -> Option<String> {
+    let dirs = project_bin_dirs(work_dir);
+    if dirs.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<String> = dirs
+        .iter()
+        .map(|dir| dir.to_string_lossy().to_string())
+        .collect();
+    parts.push(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()));
+    Some(parts.join(":"))
+}
+
+/// Installs the project's dependencies in its working directory, with the app's
+/// own environment (so PIP_INDEX_URL / npm_config_registry mirrors apply).
+/// Returns the command log.
+pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, String> {
+    let work_dir = std::path::Path::new(&record.work_dir);
+    if !work_dir.is_dir() {
+        return Err(format!("Working directory does not exist: {}", record.work_dir));
+    }
+    let has = |file: &str| work_dir.join(file).exists();
+    let mut log = String::new();
+    let mut step = |program: &str, args: &[&str]| -> Result<(), String> {
+        log.push_str(&format!("$ {} {}\n", program, args.join(" ")));
+        let mut command = std::process::Command::new(program);
+        command.args(args).current_dir(work_dir);
+        for (key, value) in parse_env(&record.env) {
+            command.env(key, value);
+        }
+        if let Some(path) = project_path(work_dir) {
+            command.env("PATH", path);
+        }
+        // Composer refuses to run as root without this.
+        command.env("COMPOSER_ALLOW_SUPERUSER", "1");
+        let output = shell::run_command(command, None, std::time::Duration::from_secs(1800))?;
+        for text in [&output.stdout, &output.stderr] {
+            if !text.trim().is_empty() {
+                log.push_str(text.trim_end());
+                log.push('\n');
+            }
+        }
+        if output.ok() {
+            Ok(())
+        } else {
+            Err(format!("{} exited with status {}", program, output.status))
+        }
+    };
+
+    let result = match record.runtime.as_str() {
+        "python" => {
+            let venv = if work_dir.join("venv/bin/python").is_file() { "venv" } else { ".venv" };
+            if !work_dir.join(venv).join("bin/python").is_file() {
+                let python = runtime::interpreter_path("python").unwrap_or_else(|| "python3".into());
+                step(&python, &["-m", "venv", venv])?;
+            }
+            let pip = format!("{}/bin/pip", venv);
+            step(&pip, &["install", "--upgrade", "pip"]).ok();
+            if has("requirements.txt") {
+                step(&pip, &["install", "-r", "requirements.txt"])
+            } else if has("pyproject.toml") || has("setup.py") {
+                step(&pip, &["install", "."])
+            } else {
+                Err("No requirements.txt or pyproject.toml found".into())
+            }
+        }
+        "node" => {
+            let manager = if has("pnpm-lock.yaml") && shell::has_binary("pnpm") {
+                "pnpm"
+            } else if has("yarn.lock") && shell::has_binary("yarn") {
+                "yarn"
+            } else {
+                "npm"
+            };
+            if !has("package.json") {
+                return Err("No package.json found".into());
+            }
+            let install: &[&str] = match manager {
+                "pnpm" => &["install", "--frozen-lockfile"],
+                "yarn" => &["install", "--frozen-lockfile"],
+                _ if has("package-lock.json") => &["ci"],
+                _ => &["install"],
+            };
+            step(manager, install)?;
+            let has_build_script = std::fs::read_to_string(work_dir.join("package.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .is_some_and(|json| json["scripts"]["build"].is_string());
+            if build && has_build_script {
+                step(manager, &["run", "build"])
+            } else {
+                Ok(())
+            }
+        }
+        "php" => {
+            if !has("composer.json") {
+                return Err("No composer.json found".into());
+            }
+            if !shell::has_binary("composer") {
+                return Err("composer is not installed".into());
+            }
+            step(
+                "composer",
+                &["install", "--no-dev", "--optimize-autoloader", "--no-interaction"],
+            )
+        }
+        _ => Err("This runtime has no dependency step".into()),
+    };
+    match result {
+        Ok(()) => Ok(log),
+        Err(err) => Err(format!("{}\n{}", log, err)),
+    }
 }
 
 /// Minimal argument splitter honouring single and double quotes.
@@ -406,6 +581,17 @@ fn spawn_child(
         .stderr(Stdio::from(err_file))
         .kill_on_drop(false);
 
+    let work_dir = std::path::Path::new(&record.work_dir);
+    if let Some(path) = project_path(work_dir) {
+        command.env("PATH", path);
+    }
+    for venv in [".venv", "venv"] {
+        if work_dir.join(venv).join("bin/python").is_file() {
+            command.env("VIRTUAL_ENV", work_dir.join(venv));
+            break;
+        }
+    }
+    // The app's own variables win, including PATH.
     for (key, value) in parse_env(&record.env) {
         command.env(key, value);
     }

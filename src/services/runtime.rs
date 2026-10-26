@@ -270,9 +270,76 @@ pub fn list() -> Vec<RuntimeStatus> {
     RUNTIMES.iter().map(detect_one).collect()
 }
 
+/// Extensions common PHP apps (WordPress, Laravel, Typecho...) need. Installed one
+/// at a time after PHP itself, so a name missing from one distro's repos does not
+/// fail the whole install.
+fn php_extensions(manager: &str) -> &'static [&'static str] {
+    match manager {
+        "apt-get" => &[
+            "php-mysql", "php-pgsql", "php-sqlite3", "php-curl", "php-gd", "php-mbstring",
+            "php-xml", "php-zip", "php-intl", "php-bcmath", "php-opcache", "php-redis",
+        ],
+        "dnf" | "yum" => &[
+            "php-mysqlnd", "php-pgsql", "php-pdo", "php-gd", "php-mbstring", "php-xml",
+            "php-intl", "php-bcmath", "php-opcache", "php-pecl-zip", "php-pecl-redis5",
+        ],
+        "apk" => &[
+            "php-mysqli", "php-pdo_mysql", "php-pdo_pgsql", "php-pdo_sqlite", "php-curl",
+            "php-gd", "php-mbstring", "php-xml", "php-dom", "php-zip", "php-intl",
+            "php-bcmath", "php-opcache", "php-session", "php-tokenizer", "php-fileinfo",
+        ],
+        _ => &[],
+    }
+}
+
+/// After PHP is present: add extensions, open the FPM socket to nginx and start it.
+fn finish_php_install(manager: &str, log: &mut String) {
+    for package in php_extensions(manager) {
+        let args: Vec<String> = match manager {
+            "apt-get" => vec!["install".into(), "-y".into(), package.to_string()],
+            "dnf" | "yum" => vec!["install".into(), "-y".into(), package.to_string()],
+            "apk" => vec!["add".into(), package.to_string()],
+            _ => continue,
+        };
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let ok = shell::run_privileged_with_timeout(
+            manager,
+            &arg_refs,
+            std::time::Duration::from_secs(300),
+        )
+        .map(|o| o.ok())
+        .unwrap_or(false);
+        log.push_str(&format!(
+            "[LinxPanel] extension {}: {}\n",
+            package,
+            if ok { "ok" } else { "not available, skipped" }
+        ));
+    }
+    match super::php::prepare() {
+        Ok((pool, text)) => {
+            log.push_str(&text);
+            log.push_str(&format!(
+                "[LinxPanel] PHP sites will use fastcgi_pass {}\n",
+                pool.fastcgi_addr()
+            ));
+        }
+        Err(err) => log.push_str(&format!("[LinxPanel] PHP-FPM setup failed: {}\n", err)),
+    }
+}
+
 pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
     let spec = spec_for(kind).ok_or_else(|| format!("Unknown runtime: {}", kind))?;
     let before = detect_one(spec);
+    // Installing PHP again repairs it: missing extensions, FPM socket, FPM not running.
+    if before.installed && kind == "php" {
+        let mut log = String::from("[LinxPanel] PHP is installed; checking extensions and PHP-FPM\n");
+        finish_php_install(package_manager(), &mut log);
+        return Ok(RuntimeInstallResult {
+            changed: false,
+            status: detect_one(spec),
+            log,
+        });
+    }
     if before.installed {
         return Ok(RuntimeInstallResult {
             changed: false,
@@ -347,6 +414,10 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
         }
     }
 
+    if kind == "php" && detect_one(spec).installed {
+        finish_php_install(manager, &mut log);
+    }
+
     let after = detect_one(spec);
     log.push_str(&format!(
         "\n[LinxPanel] Done. {} is {}\n",
@@ -363,6 +434,43 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
         status: after,
         log,
     })
+}
+
+/// Installs distro packages with the detected package manager, appending the
+/// commands and their output to `log`. Returns whether every command succeeded.
+pub fn install_packages(packages: &[&str], log: &mut String) -> bool {
+    let manager = package_manager();
+    let commands = install_commands(manager, packages);
+    if commands.is_empty() {
+        log.push_str("[LinxPanel] No supported package manager found (apt/dnf/yum/apk)\n");
+        return false;
+    }
+    for (program, args) in commands {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        log.push_str(&format!("\n$ {} {}\n", program, arg_refs.join(" ")));
+        match shell::run_privileged_with_timeout(
+            program,
+            &arg_refs,
+            std::time::Duration::from_secs(900),
+        ) {
+            Ok(result) => {
+                log.push_str(result.stdout.trim_end());
+                if !result.stderr.trim().is_empty() {
+                    log.push('\n');
+                    log.push_str(result.stderr.trim_end());
+                }
+                log.push('\n');
+                if !result.ok() {
+                    return false;
+                }
+            }
+            Err(err) => {
+                log.push_str(&format!("{}\n", err));
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Package-manager specific command sequence (refresh index first where it matters).

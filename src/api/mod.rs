@@ -1,7 +1,10 @@
 pub mod account_api;
+pub mod appstore_api;
 pub mod auth;
+pub mod backup_api;
 pub mod cert_api;
 pub mod cron_api;
+pub mod database_api;
 pub mod domains;
 pub mod files;
 pub mod firewall_api;
@@ -38,6 +41,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(settings::routes())
         .merge(panel_api::routes())
         .merge(account_api::routes())
+        .merge(database_api::routes())
+        .merge(appstore_api::routes())
+        .merge(backup_api::routes())
         .route_layer(axum_mw::from_fn(crate::middleware::auth))
         .layer(axum::Extension(state.clone()));
 

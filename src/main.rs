@@ -160,6 +160,9 @@ pub(crate) async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::pa
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Package installs run from the panel have no terminal: keep apt from prompting.
+    std::env::set_var("DEBIAN_FRONTEND", "noninteractive");
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if cli::run(&args).await? {
         return Ok(());

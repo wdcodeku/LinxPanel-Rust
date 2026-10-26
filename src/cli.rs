@@ -32,6 +32,9 @@ Commands:
                                Show or turn off two-factor login (default:
                                the panel's account)
   security                     Show all panel access settings
+  backup site <ID> [--keep N]  Archive a website's directory (used by scheduled backups)
+  backup db <ENGINE> <NAME> [--keep N]
+                               Dump a database (mysql | postgresql)
   info                         Print access settings as key=value lines
   version, --version, -V       Print the version
   help, --help, -h             Print this help
@@ -55,6 +58,7 @@ pub async fn run(args: &[String]) -> Result<bool> {
         "domain" => domain(rest).await?,
         "mfa" => mfa(rest).await?,
         "security" => security().await?,
+        "backup" => backup(rest).await?,
         "info" => info().await?,
         other => bail!("Unknown command: {}\n\n{}", other, USAGE),
     }
@@ -338,6 +342,59 @@ async fn mfa(args: &[String]) -> Result<()> {
         username,
         if on { "on" } else { "off" }
     );
+    Ok(())
+}
+
+/// `backup site|db ...`: what scheduled backup jobs in cron run.
+async fn backup(args: &[String]) -> Result<()> {
+    let mut positional = Vec::new();
+    let mut keep = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--keep" {
+            let value = iter
+                .next()
+                .ok_or_else(|| anyhow!("--keep requires a number"))?;
+            keep = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| anyhow!("Invalid --keep: {}", value))?,
+            );
+        } else {
+            positional.push(arg.as_str());
+        }
+    }
+    let (pool, data_dir) = crate::open_database().await?;
+    let path = match positional.as_slice() {
+        ["site", id] => {
+            let id: i64 = id
+                .parse()
+                .map_err(|_| anyhow!("Site id must be a number"))?;
+            let site = sqlx::query_as::<_, crate::models::Site>("SELECT * FROM sites WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&pool)
+                .await?
+                .ok_or_else(|| anyhow!("No site with id {}", id))?;
+            crate::services::backup::backup_site(
+                &data_dir,
+                site.id,
+                &site.name,
+                std::path::Path::new(&site.doc_root),
+                keep,
+            )
+            .map_err(|e| anyhow!(e))?
+        }
+        ["db", engine, name] => {
+            use crate::services::database;
+            let engine = database::Engine::parse(engine).map_err(|e| anyhow!(e))?;
+            let admin = database::load_mysql_admin(&pool).await;
+            database::backup(&data_dir, engine, name, admin.as_ref(), keep)
+                .map_err(|e| anyhow!(e))?
+        }
+        _ => bail!("Usage: backup site <ID> | backup db <ENGINE> <NAME> [--keep N]"),
+    };
+    pool.close().await;
+    println!("{}", path.display());
     Ok(())
 }
 

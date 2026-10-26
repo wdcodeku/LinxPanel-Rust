@@ -1,11 +1,16 @@
 pub mod appproc;
+pub mod appstore;
+pub mod backup;
 pub mod cert;
 pub mod cron;
+pub mod database;
 pub mod firewall;
 pub mod metrics;
 pub mod openresty;
 pub mod panel_access;
+pub mod php;
 pub mod runtime;
 pub mod servicectl;
 pub mod shell;
+pub mod sysservice;
 pub mod totp;

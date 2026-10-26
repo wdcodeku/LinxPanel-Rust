@@ -66,6 +66,41 @@
 
     <el-dialog v-model="formVisible" :title="editing ? t('cron.editJob') : t('cron.newJob')" width="560px">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+        <el-form-item v-if="!editing" :label="t('cron.type')">
+          <el-radio-group v-model="jobType" @change="applyTemplate">
+            <el-radio-button value="custom">{{ t('cron.typeCustom') }}</el-radio-button>
+            <el-radio-button value="site">{{ t('cron.typeSite') }}</el-radio-button>
+            <el-radio-button value="db">{{ t('cron.typeDb') }}</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <template v-if="!editing && jobType === 'site'">
+          <el-form-item :label="t('cron.backupSite')">
+            <el-select v-model="template.siteId" filterable style="width: 100%" @change="applyTemplate">
+              <el-option v-for="s in sites" :key="s.id" :label="s.name" :value="s.id" />
+            </el-select>
+          </el-form-item>
+        </template>
+        <template v-if="!editing && jobType === 'db'">
+          <div class="form-row">
+            <el-form-item :label="t('cron.backupEngine')" class="form-row__narrow">
+              <el-select v-model="template.engine" @change="loadTemplateDbs">
+                <el-option label="MySQL" value="mysql" />
+                <el-option label="PostgreSQL" value="postgresql" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t('cron.backupDb')" class="form-row__wide">
+              <el-select v-model="template.dbName" filterable style="width: 100%" @change="applyTemplate">
+                <el-option v-for="d in templateDbs" :key="d" :label="d" :value="d" />
+              </el-select>
+            </el-form-item>
+          </div>
+        </template>
+        <el-form-item v-if="!editing && jobType !== 'custom'" :label="t('cron.keep')">
+          <el-input-number v-model="template.keep" :min="1" :max="365" @change="applyTemplate" />
+          <span class="hint__text keep-hint">{{ t('cron.keepHint') }}</span>
+        </el-form-item>
+
         <el-form-item :label="t('cron.name')" prop="name">
           <el-input v-model="form.name" :placeholder="t('cron.namePlaceholder')" maxlength="64" />
         </el-form-item>
@@ -93,6 +128,7 @@
             :rows="3"
             placeholder="/usr/bin/backup.sh"
             class="lp-mono"
+            :readonly="!editing && jobType !== 'custom'"
           />
         </el-form-item>
 
@@ -114,8 +150,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
+import { useRoute } from 'vue-router'
 import {
-  createCronJob, deleteCronJob, getCronBackend, getCronJobs, toggleCronJob, updateCronJob,
+  createCronJob, deleteCronJob, getBackupCronPrefix, getCronBackend, getCronJobs, getSites,
+  listDatabases, toggleCronJob, updateCronJob,
 } from '@/api'
 import { useI18n } from '@/i18n'
 
@@ -186,8 +224,54 @@ const rules = computed<FormRules>(() => ({
   command: [{ required: true, message: t('cron.commandRequired'), trigger: 'blur' }],
 }))
 
+// --- Backup job templates: the command runs `linxpanel backup ...` ---
+const jobType = ref<'custom' | 'site' | 'db'>('custom')
+const template = reactive({ siteId: 0, engine: 'mysql', dbName: '', keep: 7 })
+const sites = ref<{ id: number; name: string }[]>([])
+const templateDbs = ref<string[]>([])
+const cronPrefix = ref('')
+
+async function loadTemplateDbs() {
+  template.dbName = ''
+  const res: any = await listDatabases(template.engine).catch(() => null)
+  templateDbs.value = res?.success ? res.data.map((d: any) => d.name) : []
+  applyTemplate()
+}
+
+async function applyTemplate() {
+  if (jobType.value === 'custom') {
+    form.command = ''
+    return
+  }
+  if (!cronPrefix.value) {
+    const res: any = await getBackupCronPrefix().catch(() => null)
+    cronPrefix.value = res?.data?.prefix || 'linxpanel'
+  }
+  if (!sites.value.length) {
+    const res: any = await getSites().catch(() => null)
+    sites.value = res?.success ? res.data : []
+  }
+  if (jobType.value === 'db' && !templateDbs.value.length && !template.dbName) {
+    const res: any = await listDatabases(template.engine).catch(() => null)
+    templateDbs.value = res?.success ? res.data.map((d: any) => d.name) : []
+  }
+  form.schedule = form.schedule === '*/5 * * * *' ? '30 2 * * *' : form.schedule
+  if (jobType.value === 'site') {
+    const site = sites.value.find((s) => s.id === template.siteId)
+    form.command = site ? `${cronPrefix.value} backup site ${site.id} --keep ${template.keep}` : ''
+    form.name = site ? t('cron.backupSiteName', { name: site.name }) : ''
+  } else {
+    form.command = template.dbName
+      ? `${cronPrefix.value} backup db ${template.engine} ${template.dbName} --keep ${template.keep}`
+      : ''
+    form.name = template.dbName ? t('cron.backupDbName', { name: template.dbName }) : ''
+  }
+}
+
 function openCreate() {
   editing.value = null
+  jobType.value = 'custom'
+  Object.assign(template, { siteId: 0, engine: 'mysql', dbName: '', keep: 7 })
   form.name = ''
   form.schedule = '*/5 * * * *'
   form.command = ''
@@ -299,7 +383,16 @@ function describe(schedule: string): string {
   return text
 }
 
-onMounted(load)
+const route = useRoute()
+onMounted(async () => {
+  await load()
+  if (route.query.template === 'site' && route.query.site) {
+    openCreate()
+    jobType.value = 'site'
+    template.siteId = Number(route.query.site)
+    await applyTemplate()
+  }
+})
 </script>
 
 <style scoped lang="scss">
@@ -348,4 +441,9 @@ onMounted(load)
     background: var(--lp-accent-soft);
   }
 }
+
+.form-row { display: flex; gap: var(--lp-3); }
+.form-row__narrow { width: 160px; flex: none; }
+.form-row__wide { flex: 1; min-width: 0; }
+.keep-hint { margin-left: var(--lp-2); }
 </style>

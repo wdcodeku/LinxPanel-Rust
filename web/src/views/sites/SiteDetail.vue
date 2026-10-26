@@ -62,6 +62,14 @@
       >
         {{ t('si.detailConfigTab') }}
       </button>
+      <button
+        type="button"
+        class="section-item"
+        :class="{ active: activeTab === 'backup' }"
+        @click="activeTab = 'backup'"
+      >
+        {{ t('sb.tab') }}
+      </button>
     </div>
 
     <el-card v-if="activeTab === 'info'" shadow="hover" class="detail-card">
@@ -217,6 +225,10 @@
       </el-table>
     </el-card>
 
+    <el-card v-else-if="activeTab === 'backup'" shadow="hover" class="detail-card">
+      <SiteBackups :site-id="siteId" />
+    </el-card>
+
     <el-card v-else shadow="hover" class="detail-card">
       <el-input v-model="editForm.extra_config" type="textarea" :rows="16" :placeholder="t('si.configPlaceholder')" />
       <div class="config-actions">
@@ -256,6 +268,7 @@ import {
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Edit, Delete, Check, Close, WarningFilled } from '@element-plus/icons-vue'
+import SiteBackups from './SiteBackups.vue'
 
 const route = useRoute()
 const router = useRouter()

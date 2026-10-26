@@ -1283,6 +1283,8 @@ async fn render_site_config(
         }
 
         blocks.push_str(&format!("    server_name {};\n", hosts.join(" ")));
+        // nginx's 1MB default breaks media uploads (WordPress, CMS admin panels).
+        blocks.push_str("    client_max_body_size 256m;\n");
 
         if is_stopped {
             let stop_html =
@@ -1300,6 +1302,16 @@ async fn render_site_config(
             blocks.push_str("    }\n");
             blocks.push_str("}\n");
             continue;
+        }
+
+        // Never serve dotfiles (.env, .git, .htaccess...) - except ACME challenges.
+        if !matches!(
+            site.site_type.as_str(),
+            "proxy" | "node" | "python" | "java" | "go" | "binary"
+        ) {
+            blocks.push_str("    location ~ /\\.(?!well-known/) {\n");
+            blocks.push_str("        deny all;\n");
+            blocks.push_str("    }\n");
         }
 
         // Rewrite ("pseudo-static") rules sit before the location blocks so they apply first.
@@ -1371,6 +1383,8 @@ async fn render_site_config(
                 );
                 blocks.push_str(&format!("        fastcgi_index {};\n", php_index_file));
                 blocks.push_str(&format!("        fastcgi_pass {};\n", runtime.php_fpm_addr));
+                // Imports, updates and installers routinely exceed nginx's 60s default.
+                blocks.push_str("        fastcgi_read_timeout 300s;\n");
                 blocks.push_str("    }\n");
             }
             _ => {
@@ -1870,15 +1884,22 @@ async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
     } else {
         Some(PathBuf::from(nginx_conf))
     };
+    // Without an explicit setting, use the installed PHP-FPM pool's own address:
+    // distros listen on a unix socket, so a fixed 127.0.0.1:9000 gave every PHP site a 502.
+    let detected_fpm = crate::services::php::detect()
+        .map(|pool| pool.fastcgi_addr())
+        .unwrap_or_else(|| "127.0.0.1:9000".to_string());
     let php_fpm_addr = setting_or_env(
         &settings,
         SETTING_PHP_FPM_ADDR,
         "PHP_FPM_ADDR",
-        "127.0.0.1:9000",
+        &detected_fpm,
     );
+    // `listen [::]:80` makes nginx refuse to start on hosts with IPv6 disabled
+    // (common on VPSes and in containers), so follow what the kernel supports.
     let listen_ipv6 = setting_bool(&settings, SETTING_OPENRESTY_LISTEN_IPV6)
         .or_else(|| env_bool("OPENRESTY_LISTEN_IPV6"))
-        .unwrap_or(true);
+        .unwrap_or_else(ipv6_available);
 
     Ok(OpenRestyRuntime {
         enabled,
@@ -1943,6 +1964,13 @@ async fn load_runtime_for_sync(db: &SqlitePool) -> Result<OpenRestyRuntime> {
     .await?;
 
     Ok(runtime)
+}
+
+/// Whether the kernel has IPv6 enabled (an empty if_inet6 means it is disabled).
+fn ipv6_available() -> bool {
+    std::fs::read_to_string("/proc/net/if_inet6")
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(cfg!(not(target_os = "linux")))
 }
 
 fn setting_or_env(

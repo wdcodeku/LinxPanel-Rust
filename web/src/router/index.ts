@@ -45,6 +45,18 @@ const router = createRouter({
           meta: { title: 'Security', icon: 'Lock' },
         },
         {
+          path: 'appstore',
+          name: 'AppStore',
+          component: () => import('@/views/appstore/AppStoreView.vue'),
+          meta: { title: 'App Store', icon: 'Shop' },
+        },
+        {
+          path: 'databases',
+          name: 'Databases',
+          component: () => import('@/views/databases/DatabaseView.vue'),
+          meta: { title: 'Databases', icon: 'Coin' },
+        },
+        {
           path: 'runtime',
           name: 'Runtime',
           component: () => import('@/views/runtime/RuntimeView.vue'),

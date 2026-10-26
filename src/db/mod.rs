@@ -227,6 +227,38 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
         }
     }
 
+    // Website programs deployed from the app store.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_installs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app TEXT NOT NULL,
+            site_id INTEGER NOT NULL,
+            domain TEXT NOT NULL,
+            doc_root TEXT NOT NULL,
+            db_name TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Databases created through the panel, with the credentials it generated.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS databases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            engine TEXT NOT NULL,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL DEFAULT '',
+            password TEXT NOT NULL DEFAULT '',
+            host TEXT NOT NULL DEFAULT 'localhost',
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(engine, name)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Opt-in HTTP->HTTPS redirect and HSTS, per site.
     for column in ["force_https", "hsts"] {
         let exists: Option<(i64,)> = sqlx::query_as(

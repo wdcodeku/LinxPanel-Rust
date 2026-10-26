@@ -178,6 +178,8 @@ const navGroups = [
     titleKey: 'nav.groupServer',
     items: [
       { path: '/sites', titleKey: 'sites', icon: 'Connection', match: '/sites' },
+      { path: '/appstore', titleKey: 'nav.appstore', icon: 'Shop' },
+      { path: '/databases', titleKey: 'nav.databases', icon: 'Coin' },
       { path: '/runtime', titleKey: 'nav.runtime', icon: 'Box' },
       { path: '/files', titleKey: 'fileManager', icon: 'FolderOpened' },
       { path: '/terminal', titleKey: 'terminal', icon: 'Monitor' },

@@ -53,6 +53,12 @@
                 :loading="installing === item.kind"
                 @click="install(item)"
               >{{ t('rt.install') }}</el-button>
+              <el-button
+                v-else-if="item.kind === 'php'"
+                size="small"
+                :loading="installing === item.kind"
+                @click="install(item, true)"
+              >{{ t('rt.repair') }}</el-button>
             </div>
           </article>
         </div>
@@ -117,6 +123,13 @@
                     {{ t('rt.stop') }}
                   </el-button>
                 </template>
+                <el-button
+                  v-if="['python', 'node', 'php'].includes(row.runtime)"
+                  link
+                  size="small"
+                  :loading="busy === `deps-${row.id}`"
+                  @click="installDeps(row)"
+                >{{ t('rt.installDeps') }}</el-button>
                 <el-button link size="small" @click="openLogs(row)">{{ t('rt.logs') }}</el-button>
                 <el-button link size="small" @click="openEdit(row)">{{ t('cron.edit') }}</el-button>
                 <el-button link type="danger" size="small" @click="remove(row)">{{ t('delete') }}</el-button>
@@ -148,6 +161,7 @@
         <div class="form-row">
           <el-form-item :label="entryLabel" prop="entry" class="form-row__item">
             <el-input v-model="form.entry" :placeholder="entryPlaceholder" class="lp-mono" />
+            <span v-if="entryHint" class="entry-hint">{{ entryHint }}</span>
           </el-form-item>
           <el-form-item :label="t('rt.port')" class="form-row__item form-row__item--narrow">
             <el-input-number v-model="form.port" :min="0" :max="65535" controls-position="right" style="width: 100%" />
@@ -212,7 +226,7 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import OperationLogDialog from '@/components/OperationLogDialog.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
-  installRuntime, updateApp,
+  installAppDeps, installRuntime, updateApp,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatDuration } from '@/utils/format'
@@ -252,7 +266,7 @@ const tab = ref('runtimes')
 const runtimes = ref<RuntimeStatus[]>([])
 const apps = ref<AppRow[]>([])
 const loading = ref(false)
-const busy = ref<number | null>(null)
+const busy = ref<number | string | null>(null)
 const installing = ref('')
 
 let pollTimer: number | null = null
@@ -314,10 +328,12 @@ const installLog = ref('')
 const installLogTitle = ref('')
 const installStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
 
-async function install(item: RuntimeStatus) {
+async function install(item: RuntimeStatus, repair = false) {
   try {
     await ElMessageBox.confirm(
-      t('rt.confirmInstall', { name: item.display_name, manager: item.package_manager }),
+      repair
+        ? t('rt.confirmRepair')
+        : t('rt.confirmInstall', { name: item.display_name, manager: item.package_manager }),
       t('rt.install'),
       { type: 'warning', confirmButtonText: t('confirm'), cancelButtonText: t('cancel') },
     )
@@ -334,7 +350,7 @@ async function install(item: RuntimeStatus) {
     const res: any = await installRuntime(item.kind)
     if (res.success) {
       installLog.value = res.data?.log || ''
-      installStatus.value = res.data?.status?.installed ? 'success' : 'error'
+      installStatus.value = res.data?.status?.installed && !/failed/i.test(res.data?.log || '') ? 'success' : 'error'
       if (res.data?.changed) ElMessage.success(t('rt.installed'))
       await loadAll()
     } else {
@@ -370,6 +386,33 @@ const entryLabel = computed(() =>
     ? t('rt.entryBinary')
     : t('rt.entry'),
 )
+const entryHint = computed(() =>
+  ({ python: t('rt.entryHintPython'), node: t('rt.entryHintNode') } as Record<string, string>)[form.runtime] || '',
+)
+
+// --- Project dependencies ---
+async function installDeps(row: AppRow) {
+  try {
+    await ElMessageBox.confirm(t('rt.confirmDeps', { name: row.name }), t('rt.installDeps'), { type: 'info' })
+  } catch {
+    return
+  }
+  busy.value = `deps-${row.id}`
+  installLogTitle.value = `${row.name} — ${t('rt.installDeps')}`
+  installLog.value = t('rt.installRunning')
+  installStatus.value = 'running'
+  installLogVisible.value = true
+  try {
+    const res: any = await installAppDeps(row.id, true)
+    installLog.value = res.data?.log || res.message || ''
+    installStatus.value = res.success && res.data?.success ? 'success' : 'error'
+  } catch {
+    installStatus.value = 'error'
+  } finally {
+    busy.value = null
+  }
+}
+
 const entryPlaceholder = computed(
   () =>
     ({
@@ -704,5 +747,13 @@ onUnmounted(() => {
 @media (max-width: 640px) {
   .form-row { flex-direction: column; gap: 0; }
   .form-row__item--narrow { flex: 1; }
+}
+
+.entry-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-dim);
+  line-height: 1.5;
 }
 </style>

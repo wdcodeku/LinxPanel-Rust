@@ -43,13 +43,50 @@ pub fn run_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<CmdOutput, String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
+    run_with_input(program, args, None, timeout)
+}
+
+/// Like `run_with_timeout`, feeding `input` to stdin. Used for SQL and secrets,
+/// which must not appear in the process list as arguments.
+pub fn run_with_input(
+    program: &str,
+    args: &[&str],
+    input: Option<&str>,
+    timeout: Duration,
+) -> Result<CmdOutput, String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    run_command(command, input, timeout)
+}
+
+/// Runs a prepared `Command` (for a working directory or extra environment),
+/// with the same output capture, stdin feeding and timeout as `run`.
+pub fn run_command(
+    mut command: Command,
+    input: Option<&str>,
+    timeout: Duration,
+) -> Result<CmdOutput, String> {
+    let program = command.get_program().to_string_lossy().to_string();
+    let program = program.as_str();
+    let mut child = command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| format!("{}: {}", program, err))?;
+
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        let input = input.to_string();
+        // A writer thread, so a child that does not read stdin cannot deadlock us.
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(input.as_bytes());
+        });
+    }
 
     // Drain both pipes while waiting: a child that fills the ~64KB pipe buffer
     // (package installs, ACME clients) would otherwise block until the timeout.

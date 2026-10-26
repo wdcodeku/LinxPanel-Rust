@@ -50,8 +50,20 @@ async fn create_site(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSiteRequest>,
 ) -> Json<ApiResponse<Site>> {
+    match create_site_record(&state, req).await {
+        Ok(site) => Json(ApiResponse::ok(site)),
+        Err(e) => Json(ApiResponse::err(&e)),
+    }
+}
+
+/// Creates a site and applies it to OpenResty, rolling back on failure.
+/// Shared by the sites API and one-click app deployment.
+pub(crate) async fn create_site_record(
+    state: &Arc<AppState>,
+    req: CreateSiteRequest,
+) -> Result<Site, String> {
     if let Err(e) = openresty::ensure_management_available(state.as_ref()).await {
-        return Json(ApiResponse::err(&e.to_string()));
+        return Err(e.to_string());
     }
 
     let CreateSiteRequest {
@@ -68,26 +80,23 @@ async fn create_site(
 
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Json(ApiResponse::err("Site name is required"));
+        return Err("Site name is required".to_string());
     }
 
     let mut normalized_domains: Vec<String> = Vec::new();
     let mut seen_domains: HashSet<String> = HashSet::new();
     for raw_domain in domains {
         let Some(domain) = normalize_domain(raw_domain.as_str()) else {
-            return Json(ApiResponse::err("Invalid domain format"));
+            return Err("Invalid domain format".to_string());
         };
         if !seen_domains.insert(domain.clone()) {
-            return Json(ApiResponse::err(&format!(
-                "Domain already exists: {}",
-                domain
-            )));
+            return Err(format!("Domain already exists: {}", domain));
         }
         normalized_domains.push(domain);
     }
     let domains: Vec<String> = normalized_domains;
     if domains.is_empty() {
-        return Json(ApiResponse::err("At least one domain is required"));
+        return Err("At least one domain is required".to_string());
     }
 
     let doc_root = doc_root
@@ -95,10 +104,7 @@ async fn create_site(
         .filter(|d| !d.is_empty())
         .unwrap_or_else(|| "/www/wwwroot".to_string());
     if let Err(e) = std::fs::create_dir_all(&doc_root) {
-        return Json(ApiResponse::err(&format!(
-            "Failed to create site directory: {}",
-            e
-        )));
+        return Err(format!("Failed to create site directory: {}", e));
     }
 
     let site_type = site_type
@@ -111,17 +117,18 @@ async fn create_site(
     for domain in &domains {
         match find_conflicting_domain(&state.db, domain).await {
             Ok(Some(conflict_domain)) => {
-                return Json(ApiResponse::err(&format!(
-                    "Domain already exists: {}",
-                    conflict_domain
-                )))
+                return Err(format!("Domain already exists: {}", conflict_domain))
             }
             Ok(None) => {}
-            Err(e) => return Json(ApiResponse::err(&e.to_string())),
+            Err(e) => return Err(e.to_string()),
         }
     }
 
-    if !is_proxied_site_type(&site_type) {
+    // A placeholder page only for an empty directory, never over deployed code.
+    let doc_root_empty = std::fs::read_dir(&doc_root)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    if !is_proxied_site_type(&site_type) && doc_root_empty {
         let index_path = std::path::Path::new(&doc_root).join("index.html");
         if !index_path.exists() {
             let index_content = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Hello World</title></head><body><h1>Hello World</h1></body></html>";
@@ -170,7 +177,7 @@ async fn create_site(
                     .bind(site_id)
                     .execute(&state.db)
                     .await;
-                return Json(ApiResponse::err(&format!("OpenResty apply failed: {}", e)));
+                return Err(format!("OpenResty apply failed: {}", e));
             }
 
             match sqlx::query_as::<_, Site>("SELECT * FROM sites WHERE id = ?")
@@ -178,11 +185,11 @@ async fn create_site(
                 .fetch_one(&state.db)
                 .await
             {
-                Ok(site) => Json(ApiResponse::ok(site)),
-                Err(e) => Json(ApiResponse::err(&e.to_string())),
+                Ok(site) => Ok(site),
+                Err(e) => Err(e.to_string()),
             }
         }
-        Err(e) => Json(ApiResponse::err(&e.to_string())),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -313,7 +320,7 @@ fn normalize_stopped_page_html(raw: Option<String>) -> Option<String> {
     })
 }
 
-async fn find_conflicting_domain(
+pub(crate) async fn find_conflicting_domain(
     db: &sqlx::SqlitePool,
     domain: &str,
 ) -> Result<Option<String>, sqlx::Error> {
@@ -325,7 +332,7 @@ async fn find_conflicting_domain(
     .await
 }
 
-fn normalize_domain(raw: &str) -> Option<String> {
+pub(crate) fn normalize_domain(raw: &str) -> Option<String> {
     let mut value = raw.trim().to_string();
     if value.is_empty() {
         return None;

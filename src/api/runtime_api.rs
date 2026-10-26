@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::models::ApiResponse;
@@ -22,6 +22,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/apps/{id}/start", post(start_app))
         .route("/apps/{id}/stop", post(stop_app))
         .route("/apps/{id}/restart", post(restart_app))
+        .route("/apps/{id}/install-deps", post(install_deps))
         .route("/apps/{id}/logs", get(app_logs).delete(clear_app_logs))
 }
 
@@ -138,6 +139,42 @@ async fn restart_app(
     {
         Ok(()) => Json(ApiResponse::ok_msg("Application restarted")),
         Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct InstallDepsRequest {
+    /// Node: also run the `build` script when package.json has one.
+    #[serde(default)]
+    build: bool,
+}
+
+#[derive(Serialize)]
+struct InstallDepsResult {
+    success: bool,
+    log: String,
+}
+
+/// pip / npm / pnpm / yarn / composer install in the app's working directory.
+async fn install_deps(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    body: Option<Json<InstallDepsRequest>>,
+) -> Json<ApiResponse<InstallDepsResult>> {
+    let record = match appproc::get(&state.db, id).await {
+        Ok(record) => record,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    let build = body.map(|Json(b)| b.build).unwrap_or(false);
+    let result =
+        tokio::task::spawn_blocking(move || appproc::install_dependencies(&record, build)).await;
+    match result {
+        Ok(Ok(log)) => Json(ApiResponse::ok(InstallDepsResult { success: true, log })),
+        Ok(Err(log)) => Json(ApiResponse::ok(InstallDepsResult {
+            success: false,
+            log,
+        })),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
     }
 }
 

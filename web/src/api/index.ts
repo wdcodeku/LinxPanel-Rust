@@ -126,6 +126,52 @@ export const updateDomain = (siteId: number, id: number, data: { domain: string 
   request.put(`/sites/${siteId}/domains/${id}`, data)
 export const removeDomain = (siteId: number, id: number) => request.delete(`/sites/${siteId}/domains/${id}`)
 
+// Databases
+const LONG = { timeout: 20 * 60 * 1000 }
+export const getDbEngines = () => request.get('/databases/engines')
+export const installDbEngine = (engine: string) =>
+  request.post(`/databases/engines/${engine}/install`, {}, LONG)
+export const restartDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/restart`)
+export const setMysqlAdmin = (data: { user: string; password: string }) =>
+  request.post('/databases/engines/mysql/admin', data)
+export const setRedisPassword = (password: string) =>
+  request.post('/databases/engines/redis/password', { password })
+export const listDatabases = (engine: string) => request.get('/databases', { params: { engine } })
+export const createDatabase = (data: {
+  engine: string; name: string; username?: string; password?: string; host?: string; note?: string
+}) => request.post('/databases', data)
+export const deleteDatabase = (engine: string, name: string) =>
+  request.post(`/databases/${engine}/${name}/delete`)
+export const changeDatabasePassword = (engine: string, name: string, password?: string) =>
+  request.post(`/databases/${engine}/${name}/password`, { password })
+export const listDatabaseBackups = (engine: string, name: string) =>
+  request.get(`/databases/${engine}/${name}/backups`)
+export const backupDatabase = (engine: string, name: string) =>
+  request.post(`/databases/${engine}/${name}/backups`, {}, LONG)
+export const restoreDatabase = (engine: string, name: string, file: string) =>
+  request.post(`/databases/${engine}/${name}/restore`, { file }, LONG)
+export const deleteDatabaseBackup = (engine: string, name: string, file: string) =>
+  request.post(`/databases/${engine}/${name}/backups/delete`, { file })
+
+/** pip / npm / composer install in the app's directory; `build` also runs the npm build script. */
+export const installAppDeps = (id: number, build = false) =>
+  request.post(`/apps/${id}/install-deps`, { build }, { timeout: 30 * 60 * 1000 })
+
+// Backups
+export const listSiteBackups = (id: number) => request.get(`/sites/${id}/backups`)
+export const backupSite = (id: number) => request.post(`/sites/${id}/backups`, {}, { timeout: 60 * 60 * 1000 })
+export const restoreSiteBackup = (id: number, file: string) =>
+  request.post(`/sites/${id}/backups/restore`, { file }, { timeout: 60 * 60 * 1000 })
+export const deleteSiteBackup = (id: number, file: string) => request.post(`/sites/${id}/backups/delete`, { file })
+export const getBackupCronPrefix = () => request.get('/backups/cron-prefix')
+
+// App store
+export const getAppCatalog = () => request.get('/appstore/apps')
+export const getInstalledApps = () => request.get('/appstore/installed')
+export const deployApp = (data: {
+  app: string; domains: string[]; doc_root?: string; db_name?: string; source_url?: string; locale?: string
+}) => request.post('/appstore/deploy', data, { timeout: 20 * 60 * 1000 })
+
 // Settings
 export const getSettings = () => request.get('/settings')
 export const saveSettingsApi = (data: any) => request.put('/settings', data)

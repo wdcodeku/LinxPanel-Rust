@@ -18,7 +18,11 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 /// Keys that live in the settings table but must never reach or be set from the browser.
 /// `jwt_secret` signs every session: leaking it lets anyone mint admin tokens.
-const PRIVATE_KEYS: &[&str] = &["jwt_secret"];
+const PRIVATE_KEYS: &[&str] = &[
+    "jwt_secret",
+    crate::services::database::SETTING_MYSQL_ADMIN_USER,
+    crate::services::database::SETTING_MYSQL_ADMIN_PASSWORD,
+];
 
 /// Readable here, but only writable through their dedicated, validating endpoints.
 const MANAGED_KEYS: &[&str] = crate::services::panel_access::MANAGED_SETTINGS;
