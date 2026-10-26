@@ -51,6 +51,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 - `Lp reset-password [用户名]`：重置密码（生成新的随机密码，并让该用户所有已登录会话失效）
 - `Lp entrance [show|off|random|/路径]`：查看或修改安全入口（修改后自动重启面板）
 - `Lp ssl [status|on|off]`：查看或开关面板 HTTPS（修改后自动重启面板）
+- `Lp port [端口|default]`、`Lp allow-ip [off|IP ...]`、`Lp domain [off|域名]`：修改面板端口、授权 IP、绑定域名（自动重启面板）
+- `Lp mfa [off]`：查看或关闭两步验证
+- `Lp security`：查看全部面板安全设置
 - `Lp version`：查看版本
 - `Lp uninstall [--purge]`：卸载（默认保留数据，`--purge` 同时删除数据）
 
@@ -115,12 +118,24 @@ LinxPanel 在构建时会将 `web/dist` 内嵌进 Rust 可执行文件，部署�
 - `GET /api/network/ports`：列出监听端口及占用进程（ss → lsof → netstat 自动降级）
 - 只读探测在无 sudo 时自动降级为非特权执行，不会直接报错
 
-### 面板访问安全
+### 面板安全设置（类似宝塔 / 1Panel）
 
-- **安全入口**：设置后，必须先访问 `https://IP:端口/入口路径` 才能打开面板，其它路径（包括登录接口）一律返回 404，避免面板被扫描发现。入口通过签名 Cookie 记住 30 天，修改入口会让其它浏览器的 Cookie 失效
-- **面板 HTTPS**：使用自签证书或证书库中的任意证书；HTTP 请求会被 301 跳转到 HTTPS；证书无法加载时自动退回 HTTP 并记录错误，避免面板无法访问
-- **登录保护**：同一 IP 15 分钟内失败 5 次即锁定；修改密码后该用户其它所有会话立即失效
-- 在「面板设置 → 安全 → 面板访问」中修改，systemd 下可直接在页面重启面板；忘记入口或证书出错时在服务器执行 `Lp entrance` / `Lp ssl off`
+「面板设置 → 安全」以列表形式集中管理以下设置，点击「设置」在弹窗中修改：
+
+| 设置 | 说明 | 服务器端恢复命令 |
+| --- | --- | --- |
+| 面板端口 | 修改后重启生效，自动在 ufw/firewalld 放行新端口；新端口被占用时启动会自动退回原端口 | `Lp port 7200` |
+| 安全入口 | 必须先访问 `/入口路径` 才能打开面板，签名 Cookie 记住 30 天 | `Lp entrance` / `Lp entrance off` |
+| 面板 SSL | 自签证书或证书库中的证书，HTTP 自动 301 跳转 HTTPS；证书损坏时自动退回 HTTP | `Lp ssl off` |
+| 授权 IP | 仅允许指定 IP / CIDR 网段（IPv4、IPv6）访问；列表必须包含当前 IP，防止误锁 | `Lp allow-ip off` |
+| 绑定域名 | 只允许通过该域名访问；须先通过该域名打开面板才能绑定，防止误锁 | `Lp domain off` |
+| 未认证响应 | 被拒绝时返回提示页（默认）或普通 404 / 403 / 400 页面，不暴露面板 | — |
+| 面板用户 | 修改登录用户名（需当前密码） | — |
+| 面板密码 | 修改后该用户其它所有会话立即失效 | `Lp reset-password` |
+| 两步验证 | TOTP 动态验证码（Google Authenticator / Microsoft Authenticator / 1Password 等），扫码绑定，验证码防重放 | `Lp mfa off` |
+| 会话超时 | 登录有效期 | — |
+
+此外：同一 IP 15 分钟内登录失败 5 次即锁定（两步验证码错误同样计数）；`Lp security` 可在服务器上查看全部设置；systemd 下可直接在页面重启面板。
 
 ### 会话持久化
 
@@ -276,6 +291,9 @@ Optional environment variables:
 - `Lp reset-password [user]`: set a new random password and sign out that user's sessions
 - `Lp entrance [show|off|random|/path]`: show or change the security entrance (restarts the panel)
 - `Lp ssl [status|on|off]`: show or toggle panel HTTPS (restarts the panel)
+- `Lp port [PORT|default]`, `Lp allow-ip [off|IP ...]`, `Lp domain [off|DOMAIN]`: change the panel port, allowed IPs, bound domain (restarts the panel)
+- `Lp mfa [off]`: show or turn off two-factor login
+- `Lp security`: show every panel security setting
 - `Lp version`: show the installed version
 - `Lp uninstall [--purge]`: remove LinxPanel (data is kept unless `--purge`)
 
@@ -341,12 +359,24 @@ A single background sampler ticks once per second and every connected client sha
 - `GET /api/network/ports`: listening sockets with owning process (ss → lsof → netstat fallback)
 - Read-only probes fall back to unprivileged execution instead of erroring when sudo is unavailable
 
-### Panel Access Security
+### Panel Security Settings (like BaoTa / 1Panel)
 
-- **Security entrance**: when set, the panel only opens after visiting `https://IP:port/<entrance>`; every other path, including the login API, returns 404 so scanners cannot find the panel. A signed cookie remembers the browser for 30 days, and changing the entrance revokes other browsers' cookies
-- **Panel HTTPS**: a self-signed certificate or any certificate from the certificate store; plain HTTP requests get a 301 to HTTPS; a certificate that fails to load falls back to HTTP with a logged error instead of locking you out
-- **Login protection**: 5 failures from one IP within 15 minutes locks that IP out; changing a password signs out every other session of that user
-- Managed under Settings → Security → Panel access, with an in-page restart under systemd; locked out? run `Lp entrance` / `Lp ssl off` on the server
+Settings → Security lists every setting with its current value; "Set" edits it in a dialog:
+
+| Setting | What it does | Recovery on the server |
+| --- | --- | --- |
+| Panel port | Applies after a restart and is opened in ufw/firewalld automatically; if the new port is taken at startup the panel falls back to the previous one | `Lp port 7200` |
+| Security entrance | The panel only opens after visiting `/<entrance>`; a signed cookie remembers the browser for 30 days | `Lp entrance` / `Lp entrance off` |
+| Panel SSL | Self-signed or any certificate from the store; HTTP gets a 301 to HTTPS; a broken certificate falls back to HTTP | `Lp ssl off` |
+| Allowed IPs | Only these IPs / CIDR ranges (IPv4, IPv6) may connect; the list must include your current IP so you cannot lock yourself out | `Lp allow-ip off` |
+| Bound domain | Only answer for this domain; you must open the panel through it before binding | `Lp domain off` |
+| Unauthorized response | Rejected visitors get a hint page (default) or a plain 404 / 403 / 400 that does not reveal the panel | — |
+| Panel user | Rename the login user (needs the current password) | — |
+| Panel password | Changing it signs out every other session of the user | `Lp reset-password` |
+| Two-factor login | TOTP codes (Google Authenticator, Microsoft Authenticator, 1Password, …) set up by QR code, with replay protection | `Lp mfa off` |
+| Session timeout | How long a sign-in lasts | — |
+
+Also: 5 failed logins from one IP within 15 minutes lock it out (wrong two-factor codes count too); `Lp security` prints every setting on the server; under systemd the panel can restart itself from the page.
 
 ### Session Persistence
 

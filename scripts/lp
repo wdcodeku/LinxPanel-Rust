@@ -103,6 +103,18 @@ current_port() {
     printf '%s' "${value}"
     return
   fi
+  # A port saved in the panel overrides the service's PORT, as in the binary.
+  value="$(panel_info listen_port)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+  service_port
+}
+
+# The PORT the service is started with: the fallback when none was saved in the panel.
+service_port() {
+  local value=""
   value="$(read_service_env "PORT" || true)"
   if [[ -n "${value}" ]]; then
     printf '%s' "${value}"
@@ -277,6 +289,7 @@ update_cmd() {
 panel_cli() {
   run_sudo env \
     DATABASE_URL="$(current_database_url)" \
+    PORT="$(service_port)" \
     RUST_LOG=error \
     "${BIN_PATH}" "$@"
 }
@@ -302,8 +315,39 @@ fix_data_owner() {
 
 panel_url() {
   local scheme=""
+  local host=""
   scheme="$(panel_info scheme)"
-  printf '%s://%s:%s%s' "${scheme:-http}" "$(detect_ip)" "$(current_port)" "$(panel_info entrance)"
+  # A bound domain is the only host the panel answers to.
+  host="$(panel_info domain)"
+  printf '%s://%s:%s%s' "${scheme:-http}" "${host:-$(detect_ip)}" "$(current_port)" "$(panel_info entrance)"
+}
+
+# Allows a port in an active ufw / firewalld, best effort.
+open_firewall_port() {
+  local port="$1"
+  if has_cmd ufw && run_sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+    run_sudo ufw allow "${port}/tcp" >/dev/null 2>&1 && echo "Opened ${port}/tcp in ufw."
+  elif has_cmd firewall-cmd && run_sudo firewall-cmd --state >/dev/null 2>&1; then
+    run_sudo firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 \
+      && run_sudo firewall-cmd --reload >/dev/null 2>&1 \
+      && echo "Opened ${port}/tcp in firewalld."
+  fi
+}
+
+# `Lp port|allow-ip|domain ...`: show, or change and restart to apply.
+access_cmd() {
+  local command="$1"
+  shift
+  local action="${1:-show}"
+  panel_cli "${command}" "$@" | grep -v "^Restart the panel"
+  fix_data_owner
+  case "${action}" in
+    show | status) return ;;
+  esac
+  if [[ "${command}" == "port" && "${action}" =~ ^[0-9]+$ ]]; then
+    open_firewall_port "${action}"
+  fi
+  apply_restart
 }
 
 # Restarts the panel so entrance / HTTPS changes take effect.
@@ -338,7 +382,9 @@ ssl_cmd() {
 }
 
 reset_password_cmd() {
-  local user="${1:-admin}"
+  local user="${1:-}"
+  [[ -z "${user}" ]] && user="$(panel_info admin_user)"
+  user="${user:-admin}"
   echo "Resetting password for '${user}'..."
   panel_cli reset-password --user "${user}"
   fix_data_owner
@@ -419,10 +465,15 @@ Usage:
                             View logs
   Lp info                   Show runtime info
   Lp update [binary|build]  Upgrade/reinstall LinxPanel (data is kept)
-  Lp reset-password [user]  Set a new random password (default user: admin)
+  Lp reset-password [user]  Set a new random password (default: the panel's account)
   Lp entrance [show|off|random|/path]
                             Show or change the security entrance
   Lp ssl [status|on|off]    Show or change panel HTTPS (self-signed by default)
+  Lp port [PORT|default]    Show or change the panel port
+  Lp allow-ip [off|IP ...]  Show, set or clear the allowed client IPs/CIDRs
+  Lp domain [off|DOMAIN]    Show, set or clear the bound domain
+  Lp mfa [off] [user]       Show or turn off two-factor login
+  Lp security               Show all panel security settings
   Lp version                Show installed version
   Lp enable                 Enable systemd service
   Lp disable                Disable systemd service
@@ -437,7 +488,9 @@ cmd="${1:-help}"
 
 require_binary=0
 case "${cmd}" in
-  start|restart|logs|info|reset-password|version|entrance|ssl) require_binary=1 ;;
+  start|restart|logs|info|reset-password|version|entrance|ssl|port|allow-ip|domain|mfa|security)
+    require_binary=1
+    ;;
 esac
 
 if [[ "${require_binary}" == "1" && ! -x "${BIN_PATH}" ]]; then
@@ -484,6 +537,21 @@ case "${cmd}" in
   update)
     update_cmd "${2:-binary}"
     ;;
+  port|allow-ip|domain)
+    access_cmd "$@"
+    ;;
+  mfa)
+    if [[ "${2:-status}" == "off" ]]; then
+      mfa_user="${3:-$(panel_info admin_user)}"
+      panel_cli mfa off --user "${mfa_user:-admin}"
+    else
+      panel_cli mfa status ${3:+--user "$3"}
+    fi
+    ;;
+  security)
+    panel_cli security
+    echo "URL:             $(panel_url)"
+    ;;
   entrance)
     shift
     entrance_cmd "$@"
@@ -493,7 +561,7 @@ case "${cmd}" in
     ssl_cmd "$@"
     ;;
   reset-password|resetpwd)
-    reset_password_cmd "${2:-admin}"
+    reset_password_cmd "${2:-}"
     ;;
   version|-v|--version)
     echo "LinxPanel $(version_text)"

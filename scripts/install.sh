@@ -20,6 +20,9 @@ LP_CLI_RAW_URL="${LINXPANEL_LP_CLI_RAW_URL:-https://raw.githubusercontent.com/${
 VERSION="${LINXPANEL_VERSION:-latest}"
 INSTALL_ROOT="${LINXPANEL_INSTALL_ROOT:-/opt/linxpanel}"
 PORT="${LINXPANEL_PORT:-}"
+# Whether the port was asked for explicitly (it then overrides one saved in the panel).
+PORT_EXPLICIT=0
+[[ -n "${PORT}" ]] && PORT_EXPLICIT=1
 DEFAULT_PORT=7200
 MIN_CARGO_VERSION="${LINXPANEL_MIN_CARGO_VERSION:-1.80.0}"
 MIN_NODE_MAJOR=18
@@ -789,7 +792,7 @@ set_admin_password() {
   if [[ -z "${ADMIN_PASSWORD}" ]]; then
     ADMIN_PASSWORD="$(LC_ALL=C tr -dc 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789' </dev/urandom | head -c 16 || true)"
   fi
-  if ! printf '%s\n' "${ADMIN_PASSWORD}" | panel_cli reset-password --user admin --password-stdin >/dev/null; then
+  if ! printf '%s\n' "${ADMIN_PASSWORD}" | panel_cli reset-password --password-stdin >/dev/null; then
     logf set_password_failed
     ADMIN_PASSWORD=""
   fi
@@ -825,7 +828,21 @@ configure_access() {
   esac
 }
 
-# Reads a key from `linxpanel info` (scheme, entrance, version).
+# A port changed in the panel is stored in its database and wins over the
+# service's PORT; keep the unit, env file, health check and summary in step.
+sync_port_with_panel() {
+  local saved=""
+  saved="$(panel_info listen_port)"
+  if [[ "${PORT_EXPLICIT}" == "1" ]]; then
+    if [[ -n "${saved}" && "${saved}" != "${PORT}" ]]; then
+      panel_cli port "${PORT}" >/dev/null || true
+    fi
+  elif [[ -n "${saved}" ]]; then
+    PORT="${saved}"
+  fi
+}
+
+# Reads a key from `linxpanel info` (scheme, entrance, version, listen_port, domain).
 panel_info() {
   panel_cli info 2>/dev/null | sed -n -E "s/^$1=(.*)$/\1/p" | head -n1 || true
 }
@@ -990,8 +1007,12 @@ print_summary() {
   local scheme=""
   local entrance=""
   [[ "${IS_UPGRADE}" == "1" ]] && title="upgrade_complete"
+  local domain=""
+  local user=""
   scheme="$(panel_info scheme)"
   entrance="$(panel_info entrance)"
+  domain="$(panel_info domain)"
+  user="$(panel_info admin_user)"
   scheme="${scheme:-http}"
 
   {
@@ -999,14 +1020,20 @@ print_summary() {
     echo "=================================================================="
     printf ' LinxPanel %s — %s\n' "$(bin_version "${INSTALL_ROOT}/bin/linxpanel")" "$(msg "${title}")"
     echo "=================================================================="
-    if [[ -n "${PUBLIC_IP}" ]]; then
+    if [[ -n "${domain}" ]]; then
+      # A bound domain is the only host the panel answers to.
       # shellcheck disable=SC2059
-      printf " $(msg panel_url_public)\n" "${scheme}://$(format_host_for_url "${PUBLIC_IP}"):${PORT}${entrance}"
+      printf " $(msg panel_url_public)\n" "${scheme}://${domain}:${PORT}${entrance}"
+    else
+      if [[ -n "${PUBLIC_IP}" ]]; then
+        # shellcheck disable=SC2059
+        printf " $(msg panel_url_public)\n" "${scheme}://$(format_host_for_url "${PUBLIC_IP}"):${PORT}${entrance}"
+      fi
+      # shellcheck disable=SC2059
+      printf " $(msg panel_url_internal)\n" "${scheme}://$(format_host_for_url "${INTERNAL_IP}"):${PORT}${entrance}"
     fi
     # shellcheck disable=SC2059
-    printf " $(msg panel_url_internal)\n" "${scheme}://$(format_host_for_url "${INTERNAL_IP}"):${PORT}${entrance}"
-    # shellcheck disable=SC2059
-    printf " $(msg panel_user)\n" "admin"
+    printf " $(msg panel_user)\n" "${user:-admin}"
     if [[ -n "${ADMIN_PASSWORD}" ]]; then
       # shellcheck disable=SC2059
       printf " $(msg panel_password)\n" "${ADMIN_PASSWORD}"
@@ -1133,6 +1160,7 @@ fi
 PUBLIC_IP="$(detect_public_ip)"
 INTERNAL_IP="$(detect_internal_ip)"
 configure_access
+sync_port_with_panel
 
 ${SUDO} chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}"
 ${SUDO} chmod 700 "${INSTALL_ROOT}/data"
