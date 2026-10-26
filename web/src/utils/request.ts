@@ -22,6 +22,8 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'Current password is incorrect': 'api.currentPasswordIncorrect',
   'Failed to hash password': 'api.passwordHashFailed',
   'Password changed': 'api.passwordChanged',
+  'Password must be at least 8 characters': 'st.passwordTooShort',
+  'Automatic restart needs systemd; run `Lp restart` on the server': 'st.restartManual',
   'Path does not exist': 'api.pathNotExist',
   'Path not found': 'api.pathNotFound',
   'Path is not a directory': 'api.pathNotDirectory',

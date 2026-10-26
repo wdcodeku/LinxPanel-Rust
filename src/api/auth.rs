@@ -112,26 +112,10 @@ async fn login(
     };
     state.login_guard.clear(ip);
 
-    // `session_timeout` is a panel setting in hours; it was previously ignored.
-    let hours = session_timeout_hours(&state).await;
-    let exp = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::hours(hours))
-        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(24))
-        .timestamp() as usize;
-
-    let claims = Claims {
-        sub: user.id,
-        username: user.username.clone(),
-        role: user.role.clone(),
-        exp,
+    let token = match issue_token(&state, &user).await {
+        Ok(token) => token,
+        Err(err) => return Json(ApiResponse::err(&format!("Login failed: {}", err))),
     };
-
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
-    )
-    .unwrap_or_default();
 
     Json(ApiResponse::ok(LoginResponse {
         token,
@@ -143,8 +127,35 @@ async fn login(
     }))
 }
 
+/// Signs a session token bound to the user's current `session_version`.
+pub async fn issue_token(state: &AppState, user: &User) -> anyhow::Result<String> {
+    let version = crate::db::session_version(&state.db, user.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user no longer exists"))?;
+
+    // `session_timeout` is a panel setting in hours; it was previously ignored.
+    let hours = session_timeout_hours(state).await;
+    let exp = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::hours(hours))
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::hours(24))
+        .timestamp() as usize;
+
+    let claims = Claims {
+        sub: user.id,
+        username: user.username.clone(),
+        role: user.role.clone(),
+        exp,
+        ver: version,
+    };
+    Ok(encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
+    )?)
+}
+
 /// Reads the configured session length, falling back to 24h when unset or invalid.
-async fn session_timeout_hours(state: &Arc<AppState>) -> i64 {
+async fn session_timeout_hours(state: &AppState) -> i64 {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
         .bind("session_timeout")
         .fetch_optional(&state.db)

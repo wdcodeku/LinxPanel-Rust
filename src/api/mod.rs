@@ -4,6 +4,7 @@ pub mod cron_api;
 pub mod domains;
 pub mod files;
 pub mod firewall_api;
+pub mod panel_api;
 pub mod processes;
 pub mod realtime;
 pub mod runtime_api;
@@ -17,7 +18,9 @@ use axum::{middleware as axum_mw, Router};
 use std::sync::Arc;
 
 pub fn routes(state: Arc<AppState>) -> Router {
-    let public = Router::new().merge(auth::public_routes());
+    let public = Router::new()
+        .merge(auth::public_routes())
+        .merge(panel_api::public_routes());
 
     let protected = Router::new()
         .merge(system::routes())
@@ -32,6 +35,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(domains::routes())
         .merge(files::routes())
         .merge(settings::routes())
+        .merge(panel_api::routes())
         .route_layer(axum_mw::from_fn(crate::middleware::auth))
         .layer(axum::Extension(state.clone()));
 

@@ -191,6 +191,19 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Bumped on every password change; tokens carry it, so a change signs out
+    // every existing session.
+    let has_session_version: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM pragma_table_info('users') WHERE name = 'session_version' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_session_version.is_none() {
+        sqlx::query("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+    }
+
     // Opt-in HTTP->HTTPS redirect and HSTS, per site.
     for column in ["force_https", "hsts"] {
         let exists: Option<(i64,)> = sqlx::query_as(
@@ -232,6 +245,7 @@ pub fn validate_password(password: &str) -> Result<(), &'static str> {
 }
 
 /// Sets a user's password, creating the account as an admin when it does not exist.
+/// Existing sessions of that user stop working because `session_version` is bumped.
 pub async fn set_user_password(
     pool: &SqlitePool,
     username: &str,
@@ -241,7 +255,7 @@ pub async fn set_user_password(
     sqlx::query(
         "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')
          ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash,
-         updated_at = datetime('now')",
+         session_version = session_version + 1, updated_at = datetime('now')",
     )
     .bind(username)
     .bind(&hash)
@@ -269,6 +283,35 @@ pub fn generate_password(len: usize) -> String {
         }
     }
     out
+}
+
+/// The current session version of a user, or None when the user no longer exists.
+pub async fn session_version(pool: &SqlitePool, user_id: i64) -> anyhow::Result<Option<i64>> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT session_version FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(version,)| version))
+}
+
+pub async fn get_setting(pool: &SqlitePool, key: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(value,)| value))
+}
+
+pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn seed_admin(pool: &SqlitePool) -> anyhow::Result<()> {

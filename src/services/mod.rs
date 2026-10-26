@@ -4,6 +4,7 @@ pub mod cron;
 pub mod firewall;
 pub mod metrics;
 pub mod openresty;
+pub mod panel_access;
 pub mod runtime;
 pub mod servicectl;
 pub mod shell;

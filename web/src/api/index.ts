@@ -130,6 +130,12 @@ export const removeDomain = (siteId: number, id: number) => request.delete(`/sit
 export const getSettings = () => request.get('/settings')
 export const saveSettingsApi = (data: any) => request.put('/settings', data)
 export const updateSettings = (data: Record<string, string>) => request.put('/settings', data)
+export const getPanelAccess = () => request.get('/settings/panel-access')
+export const setEntranceApi = (entrance: string) => request.post('/settings/entrance', { entrance })
+export const setPanelSslApi = (data: { enabled: boolean; cert_id?: number | null; regenerate?: boolean }) =>
+  request.post('/settings/panel-ssl', data)
+export const restartPanelApi = () => request.post('/settings/panel/restart')
+/** On success `data.token` replaces the session token: older tokens are revoked. */
 export const changePasswordApi = (data: { username: string; old_password: string; new_password: string }) =>
   request.post('/settings/password', data)
 export const getOpenRestyStatus = () => request.get('/settings/openresty/status')

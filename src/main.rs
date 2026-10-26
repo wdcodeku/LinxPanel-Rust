@@ -3,6 +3,7 @@ use axum::{
     extract::Path,
     http::{header, Response, StatusCode},
     routing::get,
+    serve::ListenerExt,
 };
 use include_dir::{include_dir, Dir, File};
 use std::net::SocketAddr;
@@ -12,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
+mod cli;
 mod db;
 mod middleware;
 mod models;
@@ -28,6 +30,25 @@ pub struct AppState {
     /// Flipped to true on shutdown so long-lived WebSocket handlers close themselves.
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub login_guard: api::auth::LoginGuard,
+    /// The security entrance path (e.g. `/a1b2c3`), None when disabled.
+    pub entrance: std::sync::RwLock<Option<String>>,
+    /// Whether this process is serving HTTPS (decided once at startup).
+    pub tls_active: bool,
+    /// Signalled to restart the panel (systemd brings it back up).
+    pub restart: tokio::sync::Notify,
+}
+
+impl AppState {
+    pub fn entrance(&self) -> Option<String> {
+        self.entrance
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn set_entrance(&self, entrance: Option<String>) {
+        *self.entrance.write().unwrap_or_else(|e| e.into_inner()) = entrance;
+    }
 }
 
 static EMBEDDED_WEB: Dir<'_> = include_dir!("$OUT_DIR/embedded-web");
@@ -110,21 +131,8 @@ async fn serve_embedded_path(Path(path): Path<String>) -> Response<Body> {
     not_found_response()
 }
 
-const USAGE: &str = "\
-Usage: linxpanel [COMMAND]
-
-Commands:
-  (none)                       Run the panel server
-  reset-password [--user NAME] [--password-stdin]
-                               Set a user's password. Reads it from stdin with
-                               --password-stdin, otherwise generates and prints one.
-  version, --version, -V       Print the version
-  help, --help, -h             Print this help
-
-Environment: PORT (default 7200), BIND (default 0.0.0.0), DATABASE_URL, JWT_SECRET, RUST_LOG";
-
 /// Opens (and migrates) the panel database, returning it with the data directory.
-async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::path::PathBuf)> {
+pub(crate) async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::path::PathBuf)> {
     let data_dir = resolve_path("data");
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir)?;
@@ -142,64 +150,11 @@ async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::path::PathBuf
     Ok((pool, data_dir))
 }
 
-/// `linxpanel reset-password`: recovery path for a lost password, also used by the
-/// installer to replace the well-known default with a random one.
-async fn reset_password_command(args: &[String]) -> anyhow::Result<()> {
-    let mut username = db::DEFAULT_ADMIN_USER.to_string();
-    let mut from_stdin = false;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--user" | "-u" => {
-                username = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--user requires a value"))?
-                    .clone();
-            }
-            "--password-stdin" => from_stdin = true,
-            other => anyhow::bail!("Unknown argument: {}\n\n{}", other, USAGE),
-        }
-    }
-    if username.trim().is_empty() {
-        anyhow::bail!("Username must not be empty");
-    }
-
-    let password = if from_stdin {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        line.trim_end_matches(['\r', '\n']).to_string()
-    } else {
-        db::generate_password(16)
-    };
-    db::validate_password(&password).map_err(|e| anyhow::anyhow!(e))?;
-
-    let (pool, _) = open_database().await?;
-    db::set_user_password(&pool, &username, &password).await?;
-    pool.close().await;
-
-    println!("Username: {}", username);
-    if !from_stdin {
-        println!("Password: {}", password);
-    }
-    println!("Password updated. Existing sessions stay valid until they expire.");
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        None => {}
-        Some("version" | "--version" | "-V") => {
-            println!("linxpanel {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        Some("help" | "--help" | "-h") => {
-            println!("{}", USAGE);
-            return Ok(());
-        }
-        Some("reset-password") => return reset_password_command(&args[1..]).await,
-        Some(other) => anyhow::bail!("Unknown command: {}\n\n{}", other, USAGE),
+    if cli::run(&args).await? {
+        return Ok(());
     }
 
     tracing_subscriber::registry()
@@ -212,6 +167,9 @@ async fn main() -> anyhow::Result<()> {
     let (pool, data_dir) = open_database().await?;
 
     let jwt_secret = db::resolve_jwt_secret(&pool).await?;
+
+    let entrance = services::panel_access::load_entrance(&pool).await;
+    let tls_config = load_panel_tls(&pool, &data_dir).await;
 
     let supervisor = Arc::new(services::appproc::Supervisor::new());
     let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
@@ -228,6 +186,9 @@ async fn main() -> anyhow::Result<()> {
         data_dir: data_dir.clone(),
         shutdown: shutdown_tx,
         login_guard: api::auth::LoginGuard::default(),
+        entrance: std::sync::RwLock::new(entrance),
+        tls_active: tls_config.is_some(),
+        restart: tokio::sync::Notify::new(),
     });
 
     // Keep ACME certificates fresh without operator intervention.
@@ -258,6 +219,10 @@ async fn main() -> anyhow::Result<()> {
     let app = axum::Router::new()
         .nest("/api", api_routes)
         .merge(web_routes)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::entrance_guard,
+        ))
         .layer(TraceLayer::new_for_http());
 
     let port: u16 = std::env::var("PORT")
@@ -273,7 +238,16 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|err| anyhow::anyhow!("Cannot listen on {}: {}", addr, err))?;
-    tracing::info!("LinxPanel {} listening on http://{}", env!("CARGO_PKG_VERSION"), addr);
+    let scheme = if tls_config.is_some() { "https" } else { "http" };
+    tracing::info!(
+        "LinxPanel {} listening on {}://{}",
+        env!("CARGO_PKG_VERSION"),
+        scheme,
+        addr
+    );
+    if state.entrance().is_some() {
+        tracing::info!("Security entrance is enabled (show it with `Lp entrance`)");
+    }
     // Idle keep-alive connections and open WebSockets can keep graceful shutdown
     // waiting indefinitely, so a top-level watchdog bounds how long that may take.
     // It must be spawned here, in the normal flow, to be reliably polled.
@@ -289,23 +263,63 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     });
 
-    let shutdown_supervisor = state.supervisor.clone();
-    let shutdown_notifier = state.shutdown.clone();
+    let shutdown = shutdown_future(state.clone());
     let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
-    axum::serve(listener, make_service)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            tracing::info!("Shutdown signal received");
-
-            // Tell WebSocket handlers to close; otherwise graceful shutdown waits
-            // forever on the metrics and terminal streams.
-            let _ = shutdown_notifier.send(true);
-            services::appproc::stop_all(shutdown_supervisor).await;
-        })
-        .await?;
+    // `tap_io` gives both listener types the same SocketAddr connect-info.
+    match tls_config {
+        Some(config) => {
+            let listener = services::panel_access::TlsListener::new(listener, config)?;
+            axum::serve(listener.tap_io(|_| {}), make_service)
+                .with_graceful_shutdown(shutdown)
+                .await?
+        }
+        None => {
+            axum::serve(listener.tap_io(|_| {}), make_service)
+                .with_graceful_shutdown(shutdown)
+                .await?
+        }
+    }
 
     tracing::info!("LinxPanel stopped");
     Ok(())
+}
+
+/// Loads the panel certificate when HTTPS is on. A missing or broken certificate
+/// falls back to plain HTTP with an error in the log, so the panel never becomes
+/// unreachable because of it.
+async fn load_panel_tls(
+    pool: &sqlx::SqlitePool,
+    data_dir: &std::path::Path,
+) -> Option<Arc<tokio_rustls::rustls::ServerConfig>> {
+    if !services::panel_access::ssl_enabled(pool).await {
+        return None;
+    }
+    let (cert_path, key_path, _) = services::panel_access::ssl_paths(pool, data_dir).await;
+    match services::panel_access::load_tls_config(&cert_path, &key_path) {
+        Ok(config) => Some(config),
+        Err(err) => {
+            tracing::error!(
+                "Panel HTTPS is on but the certificate cannot be loaded ({:#}); serving plain HTTP. \
+                 Fix it in the panel, or run `Lp ssl on --regenerate`",
+                err
+            );
+            None
+        }
+    }
+}
+
+/// Completes when the panel should stop, after telling long-lived handlers and
+/// managed applications to shut down.
+async fn shutdown_future(state: Arc<AppState>) {
+    tokio::select! {
+        _ = shutdown_signal() => tracing::info!("Shutdown signal received"),
+        _ = state.restart.notified() => tracing::info!("Restarting"),
+    }
+
+    // Tell WebSocket handlers to close; otherwise graceful shutdown waits
+    // forever on the metrics and terminal streams.
+    let _ = state.shutdown.send(true);
+    services::appproc::stop_all(state.supervisor.clone()).await;
 }
 
 /// Resolves on Ctrl-C, or on SIGTERM when the panel runs under systemd.

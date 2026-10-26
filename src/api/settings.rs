@@ -20,6 +20,13 @@ pub fn routes() -> Router<Arc<AppState>> {
 /// `jwt_secret` signs every session: leaking it lets anyone mint admin tokens.
 const PRIVATE_KEYS: &[&str] = &["jwt_secret"];
 
+/// Readable here, but only writable through their dedicated, validating endpoints.
+const MANAGED_KEYS: &[&str] = &[
+    crate::services::panel_access::SETTING_ENTRANCE,
+    crate::services::panel_access::SETTING_PANEL_SSL,
+    crate::services::panel_access::SETTING_PANEL_SSL_CERT_ID,
+];
+
 fn is_private_key(key: &str) -> bool {
     PRIVATE_KEYS.contains(&key)
 }
@@ -42,7 +49,10 @@ async fn update_settings(
     State(state): State<Arc<AppState>>,
     Json(req): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Json<ApiResponse<()>> {
-    if let Some(key) = req.keys().find(|key| is_private_key(key)) {
+    if let Some(key) = req
+        .keys()
+        .find(|key| is_private_key(key) || MANAGED_KEYS.contains(&key.as_str()))
+    {
         return Json(ApiResponse::err(&format!(
             "Setting '{}' cannot be changed here",
             key
@@ -73,7 +83,7 @@ async fn change_password(
     State(state): State<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<ChangePasswordRequest>,
-) -> Json<ApiResponse<()>> {
+) -> Json<ApiResponse<serde_json::Value>> {
     // The account comes from the session, not the request body, so one user
     // cannot target another account's password.
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
@@ -99,12 +109,15 @@ async fn change_password(
         Err(_) => return Json(ApiResponse::err("Failed to hash password")),
     };
 
-    if let Err(err) =
-        sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
-            .bind(&new_hash)
-            .bind(user.id)
-            .execute(&state.db)
-            .await
+    // Bumping session_version signs out every other session of this user.
+    if let Err(err) = sqlx::query(
+        "UPDATE users SET password_hash = ?, session_version = session_version + 1,
+         updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&new_hash)
+    .bind(user.id)
+    .execute(&state.db)
+    .await
     {
         return Json(ApiResponse::err(&format!(
             "Failed to save password: {}",
@@ -112,7 +125,15 @@ async fn change_password(
         )));
     }
 
-    Json(ApiResponse::ok_msg("Password changed"))
+    // A fresh token keeps the browser that made the change signed in.
+    match crate::api::auth::issue_token(&state, &user).await {
+        Ok(token) => Json(ApiResponse {
+            success: true,
+            message: "Password changed".into(),
+            data: Some(serde_json::json!({ "token": token })),
+        }),
+        Err(_) => Json(ApiResponse::ok_msg("Password changed")),
+    }
 }
 
 async fn get_openresty_status(

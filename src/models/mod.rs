@@ -35,6 +35,10 @@ pub struct Claims {
     pub username: String,
     pub role: String,
     pub exp: usize,
+    /// The user's `session_version` at login; tokens from before a password change
+    /// carry an older value and are rejected. Absent in pre-versioning tokens.
+    #[serde(default)]
+    pub ver: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]

@@ -246,7 +246,10 @@ const pwRef = ref()
 const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
 const pwRules = computed<FormRules>(() => ({
   old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-  new_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
+  new_password: [
+    { required: true, message: t('st.passwordRequired'), trigger: 'blur' },
+    { min: 8, message: t('st.passwordTooShort'), trigger: 'blur' },
+  ],
   confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
 }))
 
@@ -280,7 +283,9 @@ async function changePassword() {
       new_password: pwForm.new_password,
     })
     if (res.success) {
-      ElMessage.success(t('st.passwordChanged'))
+      // Other sessions were revoked; the response carries this session's new token.
+      if (res.data?.token) userStore.setLogin(res.data.token, userStore.username)
+      ElMessage.success(t('st.sessionsRevoked'))
       showChangePassword.value = false
       resetPasswordForm()
     }
