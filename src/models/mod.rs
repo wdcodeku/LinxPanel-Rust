@@ -14,6 +14,9 @@ pub struct User {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    /// The authenticator code, required once two-factor login is on.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1193,6 +1193,7 @@ dependencies = [
  "mime_guess",
  "portable-pty",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

@@ -30,24 +30,32 @@ pub struct AppState {
     /// Flipped to true on shutdown so long-lived WebSocket handlers close themselves.
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub login_guard: api::auth::LoginGuard,
-    /// The security entrance path (e.g. `/a1b2c3`), None when disabled.
-    pub entrance: std::sync::RwLock<Option<String>>,
+    /// Entrance, allowed IPs, bound domain and deny response; swapped on change.
+    pub access: std::sync::RwLock<Arc<services::panel_access::AccessPolicy>>,
     /// Whether this process is serving HTTPS (decided once at startup).
     pub tls_active: bool,
+    /// The port this process listens on (decided once at startup).
+    pub listen_port: u16,
     /// Signalled to restart the panel (systemd brings it back up).
     pub restart: tokio::sync::Notify,
 }
 
 impl AppState {
-    pub fn entrance(&self) -> Option<String> {
-        self.entrance
+    pub fn access(&self) -> Arc<services::panel_access::AccessPolicy> {
+        self.access
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    pub fn set_entrance(&self, entrance: Option<String>) {
-        *self.entrance.write().unwrap_or_else(|e| e.into_inner()) = entrance;
+    pub fn entrance(&self) -> Option<String> {
+        self.access().entrance.clone()
+    }
+
+    /// Re-reads the access policy after one of its settings changed.
+    pub async fn reload_access(&self) {
+        let policy = services::panel_access::AccessPolicy::load(&self.db).await;
+        *self.access.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(policy);
     }
 }
 
@@ -168,7 +176,8 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt_secret = db::resolve_jwt_secret(&pool).await?;
 
-    let entrance = services::panel_access::load_entrance(&pool).await;
+    let access = services::panel_access::AccessPolicy::load(&pool).await;
+    let (listener, port) = bind_listener(&pool).await?;
     let tls_config = load_panel_tls(&pool, &data_dir).await;
 
     let supervisor = Arc::new(services::appproc::Supervisor::new());
@@ -186,8 +195,9 @@ async fn main() -> anyhow::Result<()> {
         data_dir: data_dir.clone(),
         shutdown: shutdown_tx,
         login_guard: api::auth::LoginGuard::default(),
-        entrance: std::sync::RwLock::new(entrance),
+        access: std::sync::RwLock::new(Arc::new(access)),
         tls_active: tls_config.is_some(),
+        listen_port: port,
         restart: tokio::sync::Notify::new(),
     });
 
@@ -221,29 +231,16 @@ async fn main() -> anyhow::Result<()> {
         .merge(web_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            middleware::entrance_guard,
+            middleware::access_guard,
         ))
         .layer(TraceLayer::new_for_http());
 
-    let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "7200".into())
-        .parse()
-        .unwrap_or(7200);
-    let bind_ip: std::net::IpAddr = std::env::var("BIND")
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
-    let addr = SocketAddr::new(bind_ip, port);
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|err| anyhow::anyhow!("Cannot listen on {}: {}", addr, err))?;
     let scheme = if tls_config.is_some() { "https" } else { "http" };
     tracing::info!(
         "LinxPanel {} listening on {}://{}",
         env!("CARGO_PKG_VERSION"),
         scheme,
-        addr
+        listener.local_addr()?
     );
     if state.entrance().is_some() {
         tracing::info!("Security entrance is enabled (show it with `Lp entrance`)");
@@ -282,6 +279,40 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("LinxPanel stopped");
     Ok(())
+}
+
+/// Binds the configured port. A port saved from the panel that cannot be bound
+/// (taken by another program since) falls back to the PORT environment variable,
+/// so a bad setting never keeps the panel down.
+async fn bind_listener(pool: &sqlx::SqlitePool) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
+    let bind_ip: std::net::IpAddr = std::env::var("BIND")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let env_port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(7200);
+    let port = services::panel_access::effective_port(pool).await;
+
+    match tokio::net::TcpListener::bind(SocketAddr::new(bind_ip, port)).await {
+        Ok(listener) => Ok((listener, port)),
+        Err(err) if port != env_port => {
+            tracing::error!(
+                "Cannot listen on configured port {} ({}); falling back to {}. \
+                 Change it in the panel or with `Lp port`",
+                port,
+                err,
+                env_port
+            );
+            let addr = SocketAddr::new(bind_ip, env_port);
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|err| anyhow::anyhow!("Cannot listen on {}: {}", addr, err))?;
+            Ok((listener, env_port))
+        }
+        Err(err) => Err(anyhow::anyhow!("Cannot listen on port {}: {}", port, err)),
+    }
 }
 
 /// Loads the panel certificate when HTTPS is on. A missing or broken certificate

@@ -204,6 +204,29 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
             .await?;
     }
 
+    // Two-factor login: the active TOTP secret, one being set up, and the last
+    // accepted time step (so a code cannot be replayed).
+    for (column, definition) in [
+        ("totp_secret", "TEXT"),
+        ("totp_pending", "TEXT"),
+        ("totp_last_step", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('users') WHERE name = ? LIMIT 1",
+        )
+        .bind(column)
+        .fetch_optional(pool)
+        .await?;
+        if exists.is_none() {
+            sqlx::query(&format!(
+                "ALTER TABLE users ADD COLUMN {} {}",
+                column, definition
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
+
     // Opt-in HTTP->HTTPS redirect and HSTS, per site.
     for column in ["force_https", "hsts"] {
         let exists: Option<(i64,)> = sqlx::query_as(
@@ -292,6 +315,104 @@ pub async fn session_version(pool: &SqlitePool, user_id: i64) -> anyhow::Result<
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|(version,)| version))
+}
+
+pub struct AccountSecurity {
+    pub username: String,
+    pub mfa_enabled: bool,
+}
+
+pub async fn account_security(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> anyhow::Result<Option<AccountSecurity>> {
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT username, totp_secret FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(username, secret)| AccountSecurity {
+        username,
+        mfa_enabled: secret.is_some_and(|s| !s.is_empty()),
+    }))
+}
+
+/// The user's TOTP state: (active secret, pending secret, last accepted step).
+pub async fn totp_state(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> anyhow::Result<(Option<String>, Option<String>, i64)> {
+    let row: Option<(Option<String>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT totp_secret, totp_pending, totp_last_step FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let (secret, pending, step) = row.unwrap_or((None, None, 0));
+    let non_empty = |value: Option<String>| value.filter(|s| !s.is_empty());
+    Ok((non_empty(secret), non_empty(pending), step))
+}
+
+pub async fn set_totp_pending(pool: &SqlitePool, user_id: i64, secret: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET totp_pending = ? WHERE id = ?")
+        .bind(secret)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Turns the pending secret into the active one.
+pub async fn activate_totp(pool: &SqlitePool, user_id: i64, step: i64) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE users SET totp_secret = totp_pending, totp_pending = NULL, totp_last_step = ?
+         WHERE id = ?",
+    )
+    .bind(step)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn record_totp_step(pool: &SqlitePool, user_id: i64, step: i64) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET totp_last_step = ? WHERE id = ?")
+        .bind(step)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Turns two-factor login off; returns false when the user does not exist.
+pub async fn disable_totp(pool: &SqlitePool, username: &str) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        "UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE username = ?",
+    )
+    .bind(username)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// The panel's own account (the first one created), which may have been renamed.
+pub async fn primary_username(pool: &SqlitePool) -> anyhow::Result<String> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT username FROM users ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map_or_else(|| DEFAULT_ADMIN_USER.to_string(), |(name,)| name))
+}
+
+pub fn validate_username(username: &str) -> Result<(), &'static str> {
+    let valid_len = (3..=32).contains(&username.len());
+    let valid_chars = username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if valid_len && valid_chars {
+        Ok(())
+    } else {
+        Err("Username must be 3-32 letters, digits, '_', '-' or '.'")
+    }
 }
 
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> anyhow::Result<Option<String>> {

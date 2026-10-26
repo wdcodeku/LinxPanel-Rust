@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::models::Claims;
-use crate::services::panel_access::{self, EntranceCookie};
+use crate::services::panel_access::{self, DenyReason, EntranceCookie};
 use crate::AppState;
 
 pub async fn auth(mut req: Request, next: Next) -> Result<Response, StatusCode> {
@@ -73,29 +73,45 @@ fn is_websocket_route(path: &str) -> bool {
     path.ends_with("/files/terminal/ws") || path.ends_with("/realtime/ws")
 }
 
-/// Hides the whole panel, UI and API alike, until the browser has visited the
-/// security entrance. Visiting it sets a signed cookie and redirects to login.
-pub async fn entrance_guard(
+/// Gatekeeper in front of the whole panel, UI and API alike. In order it enforces
+/// the allowed-IP list, the bound domain and the security entrance; visiting the
+/// entrance sets a signed cookie and redirects to login.
+pub async fn access_guard(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    let Some(entrance) = state.entrance() else {
-        return next.run(req).await;
-    };
-
-    let path = req.uri().path();
-    // The installer's local health probe; remote callers must not learn a panel is here.
-    let from_loopback = req
+    let policy = state.access();
+    let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .is_some_and(|ConnectInfo(peer)| peer.ip().is_loopback());
-    if path == "/api/health" && from_loopback {
+        .map(|ConnectInfo(peer)| peer.ip());
+    let path = req.uri().path();
+
+    // The installer's local health probe; remote callers must not learn a panel is here.
+    if path == "/api/health" && peer.is_some_and(|ip| ip.is_loopback()) {
         return next.run(req).await;
     }
-    if path == entrance || path.strip_suffix('/') == Some(entrance.as_str()) {
+
+    if !peer.is_some_and(|ip| policy.ip_allowed(ip)) {
+        tracing::debug!("Rejected {:?}: not in allowed IPs", peer);
+        return deny(&policy, DenyReason::Ip);
+    }
+
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok());
+    if !policy.host_allowed(host) {
+        return deny(&policy, DenyReason::Domain);
+    }
+
+    let Some(entrance) = policy.entrance.as_deref() else {
+        return next.run(req).await;
+    };
+    if path == entrance || path.strip_suffix('/') == Some(entrance) {
         let cookie =
-            panel_access::entrance_set_cookie(&entrance, &state.jwt_secret, state.tls_active);
+            panel_access::entrance_set_cookie(entrance, &state.jwt_secret, state.tls_active);
         return Response::builder()
             .status(StatusCode::FOUND)
             .header(header::LOCATION, "/login")
@@ -109,26 +125,27 @@ pub async fn entrance_guard(
         .headers()
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok());
-    match panel_access::check_entrance_cookie(cookie_header, &entrance, &state.jwt_secret) {
+    match panel_access::check_entrance_cookie(cookie_header, entrance, &state.jwt_secret) {
         EntranceCookie::Valid { refresh } => {
+            let cookie = refresh.then(|| {
+                panel_access::entrance_set_cookie(entrance, &state.jwt_secret, state.tls_active)
+            });
             let mut response = next.run(req).await;
-            if refresh {
-                let cookie = panel_access::entrance_set_cookie(
-                    &entrance,
-                    &state.jwt_secret,
-                    state.tls_active,
-                );
-                if let Ok(value) = HeaderValue::from_str(&cookie) {
-                    response.headers_mut().append(header::SET_COOKIE, value);
-                }
+            if let Some(value) = cookie.and_then(|c| HeaderValue::from_str(&c).ok()) {
+                response.headers_mut().append(header::SET_COOKIE, value);
             }
             response
         }
-        EntranceCookie::Missing => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(Body::from(panel_access::ENTRANCE_DENIED_HTML))
-            .unwrap_or_default(),
+        EntranceCookie::Missing => deny(&policy, DenyReason::Entrance),
     }
+}
+
+fn deny(policy: &panel_access::AccessPolicy, reason: DenyReason) -> Response {
+    let (status, body) = panel_access::deny_page(policy.deny, reason);
+    Response::builder()
+        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::NOT_FOUND))
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .unwrap_or_default()
 }

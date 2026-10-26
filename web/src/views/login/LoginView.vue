@@ -17,6 +17,19 @@
         <el-form-item prop="password">
           <el-input v-model="form.password" type="password" :placeholder="t('login.password')" :prefix-icon="Lock" size="large" show-password @keyup.enter="handleLogin" />
         </el-form-item>
+        <el-form-item v-if="mfaRequired" prop="code">
+          <el-input
+            ref="codeRef"
+            v-model="form.code"
+            :placeholder="t('login.mfaCode')"
+            :prefix-icon="Key"
+            size="large"
+            maxlength="6"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            @keyup.enter="handleLogin"
+          />
+        </el-form-item>
         <el-button type="primary" size="large" :loading="loading" style="width:100%" @click="handleLogin">
           {{ t('login.loginBtn') }}
         </el-button>
@@ -26,12 +39,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useI18n } from '@/i18n'
 import { login } from '@/api'
-import { User, Lock } from '@element-plus/icons-vue'
+import { User, Lock, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
@@ -40,7 +53,10 @@ const { t } = useI18n()
 const formRef = ref()
 const loading = ref(false)
 
-const form = reactive({ username: '', password: '' })
+const form = reactive({ username: '', password: '', code: '' })
+// Shown once the server says the account has two-factor login on.
+const mfaRequired = ref(false)
+const codeRef = ref()
 const rules = computed(() => ({
   username: [{ required: true, message: t('login.usernameRequired'), trigger: 'blur' }],
   password: [{ required: true, message: t('login.passwordRequired'), trigger: 'blur' }],
@@ -50,7 +66,13 @@ async function handleLogin() {
   await formRef.value?.validate()
   loading.value = true
   try {
-    const res: any = await login(form)
+    const res: any = await login({ ...form, code: mfaRequired.value ? form.code : undefined })
+    if (!res.success && res.data?.mfa_required) {
+      mfaRequired.value = true
+      form.code = ''
+      nextTick(() => codeRef.value?.focus())
+      return
+    }
     if (res.success) {
       userStore.setLogin(res.data.token, res.data.user.username)
       ElMessage.success(t('login.success'))

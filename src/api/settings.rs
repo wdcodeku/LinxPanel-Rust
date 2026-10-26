@@ -21,11 +21,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 const PRIVATE_KEYS: &[&str] = &["jwt_secret"];
 
 /// Readable here, but only writable through their dedicated, validating endpoints.
-const MANAGED_KEYS: &[&str] = &[
-    crate::services::panel_access::SETTING_ENTRANCE,
-    crate::services::panel_access::SETTING_PANEL_SSL,
-    crate::services::panel_access::SETTING_PANEL_SSL_CERT_ID,
-];
+const MANAGED_KEYS: &[&str] = crate::services::panel_access::MANAGED_SETTINGS;
 
 fn is_private_key(key: &str) -> bool {
     PRIVATE_KEYS.contains(&key)

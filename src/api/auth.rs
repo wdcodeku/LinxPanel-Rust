@@ -71,7 +71,7 @@ async fn login(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
-) -> Json<ApiResponse<LoginResponse>> {
+) -> Json<ApiResponse<serde_json::Value>> {
     let ip = peer.ip();
     if let Some(wait) = state.login_guard.locked_for(ip) {
         tracing::warn!(
@@ -110,6 +110,32 @@ async fn login(
             return Json(ApiResponse::err("Invalid credentials"));
         }
     };
+
+    // Second factor, once the password checked out.
+    let (totp_secret, _, last_step) = match crate::db::totp_state(&state.db, user.id).await {
+        Ok(totp) => totp,
+        Err(err) => return Json(ApiResponse::err(&format!("Login failed: {}", err))),
+    };
+    if let Some(secret) = totp_secret {
+        let code = req.code.as_deref().map(str::trim).unwrap_or_default();
+        if code.is_empty() {
+            return Json(ApiResponse {
+                success: false,
+                message: "Two-factor code required".into(),
+                data: Some(serde_json::json!({ "mfa_required": true })),
+            });
+        }
+        let Some(step) = crate::services::totp::verify(&secret, code, last_step) else {
+            state.login_guard.record_failure(ip);
+            tracing::warn!("Wrong two-factor code for '{}' from {}", user.username, ip);
+            return Json(ApiResponse {
+                success: false,
+                message: "Invalid two-factor code".into(),
+                data: Some(serde_json::json!({ "mfa_required": true })),
+            });
+        };
+        let _ = crate::db::record_totp_step(&state.db, user.id, step).await;
+    }
     state.login_guard.clear(ip);
 
     let token = match issue_token(&state, &user).await {
@@ -117,14 +143,17 @@ async fn login(
         Err(err) => return Json(ApiResponse::err(&format!("Login failed: {}", err))),
     };
 
-    Json(ApiResponse::ok(LoginResponse {
+    let response = LoginResponse {
         token,
         user: UserInfo {
             id: user.id,
             username: user.username,
             role: user.role,
         },
-    }))
+    };
+    Json(ApiResponse::ok(
+        serde_json::to_value(response).unwrap_or_default(),
+    ))
 }
 
 /// Signs a session token bound to the user's current `session_version`.

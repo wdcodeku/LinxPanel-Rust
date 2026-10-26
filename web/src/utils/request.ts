@@ -24,6 +24,10 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'Password changed': 'api.passwordChanged',
   'Password must be at least 8 characters': 'st.passwordTooShort',
   'Automatic restart needs systemd; run `Lp restart` on the server': 'st.restartManual',
+  'Two-factor code required': 'login.mfaRequired',
+  'Invalid two-factor code': 'ps.mfaInvalid',
+  'Username must be 3-32 letters, digits, \'_\', \'-\' or \'.\'': 'ps.usernameInvalid',
+  'That username is already taken': 'ps.usernameTaken',
   'Path does not exist': 'api.pathNotExist',
   'Path not found': 'api.pathNotFound',
   'Path is not a directory': 'api.pathNotDirectory',
@@ -63,6 +67,14 @@ function localizeApiMessage(message: unknown): string {
   const text = message.trim()
   const messageKey = API_MESSAGE_MAP[text]
   if (messageKey) return t(messageKey)
+
+  // Messages carrying a value: `Your current IP x must be...`, `Open the panel through x first...`
+  const lockoutIp = text.match(/^Your current IP (\S+) must be in the list/)
+  if (lockoutIp) return t('ps.ipsLockout', { detail: lockoutIp[1] })
+  const lockoutDomain = text.match(/^Open the panel through (\S+) first/)
+  if (lockoutDomain) return t('ps.domainLockout', { detail: lockoutDomain[1] })
+  const portInUse = text.match(/^Port (\d+) is already in use/)
+  if (portInUse) return t('ps.portInUse', { detail: portInUse[1] })
 
   if (text.startsWith('Cannot read:')) {
     return t('api.cannotRead', { detail: text.replace(/^Cannot read:\s*/i, '') })

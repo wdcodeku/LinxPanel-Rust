@@ -21,21 +21,9 @@
             </header>
             <div class="lp-card-body">
               <el-form label-position="top">
-                <div class="grid-2">
-                  <el-form-item :label="t('st.panelName')">
-                    <el-input v-model="form.panel_name" placeholder="LinxPanel" />
-                  </el-form-item>
-                  <el-form-item :label="t('st.panelPort')">
-                    <el-input-number
-                      v-model.number="form.panel_port"
-                      :min="1"
-                      :max="65535"
-                      controls-position="right"
-                      style="width: 100%"
-                    />
-                    <span class="hint">{{ t('st.panelPortHint') }}</span>
-                  </el-form-item>
-                </div>
+                <el-form-item :label="t('st.panelName')">
+                  <el-input v-model="form.panel_name" placeholder="LinxPanel" />
+                </el-form-item>
                 <el-form-item :label="t('st.apiUrl')">
                   <el-input v-model="form.api_url" placeholder="http://0.0.0.0:7200" class="lp-mono" />
                   <span class="hint">{{ t('st.apiUrlHint') }}</span>
@@ -80,135 +68,8 @@
       </el-tab-pane>
 
       <!-- ============ Security ============ -->
-      <el-tab-pane :label="t('st.tabSecurity')" name="security">
-        <div class="setting-stack">
-          <section class="lp-card">
-            <header class="lp-card-head">
-              <h2 class="lp-card-title"><el-icon><Key /></el-icon>{{ t('st.accessTitle') }}</h2>
-              <span v-if="access" class="lp-pill" :class="access.ssl_active ? 'lp-pill--ok' : ''">
-                <span class="lp-pill__dot"></span>
-                {{ access.ssl_active ? 'HTTPS' : 'HTTP' }}
-              </span>
-            </header>
-            <div class="lp-card-body">
-              <el-form label-position="top">
-                <el-form-item :label="t('st.entrance')">
-                  <div class="inline-row">
-                    <el-input v-model="entranceInput" placeholder="/a1b2c3d4" class="lp-mono" clearable />
-                    <el-button @click="randomizeEntrance">{{ t('st.entranceRandom') }}</el-button>
-                    <el-button type="primary" :loading="savingEntrance" @click="saveEntrance">
-                      {{ t('st.entranceSave') }}
-                    </el-button>
-                  </div>
-                  <span class="hint">{{ t('st.entranceHint') }}</span>
-                  <span v-if="access?.entrance" class="hint">
-                    {{ t('st.entranceUrl') }}<code class="lp-mono entrance-url">{{ panelUrl(access.ssl_active, access.entrance) }}</code>
-                  </span>
-                </el-form-item>
-
-                <el-form-item :label="t('st.panelSsl')">
-                  <div class="inline-row">
-                    <el-switch v-model="sslForm.enabled" />
-                    <el-select v-model="sslForm.cert_id" :disabled="!sslForm.enabled" style="width: 280px">
-                      <el-option :label="t('st.panelSslSelfSigned')" :value="0" />
-                      <el-option v-for="c in certs" :key="c.id" :label="`${c.name} (${c.domains})`" :value="c.id" />
-                    </el-select>
-                    <el-button type="primary" :loading="savingSsl" @click="saveSsl(false)">
-                      {{ t('st.panelSslSave') }}
-                    </el-button>
-                    <el-button
-                      v-if="sslForm.enabled && !sslForm.cert_id"
-                      :loading="savingSsl"
-                      @click="saveSsl(true)"
-                    >
-                      {{ t('st.panelSslRegenerate') }}
-                    </el-button>
-                  </div>
-                  <span class="hint">{{ t('st.panelSslHint') }}</span>
-                  <span v-if="access" class="hint">
-                    {{ access.ssl_active ? t('st.panelSslActive') : t('st.panelSslInactive') }}
-                    <template v-if="access.ssl_enabled && access.cert">
-                      · {{ t('st.panelSslExpires', { date: access.cert.not_after, days: access.cert.days_left ?? '—' }) }}
-                    </template>
-                  </span>
-                </el-form-item>
-
-                <el-alert
-                  v-if="access?.restart_required"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                  :title="t('st.restartRequired')"
-                >
-                  <el-button size="small" type="warning" :loading="restarting" @click="restartPanel">
-                    {{ t('st.restartPanel') }}
-                  </el-button>
-                </el-alert>
-              </el-form>
-            </div>
-          </section>
-
-          <section class="lp-card">
-            <header class="lp-card-head">
-              <h2 class="lp-card-title"><el-icon><Lock /></el-icon>{{ t('st.sessionTitle') }}</h2>
-            </header>
-            <div class="lp-card-body">
-              <el-form label-position="top">
-                <el-form-item :label="t('st.sessionTimeout')">
-                  <el-select v-model="form.session_timeout" style="max-width: 260px">
-                    <el-option :label="t('st.hours1')" value="1" />
-                    <el-option :label="t('st.hours6')" value="6" />
-                    <el-option :label="t('st.hours12')" value="12" />
-                    <el-option :label="t('st.hours24')" value="24" />
-                    <el-option :label="t('st.days7')" value="168" />
-                  </el-select>
-                  <span class="hint">{{ t('st.sessionTimeoutHint') }}</span>
-                </el-form-item>
-              </el-form>
-            </div>
-          </section>
-
-          <section class="lp-card">
-            <header class="lp-card-head">
-              <h2 class="lp-card-title"><el-icon><User /></el-icon>{{ t('st.accountTitle') }}</h2>
-            </header>
-            <div class="lp-card-body">
-              <el-form ref="pwRef" :model="pwForm" :rules="pwRules" label-position="top">
-                <div class="grid-3">
-                  <el-form-item :label="t('st.oldPassword')" prop="old_password">
-                    <el-input v-model="pwForm.old_password" type="password" show-password autocomplete="current-password" />
-                  </el-form-item>
-                  <el-form-item :label="t('st.newPassword')" prop="new_password">
-                    <el-input v-model="pwForm.new_password" type="password" show-password autocomplete="new-password" />
-                  </el-form-item>
-                  <el-form-item :label="t('st.confirmPassword')" prop="confirm_password">
-                    <el-input v-model="pwForm.confirm_password" type="password" show-password autocomplete="new-password" />
-                  </el-form-item>
-                </div>
-                <el-button type="primary" :loading="changingPw" @click="changePassword">
-                  {{ t('st.updatePassword') }}
-                </el-button>
-              </el-form>
-            </div>
-          </section>
-
-          <section class="lp-card">
-            <header class="lp-card-head">
-              <h2 class="lp-card-title"><el-icon><Warning /></el-icon>{{ t('st.exposureTitle') }}</h2>
-            </header>
-            <div class="lp-card-body">
-              <ul class="check-list">
-                <li v-for="check in securityChecks" :key="check.key" class="check">
-                  <span class="check__dot" :class="`check__dot--${check.level}`"></span>
-                  <div class="check__body">
-                    <span class="check__label">{{ check.label }}</span>
-                    <span class="check__detail">{{ check.detail }}</span>
-                  </div>
-                </li>
-              </ul>
-            </div>
-          </section>
-        </div>
+      <el-tab-pane :label="t('st.tabSecurity')" name="security" lazy>
+        <PanelSecurity />
       </el-tab-pane>
 
       <!-- ============ Alerts ============ -->
@@ -267,24 +128,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormRules } from 'element-plus'
-import {
-  Bell, Connection, InfoFilled, Key, Lock, Refresh, Setting, User, Warning,
-} from '@element-plus/icons-vue'
-import {
-  changePasswordApi, getCerts, getOpenRestyStatus, getPanelAccess, getSettings, restartPanelApi,
-  saveSettingsApi, setEntranceApi, setPanelSslApi,
-} from '@/api'
+import { ElMessage } from 'element-plus'
+import { Bell, Connection, InfoFilled, Refresh, Setting } from '@element-plus/icons-vue'
+import { getOpenRestyStatus, getSettings, saveSettingsApi } from '@/api'
 import { useI18n } from '@/i18n'
 import { useRealtimeStore } from '@/stores/realtime'
-import { useUserStore } from '@/stores/user'
 import { formatBytes } from '@/utils/format'
+import PanelSecurity from './PanelSecurity.vue'
 
 const { t } = useI18n()
 const realtime = useRealtimeStore()
-const userStore = useUserStore()
-const { staticInfo: info, detail } = storeToRefs(realtime)
+const { staticInfo: info } = storeToRefs(realtime)
 
 const tab = ref('general')
 const loading = ref(false)
@@ -293,8 +147,6 @@ const openresty = ref<any>(null)
 
 const form = reactive({
   panel_name: 'LinxPanel',
-  panel_port: 7200,
-  session_timeout: '24',
   api_url: '',
   openresty_bin: '',
   openresty_conf_path: '',
@@ -311,53 +163,6 @@ const alertFields = computed(() => [
   { key: 'disk', label: `${t('db.disk')} (%)` },
 ])
 
-/** Read-only posture summary built from data the panel already has. */
-const securityChecks = computed(() => {
-  const checks: { key: string; label: string; detail: string; level: 'ok' | 'warn' | 'danger' }[] = []
-
-  const isDefaultUser = userStore.username === 'admin'
-  checks.push({
-    key: 'account',
-    label: t('st.checkDefaultAccount'),
-    detail: isDefaultUser ? t('st.checkDefaultAccountWarn') : t('st.checkDefaultAccountOk'),
-    level: isDefaultUser ? 'warn' : 'ok',
-  })
-
-  const https = window.location.protocol === 'https:'
-  checks.push({
-    key: 'https',
-    label: t('st.checkHttps'),
-    detail: https ? t('st.checkHttpsOk') : t('st.checkHttpsWarn'),
-    level: https ? 'ok' : 'warn',
-  })
-
-  const entranceOn = !!access.value?.entrance
-  checks.push({
-    key: 'entrance',
-    label: t('st.checkEntrance'),
-    detail: entranceOn ? t('st.checkEntranceOk') : t('st.checkEntranceWarn'),
-    level: entranceOn ? 'ok' : 'warn',
-  })
-
-  const hours = Number(form.session_timeout || 24)
-  checks.push({
-    key: 'session',
-    label: t('st.checkSession'),
-    detail: t('st.checkSessionDetail', { hours }),
-    level: hours > 24 ? 'warn' : 'ok',
-  })
-
-  const interfaces = detail.value?.interfaces?.length ?? 0
-  checks.push({
-    key: 'interfaces',
-    label: t('st.checkInterfaces'),
-    detail: t('st.checkInterfacesDetail', { n: interfaces }),
-    level: 'ok',
-  })
-
-  return checks
-})
-
 async function load() {
   loading.value = true
   try {
@@ -369,8 +174,6 @@ async function load() {
     if (settingsRes.success) {
       const data = settingsRes.data || {}
       form.panel_name = data.panel_name || 'LinxPanel'
-      form.panel_port = Number(data.panel_port || 7200)
-      form.session_timeout = String(data.session_timeout || '24')
       form.api_url = data.api_url || ''
       form.openresty_bin = data.openresty_bin || ''
       form.openresty_conf_path = data.openresty_conf_path || ''
@@ -383,7 +186,6 @@ async function load() {
       alerts.disk = Number(data.alert_disk || 85)
     }
     if (openrestyRes.success) openresty.value = openrestyRes.data
-    await loadAccess()
   } catch {
     // Interceptor reports it.
   } finally {
@@ -396,8 +198,6 @@ async function save() {
   try {
     const payload: Record<string, string> = {
       panel_name: form.panel_name,
-      panel_port: String(form.panel_port),
-      session_timeout: form.session_timeout,
       api_url: form.api_url,
       openresty_bin: form.openresty_bin,
       openresty_conf_path: form.openresty_conf_path,
@@ -415,158 +215,6 @@ async function save() {
     // Interceptor reports it.
   } finally {
     saving.value = false
-  }
-}
-
-// --- Panel access: security entrance + HTTPS ---
-interface PanelAccess {
-  entrance: string | null
-  ssl_enabled: boolean
-  ssl_active: boolean
-  ssl_cert_id: number | null
-  self_signed: boolean
-  cert: { not_after: string; days_left: number | null } | null
-  restart_required: boolean
-  restart_supported: boolean
-}
-const access = ref<PanelAccess | null>(null)
-const certs = ref<any[]>([])
-const entranceInput = ref('')
-const savingEntrance = ref(false)
-const sslForm = reactive({ enabled: false, cert_id: 0 })
-const savingSsl = ref(false)
-const restarting = ref(false)
-
-function applyAccess(data: PanelAccess) {
-  access.value = data
-  entranceInput.value = data.entrance || ''
-  sslForm.enabled = data.ssl_enabled
-  sslForm.cert_id = data.ssl_cert_id || 0
-}
-
-async function loadAccess() {
-  const [accessRes, certsRes]: any[] = await Promise.all([
-    getPanelAccess(),
-    getCerts().catch(() => ({ success: false })),
-  ])
-  if (accessRes.success) applyAccess(accessRes.data)
-  if (certsRes.success) certs.value = certsRes.data || []
-}
-
-/** The URL the panel will answer at, for the given scheme and entrance. */
-function panelUrl(https: boolean, entrance: string | null) {
-  return `${https ? 'https' : 'http'}://${window.location.host}${entrance || '/'}`
-}
-
-function randomizeEntrance() {
-  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789'
-  const bytes = crypto.getRandomValues(new Uint8Array(10))
-  entranceInput.value = '/' + Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('')
-}
-
-async function saveEntrance() {
-  savingEntrance.value = true
-  try {
-    const res: any = await setEntranceApi(entranceInput.value)
-    if (res.success) {
-      ElMessage.success(res.data?.entrance ? t('st.entranceSaved') : t('st.entranceDisabled'))
-      await loadAccess()
-    }
-  } catch {
-    // Interceptor reports it.
-  } finally {
-    savingEntrance.value = false
-  }
-}
-
-async function saveSsl(regenerate: boolean) {
-  savingSsl.value = true
-  try {
-    const res: any = await setPanelSslApi({
-      enabled: sslForm.enabled,
-      cert_id: sslForm.cert_id || null,
-      regenerate,
-    })
-    if (res.success) {
-      applyAccess(res.data)
-      ElMessage.success(t('st.panelSslSaved'))
-    }
-  } catch {
-    // Interceptor reports it.
-  } finally {
-    savingSsl.value = false
-  }
-}
-
-async function restartPanel() {
-  if (!access.value?.restart_supported) {
-    ElMessage.warning(t('st.restartManual'))
-    return
-  }
-  try {
-    await ElMessageBox.confirm(t('st.restartConfirm'), t('st.restartPanel'), { type: 'warning' })
-  } catch {
-    return
-  }
-  restarting.value = true
-  // Captured now: the scheme may change, and a new origin has its own login.
-  const target = panelUrl(access.value.ssl_enabled, access.value.entrance)
-  try {
-    const res: any = await restartPanelApi()
-    if (!res.success) {
-      restarting.value = false
-      return
-    }
-    ElMessage.info(t('st.restarting'))
-    window.setTimeout(() => { window.location.href = target }, 6000)
-  } catch {
-    restarting.value = false
-  }
-}
-
-// --- Password ---
-const pwRef = ref()
-const changingPw = ref(false)
-const pwForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
-const pwRules = computed<FormRules>(() => ({
-  old_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-  new_password: [
-    { required: true, message: t('st.passwordRequired'), trigger: 'blur' },
-    { min: 8, message: t('st.passwordTooShort'), trigger: 'blur' },
-  ],
-  confirm_password: [{ required: true, message: t('st.passwordRequired'), trigger: 'blur' }],
-}))
-
-async function changePassword() {
-  if (pwForm.new_password !== pwForm.confirm_password) {
-    ElMessage.warning(t('st.passwordMismatch'))
-    return
-  }
-  try {
-    await pwRef.value?.validate()
-  } catch {
-    return
-  }
-  changingPw.value = true
-  try {
-    const res: any = await changePasswordApi({
-      username: userStore.username,
-      old_password: pwForm.old_password,
-      new_password: pwForm.new_password,
-    })
-    if (res.success) {
-      // Other sessions were revoked; the response carries this session's new token.
-      if (res.data?.token) userStore.setLogin(res.data.token, userStore.username)
-      ElMessage.success(t('st.sessionsRevoked'))
-      pwForm.old_password = ''
-      pwForm.new_password = ''
-      pwForm.confirm_password = ''
-      pwRef.value?.clearValidate()
-    }
-  } catch {
-    // Interceptor reports it.
-  } finally {
-    changingPw.value = false
   }
 }
 
@@ -593,40 +241,11 @@ onMounted(load)
   &--inline { display: inline; margin-left: var(--lp-3); }
 }
 
-.entrance-url { color: var(--lp-text); font-weight: 500; }
-
-.inline-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--lp-2);
-  width: 100%;
-
-  .el-input { flex: 1 1 220px; min-width: 0; }
-}
-
 .section-note {
   margin-bottom: var(--lp-4);
   font-size: var(--lp-text-base);
   color: var(--lp-text-dim);
 }
-
-/* Security checklist */
-.check-list { display: flex; flex-direction: column; gap: var(--lp-3); }
-.check { display: flex; align-items: flex-start; gap: var(--lp-3); }
-.check__dot {
-  width: 8px;
-  height: 8px;
-  margin-top: 6px;
-  border-radius: 50%;
-  flex: none;
-  &--ok { background: var(--lp-ok); }
-  &--warn { background: var(--lp-warn); }
-  &--danger { background: var(--lp-danger); }
-}
-.check__body { display: flex; flex-direction: column; min-width: 0; }
-.check__label { font-size: var(--lp-text-base); font-weight: 500; color: var(--lp-text); }
-.check__detail { font-size: var(--lp-text-sm); color: var(--lp-text-dim); }
 
 /* About */
 .about-grid {

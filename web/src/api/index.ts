@@ -1,7 +1,7 @@
 import request from '@/utils/request'
 
 // Auth
-export const login = (data: { username: string; password: string }) =>
+export const login = (data: { username: string; password: string; code?: string }) =>
   request.post('/auth/login', data)
 
 // System
@@ -135,6 +135,16 @@ export const setEntranceApi = (entrance: string) => request.post('/settings/entr
 export const setPanelSslApi = (data: { enabled: boolean; cert_id?: number | null; regenerate?: boolean }) =>
   request.post('/settings/panel-ssl', data)
 export const restartPanelApi = () => request.post('/settings/panel/restart')
+export const setPanelPortApi = (port: number) => request.post('/settings/panel-port', { port })
+export const setAllowedIpsApi = (ips: string) => request.post('/settings/allowed-ips', { ips })
+export const setBindDomainApi = (domain: string) => request.post('/settings/bind-domain', { domain })
+export const setDenyResponseApi = (mode: string) => request.post('/settings/deny-response', { mode })
+export const mfaSetupApi = () => request.post('/settings/mfa/setup')
+export const mfaEnableApi = (code: string) => request.post('/settings/mfa/enable', { code })
+export const mfaDisableApi = (code: string) => request.post('/settings/mfa/disable', { code })
+/** On success `data.token` / `data.username` replace the session's. */
+export const changeUsernameApi = (data: { username: string; password: string }) =>
+  request.post('/settings/username', data)
 /** On success `data.token` replaces the session token: older tokens are revoked. */
 export const changePasswordApi = (data: { username: string; old_password: string; new_password: string }) =>
   request.post('/settings/password', data)
