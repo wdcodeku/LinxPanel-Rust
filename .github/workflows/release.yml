@@ -121,6 +121,11 @@ jobs:
         run: |
           set -euo pipefail
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+          # A mirror of the release is a plain copy of these files: the panel
+          # reads latest.json and runs install.sh from it (Settings > Panel update).
+          cp scripts/install.sh dist/install.sh
+          jq -n --arg tag "$RELEASE_TAG" --arg url "https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG" \
+            '{tag: $tag, url: $url, notes: "See \($url)"}' > dist/latest.json
           cat > notes.md <<'EOF'
           ## Install / 安装
 
@@ -150,3 +155,5 @@ jobs:
             dist/*.tar.gz
             dist/*.sha256
             dist/SHA256SUMS
+            dist/latest.json
+            dist/install.sh

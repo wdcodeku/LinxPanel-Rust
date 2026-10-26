@@ -995,6 +995,11 @@ harden_kernel() {
   if [[ "${HARDEN_KERNEL}" != "1" ]]; then
     return
   fi
+  # On upgrades, respect an earlier `Lp harden off`: only refresh a profile
+  # that is still installed.
+  if [[ "${IS_UPGRADE}" == "1" && ! -f /etc/sysctl.d/90-linxpanel.conf ]]; then
+    return
+  fi
   if ${SUDO} "${INSTALL_ROOT}/bin/linxpanel" harden on >/dev/null 2>&1; then
     logf harden_kernel
   else
@@ -1140,17 +1145,22 @@ fi
 
 if [[ "$(id -u)" -eq 0 ]]; then
   SUDO=""
-  RUN_USER="${SUDO_USER:-root}"
+  INVOKING_USER="${SUDO_USER:-root}"
 else
   if ! command -v sudo >/dev/null 2>&1; then
     die sudo_not_found
   fi
   SUDO="sudo"
-  RUN_USER="${USER:-$(id -un)}"
+  INVOKING_USER="${USER:-$(id -un)}"
 fi
 
-RUN_GROUP="$(id -gn "${RUN_USER}" 2>/dev/null || echo "${RUN_USER}")"
-RUN_HOME="$(getent passwd "${RUN_USER}" 2>/dev/null | cut -d: -f6 || true)"
+# The panel installs packages, manages services and writes /etc, so it runs as
+# root (as BaoTa and 1Panel do). Running it as the user who invoked sudo made
+# every install depend on passwordless sudo and fail on most servers.
+RUN_USER="root"
+RUN_GROUP="root"
+# Only for finding a Rust toolchain in build mode.
+RUN_HOME="$(getent passwd "${INVOKING_USER}" 2>/dev/null | cut -d: -f6 || true)"
 if [[ -z "${RUN_HOME}" ]]; then
   RUN_HOME="${HOME}"
 fi

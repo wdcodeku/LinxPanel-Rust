@@ -17,3 +17,4 @@ pub mod servicectl;
 pub mod shell;
 pub mod sysservice;
 pub mod totp;
+pub mod updater;

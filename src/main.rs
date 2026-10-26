@@ -40,6 +40,8 @@ pub struct AppState {
     pub defense: Arc<services::defense::Engine>,
     /// Open panel connections, for the defense status page.
     pub connections: Arc<services::server::Tracker>,
+    /// Latest release lookup, shared by the API and the update scheduler.
+    pub updates: services::updater::Checker,
 }
 
 impl AppState {
@@ -265,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
         restart: tokio::sync::Notify::new(),
         defense: services::defense::Engine::new(&data_dir),
         connections: tracker.clone(),
+        updates: services::updater::Checker::new(),
     });
 
     // Keep ACME certificates fresh without operator intervention.
@@ -286,6 +289,12 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(services::defense::run(
         state.defense.clone(),
         state.db.clone(),
+        state.shutdown.subscribe(),
+    ));
+
+    // Release checks and (when enabled) unattended updates.
+    tokio::spawn(services::updater::run(
+        state.clone(),
         state.shutdown.subscribe(),
     ));
 

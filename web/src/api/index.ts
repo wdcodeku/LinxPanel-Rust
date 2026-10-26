@@ -89,6 +89,29 @@ export const banDefenseIp = (data: { ip: string; minutes?: number; reason?: stri
 export const unbanDefenseIp = (ip: string) => request.post('/defense/unban', { ip })
 export const installNftables = () => request.post('/defense/install-nft', {}, { timeout: 600000 })
 export const setKernelHardening = (enabled: boolean) => request.post('/defense/sysctl', { enabled })
+
+// Panel updates
+export type UpdateConfig = {
+  auto_update: boolean
+  auto_time: string
+  source: 'github' | 'proxy' | 'mirror' | string
+  proxy: string
+  mirror: string
+}
+export type UpdateRelease = { tag: string; notes: string; url: string; published_at: string }
+export type UpdateStatus = {
+  current: string
+  check: { current: string; latest: UpdateRelease | null; has_update: boolean; checked_at: number; error: string } | null
+  config: UpdateConfig
+  running: { from: string; target: string; started_at: number; auto: boolean } | null
+  log: string
+  last_result: { target: string; success: boolean; finished_at: number; message: string } | null
+  can_update: boolean
+}
+export const getUpdateStatus = () => request.get('/update')
+export const checkUpdate = () => request.post('/update/check', {}, { timeout: 60000 })
+export const saveUpdateSettings = (data: UpdateConfig) => request.post('/update/settings', data)
+export const runPanelUpdate = (tag: string) => request.post('/update/run', { tag }, { timeout: 60000 })
 export const getListeningPorts = () => request.get('/network/ports')
 
 // Runtimes & managed applications

@@ -17,6 +17,7 @@ pub mod services_api;
 pub mod settings;
 pub mod sites;
 pub mod system;
+pub mod update_api;
 
 use crate::AppState;
 use axum::{middleware as axum_mw, Router};
@@ -46,6 +47,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(appstore_api::routes())
         .merge(backup_api::routes())
         .merge(defense_api::routes())
+        .merge(update_api::routes())
         .route_layer(axum_mw::from_fn(crate::middleware::auth))
         .layer(axum::Extension(state.clone()));
 

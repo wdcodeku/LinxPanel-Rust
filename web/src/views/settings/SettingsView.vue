@@ -72,6 +72,11 @@
         <PanelSecurity />
       </el-tab-pane>
 
+      <!-- ============ Update ============ -->
+      <el-tab-pane :label="t('upd.tab')" name="update" lazy>
+        <PanelUpdate />
+      </el-tab-pane>
+
       <!-- ============ Alerts ============ -->
       <el-tab-pane :label="t('st.tabAlerts')" name="alerts">
         <section class="lp-card">
@@ -135,12 +140,16 @@ import { useI18n } from '@/i18n'
 import { useRealtimeStore } from '@/stores/realtime'
 import { formatBytes } from '@/utils/format'
 import PanelSecurity from './PanelSecurity.vue'
+import PanelUpdate from './PanelUpdate.vue'
+import { useRoute } from 'vue-router'
 
 const { t } = useI18n()
 const realtime = useRealtimeStore()
 const { staticInfo: info } = storeToRefs(realtime)
 
-const tab = ref('general')
+const route = useRoute()
+// ?tab=update opens a tab directly (the header's update badge links there).
+const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'general')
 const loading = ref(false)
 const saving = ref(false)
 const openresty = ref<any>(null)

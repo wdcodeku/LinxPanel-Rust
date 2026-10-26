@@ -31,17 +31,26 @@ const DEFAULT_OPENRESTY_SITES_DIR: &str = "/usr/local/openresty/nginx/conf/sites
 const QUICK_INSTALL_SCRIPT: &str = r#"
 set -eu
 
+# Unattended package operations: no debconf / needrestart / conffile prompts
+# (nothing can answer them from the panel), and wait for the dpkg lock that
+# automatic updates hold for minutes after boot instead of failing at once.
+# Passed through env because sudo drops the caller's environment.
 run() {
+  if [ "$1" = "apt-get" ]; then
+    shift
+    set -- apt-get -o DPkg::Lock::Timeout=600 \
+      -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+  fi
   if [ "${USE_SUDO:-0}" = "1" ]; then
-    sudo -n "$@"
+    sudo -n env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"
   else
-    "$@"
+    env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"
   fi
 }
 
 repair_apt_state() {
   echo "[LinxPanel] Attempting to repair apt/dpkg state..."
-  run dpkg --configure -a || true
+  run dpkg --force-confdef --force-confold --configure -a || true
   run apt-get -y -f install || true
 }
 
@@ -275,10 +284,12 @@ if command -v apt-get >/dev/null 2>&1; then
     return 1
   }
 
-  TMP_KEY="/tmp/openresty_pubkey.gpg"
-  curl -fsSL https://openresty.org/package/pubkey.gpg -o "$TMP_KEY"
+  TMP_KEY="$(mktemp)"
+  curl -fsSL --retry 3 https://openresty.org/package/pubkey.gpg -o "$TMP_KEY"
   run mkdir -p /usr/share/keyrings
-  run gpg --dearmor -o /usr/share/keyrings/openresty.gpg "$TMP_KEY"
+  # --batch --yes: a keyring left by an earlier attempt must be overwritten
+  # without gpg asking on /dev/tty, which a panel install does not have.
+  run gpg --batch --yes --dearmor -o /usr/share/keyrings/openresty.gpg "$TMP_KEY"
   rm -f "$TMP_KEY"
 
   ORIGINAL_CODENAME="$CODENAME"

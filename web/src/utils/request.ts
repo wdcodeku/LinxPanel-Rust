@@ -62,6 +62,12 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'No installer method available': 'api.openrestyInstallNoMethod',
   'That is your own address; banning it would lock you out': 'def.ownIp',
   'Enter a single IPv4 or IPv6 address': 'def.badIp',
+  'An update is already running': 'upd.alreadyRunning',
+  'Already up to date': 'upd.alreadyLatest',
+  'Update started': 'upd.started',
+  'Update time must be HH:MM': 'upd.timeFormat',
+  'Enter an http(s):// address': 'upd.urlFormat',
+  'This panel was not installed by the installer; update it with `Lp update` or by reinstalling': 'upd.notInstalled',
 }
 
 function localizeApiMessage(message: unknown): string {
@@ -77,6 +83,11 @@ function localizeApiMessage(message: unknown): string {
   if (lockoutDomain) return t('ps.domainLockout', { detail: lockoutDomain[1] })
   const portInUse = text.match(/^Port (\d+) is already in use/)
   if (portInUse) return t('ps.portInUse', { detail: portInUse[1] })
+  if (/^Could not check for updates:\s*/i.test(text)) {
+    return t('upd.checkError', { detail: text.replace(/^Could not check for updates:\s*/i, '') })
+  }
+  const newer = text.match(/^A newer release \((.+)\) is available/)
+  if (newer) return t('upd.newerExists', { detail: newer[1] })
   if (/^Saved, but nginx was not updated:\s*/i.test(text)) {
     return t('def.nginxNotUpdated', { detail: text.replace(/^Saved, but nginx was not updated:\s*/i, '') })
   }

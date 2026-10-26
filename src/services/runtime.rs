@@ -41,8 +41,16 @@ const RUNTIMES: &[RuntimeSpec] = &[
         apk: &["php", "php-fpm"],
         brew: &["php"],
         components: &[
-            ComponentSpec { name: "php-fpm", binary: "php-fpm", version_args: &["--version"] },
-            ComponentSpec { name: "composer", binary: "composer", version_args: &["--version"] },
+            ComponentSpec {
+                name: "php-fpm",
+                binary: "php-fpm",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "composer",
+                binary: "composer",
+                version_args: &["--version"],
+            },
         ],
     },
     RuntimeSpec {
@@ -55,9 +63,21 @@ const RUNTIMES: &[RuntimeSpec] = &[
         apk: &["nodejs", "npm"],
         brew: &["node"],
         components: &[
-            ComponentSpec { name: "npm", binary: "npm", version_args: &["--version"] },
-            ComponentSpec { name: "pnpm", binary: "pnpm", version_args: &["--version"] },
-            ComponentSpec { name: "yarn", binary: "yarn", version_args: &["--version"] },
+            ComponentSpec {
+                name: "npm",
+                binary: "npm",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "pnpm",
+                binary: "pnpm",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "yarn",
+                binary: "yarn",
+                version_args: &["--version"],
+            },
         ],
     },
     RuntimeSpec {
@@ -70,8 +90,16 @@ const RUNTIMES: &[RuntimeSpec] = &[
         apk: &["python3", "py3-pip"],
         brew: &["python"],
         components: &[
-            ComponentSpec { name: "pip", binary: "pip3", version_args: &["--version"] },
-            ComponentSpec { name: "uv", binary: "uv", version_args: &["--version"] },
+            ComponentSpec {
+                name: "pip",
+                binary: "pip3",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "uv",
+                binary: "uv",
+                version_args: &["--version"],
+            },
         ],
     },
     RuntimeSpec {
@@ -85,9 +113,21 @@ const RUNTIMES: &[RuntimeSpec] = &[
         apk: &["openjdk17"],
         brew: &["openjdk"],
         components: &[
-            ComponentSpec { name: "javac", binary: "javac", version_args: &["-version"] },
-            ComponentSpec { name: "maven", binary: "mvn", version_args: &["--version"] },
-            ComponentSpec { name: "gradle", binary: "gradle", version_args: &["--version"] },
+            ComponentSpec {
+                name: "javac",
+                binary: "javac",
+                version_args: &["-version"],
+            },
+            ComponentSpec {
+                name: "maven",
+                binary: "mvn",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "gradle",
+                binary: "gradle",
+                version_args: &["--version"],
+            },
         ],
     },
     RuntimeSpec {
@@ -215,20 +255,22 @@ fn detect_one(spec: &RuntimeSpec) -> RuntimeStatus {
     let components = spec
         .components
         .iter()
-        .map(|component| match probe_version(component.binary, component.version_args) {
-            Some((version, path)) => RuntimeComponent {
-                name: component.name.to_string(),
-                installed: true,
-                version,
-                path,
+        .map(
+            |component| match probe_version(component.binary, component.version_args) {
+                Some((version, path)) => RuntimeComponent {
+                    name: component.name.to_string(),
+                    installed: true,
+                    version,
+                    path,
+                },
+                None => RuntimeComponent {
+                    name: component.name.to_string(),
+                    installed: false,
+                    version: String::new(),
+                    path: String::new(),
+                },
             },
-            None => RuntimeComponent {
-                name: component.name.to_string(),
-                installed: false,
-                version: String::new(),
-                path: String::new(),
-            },
-        })
+        )
         .collect();
 
     let packages = packages_for(spec, manager);
@@ -276,17 +318,49 @@ pub fn list() -> Vec<RuntimeStatus> {
 fn php_extensions(manager: &str) -> &'static [&'static str] {
     match manager {
         "apt-get" => &[
-            "php-mysql", "php-pgsql", "php-sqlite3", "php-curl", "php-gd", "php-mbstring",
-            "php-xml", "php-zip", "php-intl", "php-bcmath", "php-opcache", "php-redis",
+            "php-mysql",
+            "php-pgsql",
+            "php-sqlite3",
+            "php-curl",
+            "php-gd",
+            "php-mbstring",
+            "php-xml",
+            "php-zip",
+            "php-intl",
+            "php-bcmath",
+            "php-opcache",
+            "php-redis",
         ],
         "dnf" | "yum" => &[
-            "php-mysqlnd", "php-pgsql", "php-pdo", "php-gd", "php-mbstring", "php-xml",
-            "php-intl", "php-bcmath", "php-opcache", "php-pecl-zip", "php-pecl-redis5",
+            "php-mysqlnd",
+            "php-pgsql",
+            "php-pdo",
+            "php-gd",
+            "php-mbstring",
+            "php-xml",
+            "php-intl",
+            "php-bcmath",
+            "php-opcache",
+            "php-pecl-zip",
+            "php-pecl-redis5",
         ],
         "apk" => &[
-            "php-mysqli", "php-pdo_mysql", "php-pdo_pgsql", "php-pdo_sqlite", "php-curl",
-            "php-gd", "php-mbstring", "php-xml", "php-dom", "php-zip", "php-intl",
-            "php-bcmath", "php-opcache", "php-session", "php-tokenizer", "php-fileinfo",
+            "php-mysqli",
+            "php-pdo_mysql",
+            "php-pdo_pgsql",
+            "php-pdo_sqlite",
+            "php-curl",
+            "php-gd",
+            "php-mbstring",
+            "php-xml",
+            "php-dom",
+            "php-zip",
+            "php-intl",
+            "php-bcmath",
+            "php-opcache",
+            "php-session",
+            "php-tokenizer",
+            "php-fileinfo",
         ],
         _ => &[],
     }
@@ -302,13 +376,9 @@ fn finish_php_install(manager: &str, log: &mut String) {
             _ => continue,
         };
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let ok = shell::run_privileged_with_timeout(
-            manager,
-            &arg_refs,
-            std::time::Duration::from_secs(300),
-        )
-        .map(|o| o.ok())
-        .unwrap_or(false);
+        let ok = run_package_manager(manager, &arg_refs, std::time::Duration::from_secs(300))
+            .map(|o| o.ok())
+            .unwrap_or(false);
         log.push_str(&format!(
             "[LinxPanel] extension {}: {}\n",
             package,
@@ -332,7 +402,8 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
     let before = detect_one(spec);
     // Installing PHP again repairs it: missing extensions, FPM socket, FPM not running.
     if before.installed && kind == "php" {
-        let mut log = String::from("[LinxPanel] PHP is installed; checking extensions and PHP-FPM\n");
+        let mut log =
+            String::from("[LinxPanel] PHP is installed; checking extensions and PHP-FPM\n");
         finish_php_install(package_manager(), &mut log);
         return Ok(RuntimeInstallResult {
             changed: false,
@@ -343,7 +414,10 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
     if before.installed {
         return Ok(RuntimeInstallResult {
             changed: false,
-            log: format!("{} is already installed ({})", spec.display_name, before.version),
+            log: format!(
+                "{} is already installed ({})",
+                spec.display_name, before.version
+            ),
             status: before,
         });
     }
@@ -438,6 +512,52 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
 
 /// Installs distro packages with the detected package manager, appending the
 /// commands and their output to `log`. Returns whether every command succeeded.
+/// Runs a package-manager command unattended: apt gets no debconf, needrestart
+/// or conffile prompts (nothing could answer them from the panel), and a lock
+/// held by another package operation - automatic updates hold it for minutes
+/// after boot - is waited for instead of failing the install at once.
+pub fn run_package_manager(
+    manager: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<shell::CmdOutput, String> {
+    const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+    let mut full: Vec<&str> = Vec::new();
+    let program = if manager == "apt-get" {
+        // Through env, because sudo drops the caller's environment.
+        full.extend([
+            "DEBIAN_FRONTEND=noninteractive",
+            "NEEDRESTART_MODE=a",
+            "NEEDRESTART_SUSPEND=1",
+            "apt-get",
+            "-o",
+            "DPkg::Lock::Timeout=600",
+            "-o",
+            "Dpkg::Options::=--force-confdef",
+            "-o",
+            "Dpkg::Options::=--force-confold",
+        ]);
+        "env"
+    } else {
+        manager
+    };
+    full.extend_from_slice(args);
+    // Older apt (Ubuntu 18.04, Debian 10) ignores Lock::Timeout: retry here.
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    loop {
+        let output = shell::run_privileged_with_timeout(program, &full, timeout)?;
+        let text = format!("{}{}", output.stdout, output.stderr);
+        let locked = !output.ok()
+            && (text.contains("Could not get lock")
+                || text.contains("Unable to acquire the dpkg frontend lock")
+                || text.contains("Unable to lock directory"));
+        if !locked || std::time::Instant::now() >= deadline {
+            return Ok(output);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+}
+
 pub fn install_packages(packages: &[&str], log: &mut String) -> bool {
     let manager = package_manager();
     let commands = install_commands(manager, packages);
@@ -448,11 +568,7 @@ pub fn install_packages(packages: &[&str], log: &mut String) -> bool {
     for (program, args) in commands {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         log.push_str(&format!("\n$ {} {}\n", program, arg_refs.join(" ")));
-        match shell::run_privileged_with_timeout(
-            program,
-            &arg_refs,
-            std::time::Duration::from_secs(900),
-        ) {
+        match run_package_manager(program, &arg_refs, std::time::Duration::from_secs(900)) {
             Ok(result) => {
                 log.push_str(result.stdout.trim_end());
                 if !result.stderr.trim().is_empty() {
@@ -513,4 +629,16 @@ pub fn interpreter_path(kind: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod package_tests {
+    /// Manual: installs a tiny package while another process holds the dpkg
+    /// lock (`cargo test waits_for_dpkg_lock -- --ignored`, as root on apt).
+    #[test]
+    #[ignore]
+    fn waits_for_dpkg_lock() {
+        let mut log = String::new();
+        assert!(super::install_packages(&["sl"], &mut log), "{log}");
+    }
 }

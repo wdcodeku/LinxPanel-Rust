@@ -55,6 +55,10 @@
         </div>
 
         <div class="topbar__right">
+          <router-link v-if="updateTag" to="/settings?tab=update" class="update-chip" :title="t('upd.available')">
+            <el-icon :size="13"><Upload /></el-icon>
+            <span class="update-chip__text">{{ t('upd.badge', { tag: updateTag }) }}</span>
+          </router-link>
           <!-- Connection state is the one thing that must never be silently wrong. -->
           <span class="live" :class="`live--${realtime.state}`" :title="liveTitle">
             <span class="live__dot"></span>
@@ -142,7 +146,7 @@ import { useUserStore } from '@/stores/user'
 import { useRealtimeStore } from '@/stores/realtime'
 import { useI18n } from '@/i18n'
 import type { Locale } from '@/i18n'
-import { changePasswordApi } from '@/api'
+import { changePasswordApi, getUpdateStatus } from '@/api'
 import { formatDuration } from '@/utils/format'
 
 const route = useRoute()
@@ -195,6 +199,24 @@ const navGroups = [
 ]
 
 const panelVersion = computed(() => realtime.staticInfo?.panel_version || '0.1.0')
+
+// New-release notice, refreshed now and then (the server checks GitHub itself).
+const updateTag = ref('')
+async function refreshUpdateNotice() {
+  try {
+    const res: any = await getUpdateStatus()
+    const check = res?.success ? res.data?.check : null
+    updateTag.value = check?.has_update && res.data?.can_update ? check.latest?.tag || '' : ''
+  } catch {
+    updateTag.value = ''
+  }
+}
+let updateTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  refreshUpdateNotice()
+  updateTimer = setInterval(refreshUpdateNotice, 30 * 60 * 1000)
+})
+onUnmounted(() => clearInterval(updateTimer))
 
 const host = computed(() => {
   const info = realtime.staticInfo
@@ -404,6 +426,24 @@ onUnmounted(() => realtime.unsubscribe())
   border-top: 1px solid var(--lp-line-soft);
 }
 .shell--collapsed .sidebar__foot { justify-content: center; }
+.update-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-accent-soft);
+  color: var(--lp-accent);
+  font-size: var(--lp-text-xs);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.update-chip:hover { filter: brightness(0.96); }
+@media (max-width: 640px) {
+  .update-chip__text { display: none; }
+}
 .sidebar__version { font-size: var(--lp-text-xs); color: var(--lp-text-faint); }
 
 /* ---------- Top bar ---------- */
