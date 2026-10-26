@@ -62,7 +62,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 
 ### 发布预编译包（维护者）
 
-推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会触发 `.github/workflows/release.yml`，自动构建全部 8 种架构的静态二进制（每种都在 qemu 中实际启动并做 HTTP 冒烟测试后才发布），附带 SHA256SUMS，发布到 GitHub Release，一键安装脚本会直接下载它。**在发布第一个 Release 之前，一键安装只能走编译安装（较慢）。**
+推送 `v*` 标签（如 `git tag v0.1.0 && git push origin v0.1.0`）会触发 `.github/workflows/release.yml`，自动构建全部 8 种架构的静态二进制（每种都在 qemu 中实际启动并做 HTTP 冒烟测试后才发布），附带 SHA256SUMS，发布到 GitHub Release，一键安装脚本会直接下载它。也可以在 GitHub Actions 页面手动运行 Release 工作流并填写标签。当前最新版本见 [Releases](https://github.com/wdcodeku/LinxPanel-Rust/releases)。
 
 ### 单文件部署（内嵌 Web）
 
@@ -355,7 +355,7 @@ Optional environment variables:
 
 ### Publishing Prebuilt Binaries (maintainers)
 
-Pushing a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) runs `.github/workflows/release.yml`, which builds static binaries for all 8 architectures (each one is started under qemu and smoke-tested over HTTP before publishing), with SHA256SUMS, and attaches them to a GitHub Release that the installer downloads. **Until the first release exists, the installer can only build from source (slow).**
+Pushing a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) runs `.github/workflows/release.yml`, which builds static binaries for all 8 architectures (each one is started under qemu and smoke-tested over HTTP before publishing), with SHA256SUMS, and attaches them to a GitHub Release that the installer downloads. The workflow can also be started by hand from the Actions page with a tag. The latest version is on the [Releases](https://github.com/wdcodeku/LinxPanel-Rust/releases) page.
 
 ### Single Binary Deployment (Embedded Web)
 
