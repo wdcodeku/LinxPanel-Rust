@@ -60,6 +60,8 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'No supported package manager found (winget/choco/scoop)': 'api.openrestyInstallNoPkgManager',
   'All OpenResty quick install methods failed. Please review install logs.': 'api.openrestyInstallAllMethodsFailed',
   'No installer method available': 'api.openrestyInstallNoMethod',
+  'That is your own address; banning it would lock you out': 'def.ownIp',
+  'Enter a single IPv4 or IPv6 address': 'def.badIp',
 }
 
 function localizeApiMessage(message: unknown): string {
@@ -75,6 +77,9 @@ function localizeApiMessage(message: unknown): string {
   if (lockoutDomain) return t('ps.domainLockout', { detail: lockoutDomain[1] })
   const portInUse = text.match(/^Port (\d+) is already in use/)
   if (portInUse) return t('ps.portInUse', { detail: portInUse[1] })
+  if (/^Saved, but nginx was not updated:\s*/i.test(text)) {
+    return t('def.nginxNotUpdated', { detail: text.replace(/^Saved, but nginx was not updated:\s*/i, '') })
+  }
 
   if (text.startsWith('Cannot read:')) {
     return t('api.cannotRead', { detail: text.replace(/^Cannot read:\s*/i, '') })

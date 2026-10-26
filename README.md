@@ -54,6 +54,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 - `Lp port [端口|default]`、`Lp allow-ip [off|IP ...]`、`Lp domain [off|域名]`：修改面板端口、授权 IP、绑定域名（自动重启面板）
 - `Lp mfa [off]`：查看或关闭两步验证
 - `Lp security`：查看全部面板安全设置
+- `Lp bans`、`Lp ban IP [分钟]`、`Lp unban IP|all`：查看 / 封禁 / 解封地址（立即生效；误封自己时用 `Lp unban all`）
+- `Lp defense [on|off]`：查看或开关自动封禁；`Lp harden [on|off]`：内核网络加固
 - `Lp version`：查看版本
 - `Lp uninstall [--purge]`：卸载（默认保留数据，`--purge` 同时删除数据）
 
@@ -136,6 +138,25 @@ LinxPanel 在构建时会将 `web/dist` 内嵌进 Rust 可执行文件，部署�
 | 会话超时 | 登录有效期 | — |
 
 此外：同一 IP 15 分钟内登录失败 5 次即锁定（两步验证码错误同样计数）；`Lp security` 可在服务器上查看全部设置；systemd 下可直接在页面重启面板。
+
+### 主动防御（抗攻击）
+
+面向“被大量攻击导致服务器瘫痪”的场景，原则是**越早拒绝越便宜**：恶意流量在内核层直接丢弃，不进入 nginx、PHP 或面板。不依赖 Docker，没有常驻的额外进程。在「安全防护 → 主动防御」中设置。
+
+| 层级 | 作用 |
+| --- | --- |
+| 内核封禁（nftables） | 被封地址的数据包在内核 input 钩子直接丢弃（无 TCP 握手、无 TLS、无应用开销），按时长自动过期；与 ufw / firewalld 互不干扰；重启或 `nft flush` 后自动恢复 |
+| 自动封禁引擎 | 每 5 秒增量读取各网站访问日志、SSH 认证日志（auth.log / secure / journald）和面板拒绝记录，按滑动窗口统计；超过阈值即封禁。内存有上限，日志每次最多读 8MB，攻击期间也不会拖垮服务器 |
+| 网站 CC / 扫描 | 默认 60 秒内 600 次请求或 120 次 4xx（扫描 /wp-login.php、/.env 等）封禁 1 小时 |
+| nginx 限流（可选） | 所有网站按 IP 限速（默认 30 次/秒，突发 200）和并发连接（64），超限返回 429 并计入封禁 |
+| nginx 防慢速攻击 | 全局设置请求头 / 请求体 / 发送超时、超时连接立即释放、隐藏版本号（已在 nginx.conf 设置的项自动跳过，`nginx -t` 失败自动降级并回滚） |
+| SSH 防爆破 | 默认 10 分钟内 6 次失败封禁；成功登录过的地址 24 小时内不会被封 |
+| 面板自保护 | 每 IP 连接数上限（48）与总连接上限（1024）、请求头 10 秒超时（防 slowloris）、TLS 握手超时、密码校验并发上限（防 bcrypt 耗尽 CPU）、静态资源预压缩缓存；扫描面板端口的地址自动封禁；systemd 中提高面板优先级并降低被 OOM 杀死的概率 |
+| 内核网络加固 | `/etc/sysctl.d/90-linxpanel.conf`：SYN Cookie、更大的半连接 / 全连接队列、缩短 FIN 超时、宽松反向路径过滤、禁止 ICMP 重定向与源路由（安装时默认应用，`LINXPANEL_HARDEN=0` 跳过） |
+
+防误封：本机回环与服务器自身地址永不封禁；白名单支持 IP / CIDR；登录过面板或 SSH 的地址 24 小时内豁免；手动封禁时拒绝封禁当前访问者自己的 IP。被封后可在服务器控制台执行 `Lp unban all` 恢复。
+
+注意：网站使用 CDN 时访问日志里是 CDN 节点 IP，请把 CDN 的 IP 段加入白名单（或在网站配置中启用 real_ip）。每个网站的访问日志位于 `安装目录/logs/web/site-<ID>.log`，由 logrotate 按天 / 按大小轮转。
 
 ### 会话持久化
 
@@ -262,7 +283,7 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### 生产环境就绪度
 
-已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
 
 与宝塔 / 1Panel 相比仍缺少（后续计划）：
 
@@ -270,7 +291,7 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 - 多 PHP 版本共存（目前使用发行版默认版本）、MySQL 版本选择
 - 资源告警通知（阈值设置已有，尚未接入邮件 / Webhook）、操作审计日志
 - 备份上传到远程存储（S3 / OSS / FTP）
-- 网站访问日志分析、WAF / 防 CC
+- 网站访问日志分析、规则型 WAF（SQL 注入 / XSS 特征拦截）
 - 多用户与权限管理
 
 ## English
@@ -325,6 +346,8 @@ Optional environment variables:
 - `Lp port [PORT|default]`, `Lp allow-ip [off|IP ...]`, `Lp domain [off|DOMAIN]`: change the panel port, allowed IPs, bound domain (restarts the panel)
 - `Lp mfa [off]`: show or turn off two-factor login
 - `Lp security`: show every panel security setting
+- `Lp bans`, `Lp ban IP [MINUTES]`, `Lp unban IP|all`: list / ban / lift bans (immediate; `Lp unban all` if you locked yourself out)
+- `Lp defense [on|off]`: show or switch automatic banning; `Lp harden [on|off]`: kernel network hardening
 - `Lp version`: show the installed version
 - `Lp uninstall [--purge]`: remove LinxPanel (data is kept unless `--purge`)
 
@@ -408,6 +431,25 @@ Settings → Security lists every setting with its current value; "Set" edits it
 | Session timeout | How long a sign-in lasts | — |
 
 Also: 5 failed logins from one IP within 15 minutes lock it out (wrong two-factor codes count too); `Lp security` prints every setting on the server; under systemd the panel can restart itself from the page.
+
+### Active Defense (surviving attacks)
+
+Built for servers that attacks used to bring down. The rule is **reject as early as possible**: abusive traffic is dropped in the kernel and never reaches nginx, PHP or the panel. No Docker and no extra resident processes. Configure it under Security → Active defense.
+
+| Layer | What it does |
+| --- | --- |
+| Kernel bans (nftables) | Packets from banned addresses are dropped at the kernel input hook (no TCP handshake, no TLS, no application work) and expire automatically; independent of ufw / firewalld; restored after a reboot or `nft flush` |
+| Auto-ban engine | Every 5 s it reads what was appended to each site's access log, the SSH auth log (auth.log / secure / journald) and the panel's rejections, counting in sliding windows; crossing a threshold bans the address. Memory is capped and at most 8 MB of log is read per tick, so it stays cheap during an attack |
+| Website CC / scanners | Default: 600 requests or 120 4xx responses (probing /wp-login.php, /.env ...) within 60 s bans for an hour |
+| nginx rate limit (optional) | Per-IP request rate (default 30/s, burst 200) and connection cap (64) on every site; excess gets 429 and counts toward a ban |
+| nginx anti-slowloris | Global header / body / send timeouts, timed-out connections reset at once, version hidden (directives already in nginx.conf are skipped; a failing `nginx -t` degrades and rolls back) |
+| SSH brute force | Default: 6 failures within 10 minutes bans; addresses that logged in successfully are exempt for 24 hours |
+| Panel self-protection | Per-IP (48) and total (1024) connection caps, 10 s header timeout (slowloris), TLS handshake timeout, bounded concurrent password checks (bcrypt cannot exhaust the CPU), pre-compressed cached assets; addresses scanning the panel port are banned; under systemd the panel runs at a higher priority and is a late OOM victim |
+| Kernel network hardening | `/etc/sysctl.d/90-linxpanel.conf`: SYN cookies, larger SYN and accept backlogs, shorter FIN timeout, loose reverse-path filtering, no ICMP redirects or source routing (applied by the installer; `LINXPANEL_HARDEN=0` skips it) |
+
+Lockout safety: loopback and the server's own addresses are never banned; the whitelist takes IPs and CIDRs; addresses that logged in to the panel or SSH are exempt for 24 hours; a manual ban of your own current IP is refused. If you do get banned, run `Lp unban all` from the server console.
+
+Behind a CDN the access logs show CDN addresses: whitelist the CDN's ranges (or enable real_ip for the site). Each site logs to `<install dir>/logs/web/site-<ID>.log`, rotated daily / by size by logrotate.
 
 ### Session Persistence
 
@@ -534,7 +576,7 @@ Runtime keys (panel settings / `settings` table / env):
 
 ### Production Readiness
 
-In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
 
 Still missing compared with BaoTa / 1Panel (planned):
 
@@ -542,5 +584,5 @@ Still missing compared with BaoTa / 1Panel (planned):
 - Multiple PHP versions side by side (the distro's version is used), MySQL version choice
 - Alert notifications (thresholds exist but are not wired to email / webhooks), an audit log
 - Off-site backup targets (S3 / OSS / FTP)
-- Access-log analytics, WAF / CC protection
+- Access-log analytics, a signature WAF (SQL injection / XSS rules)
 - Multiple users and roles

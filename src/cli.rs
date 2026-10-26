@@ -7,7 +7,7 @@
 use anyhow::{anyhow, bail, Result};
 
 use crate::db;
-use crate::services::panel_access;
+use crate::services::{defense, ipban, panel_access};
 
 pub const USAGE: &str = "\
 Usage: linxpanel [COMMAND]
@@ -32,6 +32,13 @@ Commands:
                                Show or turn off two-factor login (default:
                                the panel's account)
   security                     Show all panel access settings
+  ban <IP> [MINUTES]           Drop all traffic from an address in the kernel
+                               (0 = permanent; default: the defense setting)
+  unban <IP|all>               Lift a ban (all: every ban, e.g. after a lockout)
+  bans                         List banned addresses
+  defense [status|on|off]      Show or switch automatic banning
+  harden [status|on|off]       Kernel network hardening (SYN cookies, backlog,
+                               anti-spoofing) via /etc/sysctl.d
   backup site <ID> [--keep N]  Archive a website's directory (used by scheduled backups)
   backup db <ENGINE> <NAME> [--keep N]
                                Dump a database (mysql | postgresql)
@@ -58,6 +65,11 @@ pub async fn run(args: &[String]) -> Result<bool> {
         "domain" => domain(rest).await?,
         "mfa" => mfa(rest).await?,
         "security" => security().await?,
+        "ban" => ban(rest).await?,
+        "unban" => unban(rest).await?,
+        "bans" => bans().await?,
+        "defense" => defense_cmd(rest).await?,
+        "harden" => harden(rest)?,
         "backup" => backup(rest).await?,
         "info" => info().await?,
         other => bail!("Unknown command: {}\n\n{}", other, USAGE),
@@ -395,6 +407,166 @@ async fn backup(args: &[String]) -> Result<()> {
     };
     pool.close().await;
     println!("{}", path.display());
+    Ok(())
+}
+
+fn parse_ip(raw: Option<&String>) -> Result<std::net::IpAddr> {
+    let raw = raw.ok_or_else(|| anyhow!("An IP address is required"))?;
+    raw.trim()
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.to_canonical())
+        .map_err(|_| anyhow!("Not an IP address: {}", raw))
+}
+
+async fn ban(args: &[String]) -> Result<()> {
+    let ip = parse_ip(args.first())?;
+    if let Some(why) = defense::never_ban(&ip) {
+        bail!("Cannot ban {}: {}", ip, why);
+    }
+    let (pool, _) = crate::open_database().await?;
+    let minutes = match args.get(1) {
+        Some(raw) => raw
+            .parse::<u64>()
+            .ok()
+            .filter(|m| *m <= 525_600)
+            .ok_or_else(|| anyhow!("MINUTES must be 0-525600"))?,
+        None => defense::load_config(&pool).await.ban_minutes,
+    };
+    let result = defense::ban(
+        &pool,
+        ip,
+        (minutes > 0).then_some(minutes * 60),
+        "manual",
+        "Banned from the command line",
+    )
+    .await;
+    pool.close().await;
+    result.map_err(|e| anyhow!(e))?;
+    match minutes {
+        0 => println!("Banned {} permanently", ip),
+        m => println!("Banned {} for {} minutes", ip, m),
+    }
+    Ok(())
+}
+
+async fn unban(args: &[String]) -> Result<()> {
+    let (pool, _) = crate::open_database().await?;
+    let targets: Vec<std::net::IpAddr> = if args.first().map(String::as_str) == Some("all") {
+        // Kernel elements too: a ban whose record is gone must not linger.
+        let mut ips: Vec<std::net::IpAddr> = defense::list_bans(&pool)
+            .await
+            .into_iter()
+            .filter_map(|b| b.ip.parse().ok())
+            .collect();
+        if let Ok(kernel) = ipban::list() {
+            ips.extend(
+                kernel
+                    .into_iter()
+                    .filter_map(|b| b.ip.parse::<std::net::IpAddr>().ok()),
+            );
+        }
+        ips.sort();
+        ips.dedup();
+        ips
+    } else {
+        vec![parse_ip(args.first())?]
+    };
+    let mut failed = None;
+    for ip in &targets {
+        if let Err(err) = defense::unban(&pool, *ip).await {
+            failed = Some(format!("{}: {}", ip, err));
+        }
+    }
+    pool.close().await;
+    if let Some(err) = failed {
+        bail!(err);
+    }
+    println!("Unbanned {} address(es)", targets.len());
+    Ok(())
+}
+
+async fn bans() -> Result<()> {
+    let (pool, _) = crate::open_database().await?;
+    let records = defense::list_bans(&pool).await;
+    pool.close().await;
+    if records.is_empty() {
+        println!("No banned addresses");
+    }
+    let now = chrono::Utc::now().timestamp();
+    for record in records {
+        let left = match record.expires_at {
+            0 => "permanent".to_string(),
+            at => format!("{}m left", ((at - now).max(0) as u64).div_ceil(60)),
+        };
+        println!(
+            "{:<40} {:<10} {:<8} {}",
+            record.ip, left, record.source, record.reason
+        );
+    }
+    Ok(())
+}
+
+async fn defense_cmd(args: &[String]) -> Result<()> {
+    let (pool, _) = crate::open_database().await?;
+    let mut config = defense::load_config(&pool).await;
+    match action(args, "status") {
+        "status" | "show" => {}
+        "on" | "enable" => config.enabled = true,
+        "off" | "disable" => config.enabled = false,
+        other => bail!("Unknown defense action: {}", other),
+    }
+    defense::save_config(&pool, &config).await?;
+    pool.close().await;
+    println!(
+        "Automatic banning: {} (ban {} min; web {} req/{}s, ssh {} failures/{}s, panel {} denials/{}s)",
+        if config.enabled { "on" } else { "off" },
+        config.ban_minutes,
+        config.web_max_requests,
+        config.web_window,
+        config.ssh_max_failures,
+        config.ssh_window,
+        config.panel_max_denied,
+        config.panel_window
+    );
+    println!(
+        "nftables: {}",
+        if ipban::available() {
+            "installed"
+        } else {
+            "not installed"
+        }
+    );
+    Ok(())
+}
+
+fn harden(args: &[String]) -> Result<()> {
+    match action(args, "status") {
+        "status" | "show" => {}
+        "on" | "enable" => {
+            let output = defense::apply_sysctl().map_err(|e| anyhow!(e))?;
+            print!("{}", output);
+        }
+        "off" | "disable" => {
+            defense::remove_sysctl().map_err(|e| anyhow!(e))?;
+            println!("Profile removed; kernel defaults return after a reboot");
+        }
+        other => bail!("Unknown harden action: {}", other),
+    }
+    let status = defense::sysctl_status();
+    println!(
+        "Profile {}: {}; SYN cookies {}; somaxconn {}",
+        defense::SYSCTL_PATH,
+        if status.applied {
+            "installed"
+        } else {
+            "not installed"
+        },
+        if status.syncookies { "on" } else { "off" },
+        status.somaxconn
+    );
+    if status.applied && !status.syncookies {
+        bail!("The profile is installed but the kernel did not accept it");
+    }
     Ok(())
 }
 

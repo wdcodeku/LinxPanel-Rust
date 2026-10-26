@@ -37,6 +37,8 @@ ENTRANCE_MODE="${LINXPANEL_ENTRANCE:-}"
 # Panel HTTPS with a self-signed certificate: 1 (default on fresh installs) | 0.
 SSL_MODE="${LINXPANEL_SSL:-}"
 HEALTH_TIMEOUT="${LINXPANEL_HEALTH_TIMEOUT:-30}"
+# Kernel network hardening (SYN cookies, backlog, anti-spoofing): 1 (default) | 0.
+HARDEN_KERNEL="${LINXPANEL_HARDEN:-1}"
 SERVICE_NAME="linxpanel"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -124,6 +126,8 @@ msg() {
       sudo_not_found) echo "未找到 sudo，请使用 root 执行。" ;;
       install_deps) echo "正在安装构建依赖..." ;;
       install_base_deps) echo "正在安装基础依赖：%s" ;;
+      harden_kernel) echo "已应用内核网络加固（SYN Cookie、连接队列、防伪造）" ;;
+      harden_skipped) echo "内核网络加固未应用（容器或只读内核参数），可稍后在 安全 > 主动防御 中重试" ;;
       unsupported_pkg_manager) echo "不支持的包管理器，请手动安装 git/npm/cargo。" ;;
       cargo_ok) echo "检测到 cargo %s，版本校验通过。" ;;
       cargo_ok_stable) echo "检测到 rustup stable cargo %s，版本校验通过。" ;;
@@ -200,6 +204,8 @@ msg() {
       sudo_not_found) echo "sudo not found, please run as root." ;;
       install_deps) echo "Installing build dependencies..." ;;
       install_base_deps) echo "Installing base dependencies: %s" ;;
+      harden_kernel) echo "Applied kernel network hardening (SYN cookies, backlog, anti-spoofing)" ;;
+      harden_skipped) echo "Kernel network hardening not applied (container or read-only sysctl); retry later under Security > Defense" ;;
       unsupported_pkg_manager) echo "Unsupported package manager. Please install git/npm/cargo manually." ;;
       cargo_ok) echo "Detected cargo %s, version check passed." ;;
       cargo_ok_stable) echo "Detected rustup stable cargo %s, version check passed." ;;
@@ -418,6 +424,8 @@ ensure_base_deps() {
   require_cmd tar || missing+=(tar)
   require_cmd sha256sum || missing+=(coreutils)
   require_cmd gzip || missing+=(gzip)
+  # Active defense bans addresses in the kernel with nftables.
+  require_cmd nft || missing+=(nftables)
   # Scheduled jobs and backups run from cron; minimal images ship without it.
   if ! require_cmd crontab; then
     if require_cmd apt-get; then
@@ -926,6 +934,10 @@ RestartSec=3
 KillMode=mixed
 TimeoutStopSec=20
 LimitNOFILE=1048576
+# Under attack the panel is how you fight back: keep it schedulable when the
+# CPU is saturated, and let the OOM killer pick other processes first.
+Nice=-5
+OOMScoreAdjust=-500
 ${output_lines}
 
 [Install]
@@ -949,7 +961,31 @@ ${INSTALL_ROOT}/logs/*.log {
     notifempty
     copytruncate
 }
+
+# Per-site access logs written by nginx (read by the auto-ban engine). Under
+# attack they grow fast, so rotate by size as well.
+${INSTALL_ROOT}/logs/web/*.log {
+    daily
+    rotate 7
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
 EOF
+}
+
+harden_kernel() {
+  if [[ "${HARDEN_KERNEL}" != "1" ]]; then
+    return
+  fi
+  if ${SUDO} "${INSTALL_ROOT}/bin/linxpanel" harden on >/dev/null 2>&1; then
+    logf harden_kernel
+  else
+    logf harden_skipped
+  fi
 }
 
 start_panel() {
@@ -1182,6 +1218,7 @@ ${SUDO} chmod 700 "${INSTALL_ROOT}/data"
 
 write_env_file
 write_logrotate
+harden_kernel
 if [[ "${USE_SYSTEMD}" == "1" ]]; then
   write_systemd_unit
 fi

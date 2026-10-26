@@ -3,12 +3,10 @@ use axum::{
     extract::Path,
     http::{header, Response, StatusCode},
     routing::get,
-    serve::ListenerExt,
 };
 use include_dir::{include_dir, Dir, File};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -38,6 +36,10 @@ pub struct AppState {
     pub listen_port: u16,
     /// Signalled to restart the panel (systemd brings it back up).
     pub restart: tokio::sync::Notify,
+    /// Active defense counters (auto-ban engine).
+    pub defense: Arc<services::defense::Engine>,
+    /// Open panel connections, for the defense status page.
+    pub connections: Arc<services::server::Tracker>,
 }
 
 impl AppState {
@@ -82,7 +84,52 @@ fn resolve_path(relative: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(relative)
 }
 
-fn web_file_response(path: &str, file: &File<'_>) -> Response<Body> {
+/// Gzip of an embedded file, compressed once and kept. Compressing per request
+/// (as a compression layer does) let a flood of asset requests burn the CPU.
+fn gzip_cached(file: &'static File<'static>) -> Option<axum::body::Bytes> {
+    use std::collections::HashMap;
+    use std::io::Write;
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<&'static std::path::Path, axum::body::Bytes>>,
+    > = std::sync::OnceLock::new();
+
+    let compressible = file.contents().len() > 1024
+        && matches!(
+            file.path().extension().and_then(|e| e.to_str()),
+            Some("js" | "css" | "html" | "svg" | "json" | "txt" | "map")
+        );
+    if !compressible {
+        return None;
+    }
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(file.path())
+    {
+        return Some(hit.clone());
+    }
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(file.contents()).ok()?;
+    let bytes = axum::body::Bytes::from(encoder.finish().ok()?);
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(file.path(), bytes.clone());
+    Some(bytes)
+}
+
+fn accepts_gzip(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|enc| enc.trim().starts_with("gzip") && !enc.contains("q=0"))
+        })
+}
+
+fn web_file_response(path: &str, file: &'static File<'static>, gzip: bool) -> Response<Body> {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let cache_control = if path.starts_with("assets/") {
         "public, max-age=31536000, immutable"
@@ -90,18 +137,27 @@ fn web_file_response(path: &str, file: &File<'_>) -> Response<Body> {
         "no-cache"
     };
 
-    let content = file.contents().to_vec();
-    Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime.as_ref())
         .header(header::CACHE_CONTROL, cache_control)
-        .body(Body::from(content))
+        .header(header::VARY, "Accept-Encoding");
+    // Embedded bytes are 'static: served without copying.
+    let body = match gzip.then(|| gzip_cached(file)).flatten() {
+        Some(compressed) => {
+            response = response.header(header::CONTENT_ENCODING, "gzip");
+            Body::from(compressed)
+        }
+        None => Body::from(axum::body::Bytes::from_static(file.contents())),
+    };
+    response
+        .body(body)
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-fn index_response() -> Response<Body> {
+fn index_response(gzip: bool) -> Response<Body> {
     if let Some(file) = EMBEDDED_WEB.get_file("index.html") {
-        return web_file_response("index.html", &file);
+        return web_file_response("index.html", file, gzip);
     }
     Response::builder()
         .status(StatusCode::OK)
@@ -118,22 +174,26 @@ fn not_found_response() -> Response<Body> {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-async fn serve_root() -> Response<Body> {
-    index_response()
+async fn serve_root(headers: axum::http::HeaderMap) -> Response<Body> {
+    index_response(accepts_gzip(&headers))
 }
 
-async fn serve_embedded_path(Path(path): Path<String>) -> Response<Body> {
+async fn serve_embedded_path(
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Response<Body> {
+    let gzip = accepts_gzip(&headers);
     let normalized = path.trim_start_matches('/').trim();
     if normalized.is_empty() {
-        return index_response();
+        return index_response(gzip);
     }
 
     if let Some(file) = EMBEDDED_WEB.get_file(normalized) {
-        return web_file_response(normalized, &file);
+        return web_file_response(normalized, file, gzip);
     }
 
     if !normalized.contains('.') {
-        return index_response();
+        return index_response(gzip);
     }
 
     not_found_response()
@@ -189,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
     let metrics = services::metrics::MetricsEngine::new();
     services::metrics::spawn(metrics.clone(), shutdown_tx.subscribe());
 
+    let tracker = services::server::Tracker::new(services::server::Limits::from_env());
     let state = Arc::new(AppState {
         db: pool,
         jwt_secret,
@@ -202,11 +263,29 @@ async fn main() -> anyhow::Result<()> {
         tls_active: tls_config.is_some(),
         listen_port: port,
         restart: tokio::sync::Notify::new(),
+        defense: services::defense::Engine::new(&data_dir),
+        connections: tracker.clone(),
     });
 
     // Keep ACME certificates fresh without operator intervention.
     tokio::spawn(api::cert_api::renewal_task(
         state.clone(),
+        state.shutdown.subscribe(),
+    ));
+
+    // Active defense: log watching and automatic kernel bans. nginx gets its
+    // shared defense settings (per-site logs, rate limit zones) once at start.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) = services::openresty::apply_defense(&state).await {
+                tracing::debug!("nginx defense settings not applied: {}", err);
+            }
+        });
+    }
+    tokio::spawn(services::defense::run(
+        state.defense.clone(),
+        state.db.clone(),
         state.shutdown.subscribe(),
     ));
 
@@ -220,12 +299,10 @@ async fn main() -> anyhow::Result<()> {
     let api_routes = api::routes(state.clone());
     tracing::info!("Serving embedded web resources from executable");
 
-    // Only the embedded UI is compressed: compressing /api would buffer the
-    // streamed command output and break WebSocket upgrades.
+    // Embedded UI; gzip variants are cached per file (see `gzip_cached`).
     let web_routes = axum::Router::new()
         .route("/", get(serve_root))
-        .route("/{*path}", get(serve_embedded_path))
-        .layer(CompressionLayer::new());
+        .route("/{*path}", get(serve_embedded_path));
 
     // No CORS layer: the UI is served from this same origin (and the Vite dev
     // server proxies /api), so cross-origin access is never needed.
@@ -236,9 +313,14 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             middleware::access_guard,
         ))
+        .layer(axum::middleware::from_fn(middleware::security_headers))
         .layer(TraceLayer::new_for_http());
 
-    let scheme = if tls_config.is_some() { "https" } else { "http" };
+    let scheme = if tls_config.is_some() {
+        "https"
+    } else {
+        "http"
+    };
     tracing::info!(
         "LinxPanel {} listening on {}://{}",
         env!("CARGO_PKG_VERSION"),
@@ -259,26 +341,24 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         tokio::time::sleep(SHUTDOWN_GRACE).await;
-        tracing::warn!("Forcing exit: connections did not drain within {:?}", SHUTDOWN_GRACE);
+        tracing::warn!(
+            "Forcing exit: connections did not drain within {:?}",
+            SHUTDOWN_GRACE
+        );
         std::process::exit(0);
     });
 
-    let shutdown = shutdown_future(state.clone());
-    let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
-    // `tap_io` gives both listener types the same SocketAddr connect-info.
-    match tls_config {
-        Some(config) => {
-            let listener = services::panel_access::TlsListener::new(listener, config)?;
-            axum::serve(listener.tap_io(|_| {}), make_service)
-                .with_graceful_shutdown(shutdown)
-                .await?
-        }
-        None => {
-            axum::serve(listener.tap_io(|_| {}), make_service)
-                .with_graceful_shutdown(shutdown)
-                .await?
-        }
-    }
+    let stopping = tokio::spawn(shutdown_future(state.clone()));
+    services::server::serve(
+        listener,
+        tls_config,
+        app,
+        state.connections.clone(),
+        state.shutdown.subscribe(),
+    )
+    .await;
+    // Managed apps are stopped by the shutdown task; wait for it.
+    let _ = stopping.await;
 
     tracing::info!("LinxPanel stopped");
     Ok(())

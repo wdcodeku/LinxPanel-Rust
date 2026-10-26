@@ -414,6 +414,12 @@ uninstall_cmd() {
     stop_no_systemd
   fi
   run_sudo rm -f /etc/logrotate.d/linxpanel
+  # Kernel bans would otherwise keep dropping traffic with nothing left to lift them.
+  if command -v nft >/dev/null 2>&1; then
+    run_sudo nft delete table inet linxpanel >/dev/null 2>&1 || true
+  fi
+  # Values stay until reboot; then the distro defaults return.
+  run_sudo rm -f /etc/sysctl.d/90-linxpanel.conf
   if [[ "${purge}" == "--purge" ]]; then
     run_sudo rm -rf "${INSTALL_ROOT}"
   else
@@ -474,6 +480,11 @@ Usage:
   Lp domain [off|DOMAIN]    Show, set or clear the bound domain
   Lp mfa [off] [user]       Show or turn off two-factor login
   Lp security               Show all panel security settings
+  Lp bans                   List addresses banned by active defense
+  Lp ban IP [MINUTES]       Drop all traffic from an address (0 = permanent)
+  Lp unban IP|all           Lift a ban (all: e.g. after locking yourself out)
+  Lp defense [on|off]       Show or switch automatic banning
+  Lp harden [on|off]        Kernel network hardening (SYN cookies etc.)
   Lp version                Show installed version
   Lp enable                 Enable systemd service
   Lp disable                Disable systemd service
@@ -488,7 +499,7 @@ cmd="${1:-help}"
 
 require_binary=0
 case "${cmd}" in
-  start|restart|logs|info|reset-password|version|entrance|ssl|port|allow-ip|domain|mfa|security)
+  start|restart|logs|info|reset-password|version|entrance|ssl|port|allow-ip|domain|mfa|security|ban|unban|bans|defense|harden)
     require_binary=1
     ;;
 esac
@@ -547,6 +558,11 @@ case "${cmd}" in
     else
       panel_cli mfa status ${3:+--user "$3"}
     fi
+    ;;
+  # Bans and defense switches apply at once: the kernel set changes now and the
+  # running panel re-reads its settings every few seconds.
+  ban|unban|bans|defense|harden)
+    panel_cli "$@"
     ;;
   security)
     panel_cli security

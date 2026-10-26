@@ -11,6 +11,9 @@
     </div>
 
     <el-tabs v-model="tab" class="tabs">
+      <el-tab-pane :label="t('sec.defense')" name="defense">
+        <DefensePanel ref="defenseRef" />
+      </el-tab-pane>
       <el-tab-pane :label="t('sec.firewall')" name="firewall">
         <div class="stack">
           <div class="lp-card">
@@ -159,6 +162,7 @@ import {
   getListeningPorts, toggleFirewall as toggleFirewallApi,
 } from '@/api'
 import { useI18n } from '@/i18n'
+import DefensePanel from './DefensePanel.vue'
 
 type FirewallStatus = {
   backend: string
@@ -173,7 +177,8 @@ type ListeningPort = { protocol: string; address: string; port: number; pid: num
 
 const { t } = useI18n()
 
-const tab = ref('firewall')
+const tab = ref('defense')
+const defenseRef = ref<InstanceType<typeof DefensePanel>>()
 const loading = ref(false)
 const status = ref<FirewallStatus | null>(null)
 const rules = ref<FirewallRule[]>([])
@@ -209,7 +214,7 @@ function isPublic(address: string) {
 
 async function loadAll() {
   loading.value = true
-  await Promise.all([loadFirewall(), loadPorts()])
+  await Promise.all([loadFirewall(), loadPorts(), defenseRef.value?.load()])
   loading.value = false
 }
 

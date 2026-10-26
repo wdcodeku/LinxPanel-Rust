@@ -95,7 +95,7 @@ pub async fn access_guard(
 
     if !peer.is_some_and(|ip| policy.ip_allowed(ip)) {
         tracing::debug!("Rejected {:?}: not in allowed IPs", peer);
-        return deny(&policy, DenyReason::Ip);
+        return deny(&state, peer, &policy, DenyReason::Ip);
     }
 
     let host = req
@@ -103,7 +103,7 @@ pub async fn access_guard(
         .get(header::HOST)
         .and_then(|value| value.to_str().ok());
     if !policy.host_allowed(host) {
-        return deny(&policy, DenyReason::Domain);
+        return deny(&state, peer, &policy, DenyReason::Domain);
     }
 
     let Some(entrance) = policy.entrance.as_deref() else {
@@ -136,11 +136,23 @@ pub async fn access_guard(
             }
             response
         }
-        EntranceCookie::Missing => deny(&policy, DenyReason::Entrance),
+        EntranceCookie::Missing => deny(&state, peer, &policy, DenyReason::Entrance),
     }
 }
 
-fn deny(policy: &panel_access::AccessPolicy, reason: DenyReason) -> Response {
+/// Rejections count towards an automatic kernel ban: a scanner hammering the
+/// panel port soon stops costing anything at all.
+fn deny(
+    state: &AppState,
+    peer: Option<std::net::IpAddr>,
+    policy: &panel_access::AccessPolicy,
+    reason: DenyReason,
+) -> Response {
+    if let Some(ip) = peer {
+        state
+            .defense
+            .note(ip, crate::services::defense::Kind::PanelDenied);
+    }
     let (status, body) = panel_access::deny_page(policy.deny, reason);
     Response::builder()
         .status(StatusCode::from_u16(status).unwrap_or(StatusCode::NOT_FOUND))
@@ -148,4 +160,33 @@ fn deny(policy: &panel_access::AccessPolicy, reason: DenyReason) -> Response {
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body))
         .unwrap_or_default()
+}
+
+/// Headers on every panel response: no framing (clickjacking), no MIME sniffing,
+/// no Referer (it would carry panel URLs to other sites), and a CSP that only
+/// allows the panel's own scripts.
+pub async fn security_headers(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    let pairs: [(header::HeaderName, &str); 5] = [
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; \
+             frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+        ),
+        (
+            header::HeaderName::from_static("permissions-policy"),
+            "camera=(), microphone=(), geolocation=()",
+        ),
+    ];
+    for (name, value) in pairs {
+        if let Ok(value) = HeaderValue::from_str(value) {
+            headers.entry(name).or_insert(value);
+        }
+    }
+    response
 }

@@ -8,7 +8,7 @@ license = "Apache-2.0"
 [dependencies]
 axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.6", features = ["trace"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,6 +30,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 ring = "0.17"
+tokio-util = { version = "0.7", features = ["io"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+flate2 = "1"
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 
 [profile.release]
 # Smaller download for the one-click installer; symbols are not needed in production.

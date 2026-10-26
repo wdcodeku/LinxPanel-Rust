@@ -2,20 +2,17 @@
 //! secret URL path that must be visited before the UI or API answers), allowed
 //! client IPs, a bound domain, the response unauthorized visitors get, and HTTPS.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_rustls::rustls;
-use tokio_rustls::server::TlsStream;
-use tokio_rustls::TlsAcceptor;
 
 use crate::db;
 
@@ -530,87 +527,8 @@ pub fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<Arc<rustls::
     Ok(Arc::new(config))
 }
 
-/// TLS listener for `axum::serve`. Handshakes run on their own tasks, so a slow
-/// or idle client cannot hold up other connections. Plain-HTTP requests that hit
-/// the HTTPS port are answered with a redirect to the https:// URL.
-pub struct TlsListener {
-    rx: tokio::sync::mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>,
-    local: SocketAddr,
-}
-
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-
-impl TlsListener {
-    pub fn new(tcp: TcpListener, config: Arc<rustls::ServerConfig>) -> std::io::Result<Self> {
-        let local = tcp.local_addr()?;
-        let acceptor = TlsAcceptor::from(config);
-        let (tx, rx) = tokio::sync::mpsc::channel(128);
-        tokio::spawn(async move {
-            loop {
-                let (stream, peer) = match tcp.accept().await {
-                    Ok(accepted) => accepted,
-                    Err(err) => {
-                        // Usually EMFILE; back off instead of spinning.
-                        tracing::warn!("accept failed: {}", err);
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                };
-                if tx.is_closed() {
-                    return;
-                }
-                let acceptor = acceptor.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let result = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-                        let mut first = [0u8; 1];
-                        if stream.peek(&mut first).await? == 0 {
-                            return Ok(None);
-                        }
-                        // 0x16 opens every TLS handshake; anything else is plain HTTP.
-                        if first[0] != 0x16 {
-                            redirect_plain_http(stream, local.port()).await;
-                            return Ok(None);
-                        }
-                        acceptor.accept(stream).await.map(Some)
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(Some(tls))) => {
-                            let _ = tx.send((tls, peer)).await;
-                        }
-                        Ok(Ok(None)) => {}
-                        Ok(Err(err)) => {
-                            tracing::debug!("TLS handshake with {} failed: {}", peer, err)
-                        }
-                        Err(_) => tracing::debug!("TLS handshake with {} timed out", peer),
-                    }
-                });
-            }
-        });
-        Ok(Self { rx, local })
-    }
-}
-
-impl axum::serve::Listener for TlsListener {
-    type Io = TlsStream<TcpStream>;
-    type Addr = SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
-        match self.rx.recv().await {
-            Some(accepted) => accepted,
-            // The accept task only ends with the process.
-            None => std::future::pending().await,
-        }
-    }
-
-    fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        Ok(self.local)
-    }
-}
-
 /// Answers a plain-HTTP request on the HTTPS port with a 301 to the same URL over https.
-async fn redirect_plain_http(mut stream: TcpStream, port: u16) {
+pub(crate) async fn redirect_plain_http(mut stream: TcpStream, port: u16) {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     while buffer.len() < 8192 && !buffer.windows(4).any(|w| w == b"\r\n\r\n") {

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::models::*;
+use crate::services::defense::Kind::PanelDenied;
 use crate::AppState;
 
 pub fn public_routes() -> Router<Arc<AppState>> {
@@ -18,7 +19,16 @@ pub fn public_routes() -> Router<Arc<AppState>> {
 
 /// Failed attempts allowed per client address within `LOGIN_WINDOW`.
 const LOGIN_MAX_FAILURES: u32 = 5;
+/// A failed login counts this much towards the panel auto-ban threshold
+/// (default 30 in 5 minutes: six bad passwords).
+const FAILED_LOGIN_WEIGHT: u64 = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Concurrent password checks allowed at once.
+fn password_check_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(4))
+}
+
 /// A bcrypt hash compared against when the username does not exist, so unknown
 /// and known usernames take the same time to reject.
 fn dummy_hash() -> String {
@@ -74,6 +84,10 @@ async fn login(
 ) -> Json<ApiResponse<serde_json::Value>> {
     let ip = peer.ip();
     if let Some(wait) = state.login_guard.locked_for(ip) {
+        // Still hammering while locked out: that is what earns a kernel ban.
+        state
+            .defense
+            .note_weighted(ip, PanelDenied, FAILED_LOGIN_WEIGHT);
         tracing::warn!(
             "Login blocked for {} ({} failed attempts)",
             ip,
@@ -92,6 +106,14 @@ async fn login(
         .ok()
         .flatten();
 
+    // bcrypt costs ~50-100ms of CPU per attempt; a distributed brute force must
+    // not be able to saturate every core. Excess attempts are shed, not queued.
+    let Ok(Ok(_slot)) =
+        tokio::time::timeout(Duration::from_secs(5), password_check_slots().acquire()).await
+    else {
+        return Json(ApiResponse::err("Server busy, please try again"));
+    };
+
     let hash = user.as_ref().map(|u| u.password_hash.clone());
     let password = req.password.clone();
     let verified = tokio::task::spawn_blocking(move || {
@@ -106,6 +128,9 @@ async fn login(
         Some(u) if verified => u,
         _ => {
             state.login_guard.record_failure(ip);
+            state
+                .defense
+                .note_weighted(ip, PanelDenied, FAILED_LOGIN_WEIGHT);
             tracing::warn!("Failed login for '{}' from {}", req.username, ip);
             return Json(ApiResponse::err("Invalid credentials"));
         }
@@ -127,6 +152,9 @@ async fn login(
         }
         let Some(step) = crate::services::totp::verify(&secret, code, last_step) else {
             state.login_guard.record_failure(ip);
+            state
+                .defense
+                .note_weighted(ip, PanelDenied, FAILED_LOGIN_WEIGHT);
             tracing::warn!("Wrong two-factor code for '{}' from {}", user.username, ip);
             return Json(ApiResponse {
                 success: false,
@@ -137,6 +165,7 @@ async fn login(
         let _ = crate::db::record_totp_step(&state.db, user.id, step).await;
     }
     state.login_guard.clear(ip);
+    state.defense.trust(ip);
 
     let token = match issue_token(&state, &user).await {
         Ok(token) => token,

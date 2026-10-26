@@ -211,12 +211,11 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
         ("totp_pending", "TEXT"),
         ("totp_last_step", "INTEGER NOT NULL DEFAULT 0"),
     ] {
-        let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM pragma_table_info('users') WHERE name = ? LIMIT 1",
-        )
-        .bind(column)
-        .fetch_optional(pool)
-        .await?;
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM pragma_table_info('users') WHERE name = ? LIMIT 1")
+                .bind(column)
+                .fetch_optional(pool)
+                .await?;
         if exists.is_none() {
             sqlx::query(&format!(
                 "ALTER TABLE users ADD COLUMN {} {}",
@@ -259,14 +258,38 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Active defense: addresses banned in the kernel, and what the engine did.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY,
+            source TEXT NOT NULL DEFAULT 'manual',
+            reason TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS defense_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            source TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Opt-in HTTP->HTTPS redirect and HSTS, per site.
     for column in ["force_https", "hsts"] {
-        let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM pragma_table_info('sites') WHERE name = ? LIMIT 1",
-        )
-        .bind(column)
-        .fetch_optional(pool)
-        .await?;
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM pragma_table_info('sites') WHERE name = ? LIMIT 1")
+                .bind(column)
+                .fetch_optional(pool)
+                .await?;
         if exists.is_none() {
             sqlx::query(&format!(
                 "ALTER TABLE sites ADD COLUMN {} INTEGER NOT NULL DEFAULT 0",
@@ -374,12 +397,11 @@ pub async fn totp_state(
     pool: &SqlitePool,
     user_id: i64,
 ) -> anyhow::Result<(Option<String>, Option<String>, i64)> {
-    let row: Option<(Option<String>, Option<String>, i64)> = sqlx::query_as(
-        "SELECT totp_secret, totp_pending, totp_last_step FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(Option<String>, Option<String>, i64)> =
+        sqlx::query_as("SELECT totp_secret, totp_pending, totp_last_step FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
     let (secret, pending, step) = row.unwrap_or((None, None, 0));
     let non_empty = |value: Option<String>| value.filter(|s| !s.is_empty());
     Ok((non_empty(secret), non_empty(pending), step))
@@ -418,12 +440,11 @@ pub async fn record_totp_step(pool: &SqlitePool, user_id: i64, step: i64) -> any
 
 /// Turns two-factor login off; returns false when the user does not exist.
 pub async fn disable_totp(pool: &SqlitePool, username: &str) -> anyhow::Result<bool> {
-    let result = sqlx::query(
-        "UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE username = ?",
-    )
-    .bind(username)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE username = ?")
+            .bind(username)
+            .execute(pool)
+            .await?;
     Ok(result.rows_affected() > 0)
 }
 

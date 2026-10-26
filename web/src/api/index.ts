@@ -59,6 +59,36 @@ export const addFirewallRule = (data: {
 export const deleteFirewallRule = (id: string) =>
   request.delete(`/firewall/rules/${encodeURIComponent(id)}`)
 export const toggleFirewall = (enabled: boolean) => request.post('/firewall/toggle', { enabled })
+
+// Active defense
+export type DefenseConfig = {
+  enabled: boolean
+  ban_minutes: number
+  whitelist: string
+  web_enabled: boolean
+  web_window: number
+  web_max_requests: number
+  web_max_errors: number
+  ssh_enabled: boolean
+  ssh_window: number
+  ssh_max_failures: number
+  panel_enabled: boolean
+  panel_window: number
+  panel_max_denied: number
+  cc_enabled: boolean
+  cc_rate: number
+  cc_burst: number
+  cc_conn: number
+}
+export const getDefense = () => request.get('/defense')
+export const saveDefense = (data: DefenseConfig) => request.post('/defense', data)
+export const getDefenseBans = () => request.get('/defense/bans')
+export const getDefenseEvents = (limit = 200) => request.get('/defense/events', { params: { limit } })
+export const banDefenseIp = (data: { ip: string; minutes?: number; reason?: string }) =>
+  request.post('/defense/ban', data)
+export const unbanDefenseIp = (ip: string) => request.post('/defense/unban', { ip })
+export const installNftables = () => request.post('/defense/install-nft', {}, { timeout: 600000 })
+export const setKernelHardening = (enabled: boolean) => request.post('/defense/sysctl', { enabled })
 export const getListeningPorts = () => request.get('/network/ports')
 
 // Runtimes & managed applications
