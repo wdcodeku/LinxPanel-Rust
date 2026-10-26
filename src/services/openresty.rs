@@ -942,6 +942,13 @@ fn combine_output(output: &Output) -> String {
     text
 }
 
+fn last_non_empty_line(text: &str) -> Option<String> {
+    text.lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+}
+
 fn prepare_sites_dir(
     conf_path: &Path,
     configured_sites_dir: &Path,

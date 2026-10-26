@@ -51,30 +51,47 @@ pub fn run_with_timeout(
         .spawn()
         .map_err(|err| format!("{}: {}", program, err))?;
 
+    // Drain both pipes while waiting: a child that fills the ~64KB pipe buffer
+    // (package installs, ACME clients) would otherwise block until the timeout.
+    let stdout_reader = drain_pipe(child.stdout.take());
+    let stderr_reader = drain_pipe(child.stderr.take());
+
     // portable wait-with-timeout: poll try_wait rather than pull in an extra crate.
     let deadline = std::time::Instant::now() + timeout;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return Err(format!("{} timed out after {:?}", program, timeout));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(err) => return Err(format!("{}: {}", program, err)),
         }
-    }
+    };
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("{}: {}", program, err))?;
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
 
     Ok(CmdOutput {
-        status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status: status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+    })
+}
+
+fn drain_pipe<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        buffer
     })
 }
 
