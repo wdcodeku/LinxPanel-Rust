@@ -119,6 +119,9 @@ pub struct ReorderDomainsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
+    /// Ignored: the account is taken from the session. Kept for older clients.
+    #[serde(default)]
+    #[allow(dead_code)]
     pub username: String,
     pub old_password: String,
     pub new_password: String,

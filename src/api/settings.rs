@@ -4,7 +4,7 @@ use crate::AppState;
 use axum::{
     extract::State,
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use std::sync::Arc;
 
@@ -16,6 +16,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/settings/openresty/install", post(quick_install_openresty))
 }
 
+/// Keys that live in the settings table but must never reach or be set from the browser.
+/// `jwt_secret` signs every session: leaking it lets anyone mint admin tokens.
+const PRIVATE_KEYS: &[&str] = &["jwt_secret"];
+
+fn is_private_key(key: &str) -> bool {
+    PRIVATE_KEYS.contains(&key)
+}
+
 async fn get_settings(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<std::collections::HashMap<String, String>>> {
@@ -23,7 +31,10 @@ async fn get_settings(
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
-    let map: std::collections::HashMap<String, String> = rows.into_iter().collect();
+    let map: std::collections::HashMap<String, String> = rows
+        .into_iter()
+        .filter(|(key, _)| !is_private_key(key))
+        .collect();
     Json(ApiResponse::ok(map))
 }
 
@@ -31,6 +42,12 @@ async fn update_settings(
     State(state): State<Arc<AppState>>,
     Json(req): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Json<ApiResponse<()>> {
+    if let Some(key) = req.keys().find(|key| is_private_key(key)) {
+        return Json(ApiResponse::err(&format!(
+            "Setting '{}' cannot be changed here",
+            key
+        )));
+    }
     for (key, value) in req {
         let value = match value {
             serde_json::Value::String(v) => v,
@@ -54,10 +71,13 @@ async fn update_settings(
 
 async fn change_password(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Json<ApiResponse<()>> {
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = ?")
-        .bind(&req.username)
+    // The account comes from the session, not the request body, so one user
+    // cannot target another account's password.
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(claims.sub)
         .fetch_optional(&state.db)
         .await;
 
@@ -70,17 +90,27 @@ async fn change_password(
         return Json(ApiResponse::err("Current password is incorrect"));
     }
 
+    if let Err(message) = crate::db::validate_password(&req.new_password) {
+        return Json(ApiResponse::err(message));
+    }
+
     let new_hash = match bcrypt::hash(&req.new_password, 10) {
         Ok(h) => h,
         Err(_) => return Json(ApiResponse::err("Failed to hash password")),
     };
 
-    sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
-        .bind(&new_hash)
-        .bind(user.id)
-        .execute(&state.db)
-        .await
-        .ok();
+    if let Err(err) =
+        sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
+            .bind(&new_hash)
+            .bind(user.id)
+            .execute(&state.db)
+            .await
+    {
+        return Json(ApiResponse::err(&format!(
+            "Failed to save password: {}",
+            err
+        )));
+    }
 
     Json(ApiResponse::ok_msg("Password changed"))
 }

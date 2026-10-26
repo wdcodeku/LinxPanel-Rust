@@ -213,20 +213,76 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub const DEFAULT_ADMIN_USER: &str = "admin";
+pub const DEFAULT_ADMIN_PASSWORD: &str = "linxpanel";
+
+/// Minimum bar for a panel password; the panel controls the whole server.
+pub fn validate_password(password: &str) -> Result<(), &'static str> {
+    if password.chars().count() < 8 {
+        return Err("Password must be at least 8 characters");
+    }
+    if password.chars().count() > 72 {
+        // bcrypt silently ignores everything past 72 bytes.
+        return Err("Password must be at most 72 characters");
+    }
+    if password.chars().any(|c| c.is_control()) {
+        return Err("Password must not contain control characters");
+    }
+    Ok(())
+}
+
+/// Sets a user's password, creating the account as an admin when it does not exist.
+pub async fn set_user_password(
+    pool: &SqlitePool,
+    username: &str,
+    password: &str,
+) -> anyhow::Result<()> {
+    let hash = bcrypt::hash(password, 10)?;
+    sqlx::query(
+        "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')
+         ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash,
+         updated_at = datetime('now')",
+    )
+    .bind(username)
+    .bind(&hash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// A random password from an unambiguous alphabet (no 0/O, 1/l/I).
+pub fn generate_password(len: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut out = String::with_capacity(len);
+    while out.len() < len {
+        // v4 UUIDs come from the OS CSPRNG; bytes 6 and 8 carry fixed version bits.
+        let bytes = uuid::Uuid::new_v4().into_bytes();
+        for (index, &byte) in bytes.iter().enumerate() {
+            if index == 6 || index == 8 {
+                continue;
+            }
+            // Rejection sampling keeps the distribution uniform.
+            let limit = 256 - (256 % ALPHABET.len());
+            if (byte as usize) < limit && out.len() < len {
+                out.push(ALPHABET[byte as usize % ALPHABET.len()] as char);
+            }
+        }
+    }
+    out
+}
+
 pub async fn seed_admin(pool: &SqlitePool) -> anyhow::Result<()> {
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await?;
 
     if count.0 == 0 {
-        let hash = bcrypt::hash("linxpanel", 10)?;
-        sqlx::query("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)")
-            .bind("admin")
-            .bind(&hash)
-            .bind("admin")
-            .execute(pool)
-            .await?;
-        tracing::info!("Default admin user created (admin/linxpanel)");
+        set_user_password(pool, DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASSWORD).await?;
+        tracing::warn!(
+            "Default admin user created ({}/{}); change it, or run `linxpanel reset-password`",
+            DEFAULT_ADMIN_USER,
+            DEFAULT_ADMIN_PASSWORD
+        );
     }
     Ok(())
 }
@@ -263,4 +319,27 @@ pub async fn resolve_jwt_secret(pool: &SqlitePool) -> anyhow::Result<String> {
     .await?;
     tracing::info!("Generated and stored a new JWT secret");
     Ok(secret)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_passwords_are_valid_and_distinct() {
+        let first = generate_password(16);
+        let second = generate_password(16);
+        assert_eq!(first.len(), 16);
+        assert!(validate_password(&first).is_ok());
+        assert_ne!(first, second);
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn password_validation_rejects_weak_input() {
+        assert!(validate_password("short").is_err());
+        assert!(validate_password(&"a".repeat(73)).is_err());
+        assert!(validate_password("has\nnewline").is_err());
+        assert!(validate_password("good-password").is_ok());
+    }
 }

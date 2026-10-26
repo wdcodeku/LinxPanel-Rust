@@ -7,7 +7,7 @@ use axum::{
 use include_dir::{include_dir, Dir, File};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
+use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -27,6 +27,7 @@ pub struct AppState {
     pub data_dir: std::path::PathBuf,
     /// Flipped to true on shutdown so long-lived WebSocket handlers close themselves.
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    pub login_guard: api::auth::LoginGuard,
 }
 
 static EMBEDDED_WEB: Dir<'_> = include_dir!("$OUT_DIR/embedded-web");
@@ -109,15 +110,21 @@ async fn serve_embedded_path(Path(path): Path<String>) -> Response<Body> {
     not_found_response()
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "linxpanel=debug,info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+const USAGE: &str = "\
+Usage: linxpanel [COMMAND]
 
+Commands:
+  (none)                       Run the panel server
+  reset-password [--user NAME] [--password-stdin]
+                               Set a user's password. Reads it from stdin with
+                               --password-stdin, otherwise generates and prints one.
+  version, --version, -V       Print the version
+  help, --help, -h             Print this help
+
+Environment: PORT (default 7200), BIND (default 0.0.0.0), DATABASE_URL, JWT_SECRET, RUST_LOG";
+
+/// Opens (and migrates) the panel database, returning it with the data directory.
+async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::path::PathBuf)> {
     let data_dir = resolve_path("data");
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir)?;
@@ -132,6 +139,77 @@ async fn main() -> anyhow::Result<()> {
     let pool = sqlx::SqlitePool::connect(&db_url).await?;
     db::migrate(&pool).await?;
     db::seed_admin(&pool).await?;
+    Ok((pool, data_dir))
+}
+
+/// `linxpanel reset-password`: recovery path for a lost password, also used by the
+/// installer to replace the well-known default with a random one.
+async fn reset_password_command(args: &[String]) -> anyhow::Result<()> {
+    let mut username = db::DEFAULT_ADMIN_USER.to_string();
+    let mut from_stdin = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--user" | "-u" => {
+                username = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--user requires a value"))?
+                    .clone();
+            }
+            "--password-stdin" => from_stdin = true,
+            other => anyhow::bail!("Unknown argument: {}\n\n{}", other, USAGE),
+        }
+    }
+    if username.trim().is_empty() {
+        anyhow::bail!("Username must not be empty");
+    }
+
+    let password = if from_stdin {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.trim_end_matches(['\r', '\n']).to_string()
+    } else {
+        db::generate_password(16)
+    };
+    db::validate_password(&password).map_err(|e| anyhow::anyhow!(e))?;
+
+    let (pool, _) = open_database().await?;
+    db::set_user_password(&pool, &username, &password).await?;
+    pool.close().await;
+
+    println!("Username: {}", username);
+    if !from_stdin {
+        println!("Password: {}", password);
+    }
+    println!("Password updated. Existing sessions stay valid until they expire.");
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        None => {}
+        Some("version" | "--version" | "-V") => {
+            println!("linxpanel {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("help" | "--help" | "-h") => {
+            println!("{}", USAGE);
+            return Ok(());
+        }
+        Some("reset-password") => return reset_password_command(&args[1..]).await,
+        Some(other) => anyhow::bail!("Unknown command: {}\n\n{}", other, USAGE),
+    }
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    let (pool, data_dir) = open_database().await?;
 
     let jwt_secret = db::resolve_jwt_secret(&pool).await?;
 
@@ -149,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
         supervisor: supervisor.clone(),
         data_dir: data_dir.clone(),
         shutdown: shutdown_tx,
+        login_guard: api::auth::LoginGuard::default(),
     });
 
     // Keep ACME certificates fresh without operator intervention.
@@ -167,21 +246,34 @@ async fn main() -> anyhow::Result<()> {
     let api_routes = api::routes(state.clone());
     tracing::info!("Serving embedded web resources from executable");
 
-    let app = axum::Router::new()
-        .nest("/api", api_routes)
+    // Only the embedded UI is compressed: compressing /api would buffer the
+    // streamed command output and break WebSocket upgrades.
+    let web_routes = axum::Router::new()
         .route("/", get(serve_root))
         .route("/{*path}", get(serve_embedded_path))
-        .layer(CorsLayer::permissive())
+        .layer(CompressionLayer::new());
+
+    // No CORS layer: the UI is served from this same origin (and the Vite dev
+    // server proxies /api), so cross-origin access is never needed.
+    let app = axum::Router::new()
+        .nest("/api", api_routes)
+        .merge(web_routes)
         .layer(TraceLayer::new_for_http());
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "7200".into())
         .parse()
         .unwrap_or(7200);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("LinxPanel listening on http://{}", addr);
+    let bind_ip: std::net::IpAddr = std::env::var("BIND")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let addr = SocketAddr::new(bind_ip, port);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|err| anyhow::anyhow!("Cannot listen on {}: {}", addr, err))?;
+    tracing::info!("LinxPanel {} listening on http://{}", env!("CARGO_PKG_VERSION"), addr);
     // Idle keep-alive connections and open WebSockets can keep graceful shutdown
     // waiting indefinitely, so a top-level watchdog bounds how long that may take.
     // It must be spawned here, in the normal flow, to be reliably polled.
@@ -199,7 +291,8 @@ async fn main() -> anyhow::Result<()> {
 
     let shutdown_supervisor = state.supervisor.clone();
     let shutdown_notifier = state.shutdown.clone();
-    axum::serve(listener, app)
+    let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, make_service)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             tracing::info!("Shutdown signal received");
