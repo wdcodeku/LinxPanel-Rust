@@ -540,6 +540,187 @@ pub struct DatabaseRow {
     /// Created through the panel (so its user and password are known).
     pub managed: bool,
     pub created_at: Option<String>,
+    /// Number of tables, when the server reports it cheaply.
+    pub tables: Option<u64>,
+    /// Data plus indexes, in bytes.
+    pub size: Option<u64>,
+    /// Who can use a database the panel did not create: `user@host` for
+    /// MySQL grants, the owner role for PostgreSQL.
+    pub users: Vec<String>,
+}
+
+/// Size, table count and users of every database, in one or two queries.
+#[derive(Debug, Default)]
+struct DatabaseFacts {
+    tables: std::collections::HashMap<String, u64>,
+    size: std::collections::HashMap<String, u64>,
+    users: std::collections::HashMap<String, Vec<String>>,
+}
+
+/// A MySQL string literal (names reaching here may come from the server,
+/// e.g. databases created on the command line).
+fn mysql_str(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// A PostgreSQL string literal.
+fn pg_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn mysql_facts(admin: &MysqlAdmin) -> DatabaseFacts {
+    let mut facts = DatabaseFacts::default();
+    if let Ok(rows) = mysql_query(
+        admin,
+        "SELECT TABLE_SCHEMA, COUNT(*), COALESCE(SUM(DATA_LENGTH + INDEX_LENGTH), 0) \
+         FROM information_schema.TABLES GROUP BY TABLE_SCHEMA;",
+    ) {
+        for line in rows.lines() {
+            let mut cols = line.split('\t');
+            if let (Some(db), Some(count), Some(size)) = (cols.next(), cols.next(), cols.next()) {
+                facts.tables.insert(db.into(), count.parse().unwrap_or(0));
+                facts.size.insert(db.into(), size.parse().unwrap_or(0));
+            }
+        }
+    }
+    if let Ok(rows) = mysql_query(admin, "SELECT Db, User, Host FROM mysql.db ORDER BY User;") {
+        for line in rows.lines() {
+            let mut cols = line.split('\t');
+            if let (Some(db), Some(user), Some(host)) = (cols.next(), cols.next(), cols.next()) {
+                // Grants store `_` and `%` escaped (they are wildcards there).
+                let db = db.replace("\\_", "_").replace("\\%", "%");
+                facts
+                    .users
+                    .entry(db)
+                    .or_default()
+                    .push(format!("{}@{}", user, host));
+            }
+        }
+    }
+    facts
+}
+
+fn pg_facts() -> DatabaseFacts {
+    let mut facts = DatabaseFacts::default();
+    if let Ok(rows) = psql(
+        "SELECT datname || chr(9) || pg_database_size(datname) || chr(9) || pg_get_userbyid(datdba) \
+         FROM pg_database WHERE NOT datistemplate;",
+        None,
+    ) {
+        for line in rows.lines() {
+            let mut cols = line.split('\t');
+            if let (Some(db), Some(size), Some(owner)) = (cols.next(), cols.next(), cols.next()) {
+                facts.size.insert(db.into(), size.parse().unwrap_or(0));
+                facts.users.insert(db.into(), vec![owner.to_string()]);
+            }
+        }
+    }
+    facts
+}
+
+/// One table of a database.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TableInfo {
+    pub name: String,
+    /// An estimate for InnoDB / PostgreSQL; None when never analyzed.
+    pub rows: Option<u64>,
+    pub size: u64,
+    pub engine: Option<String>,
+    pub collation: Option<String>,
+    pub comment: Option<String>,
+    pub updated: Option<String>,
+}
+
+fn none_if_null(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "NULL")
+        .map(String::from)
+}
+
+fn parse_mysql_tables(rows: &str) -> Vec<TableInfo> {
+    rows.lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let name = cols.first()?.to_string();
+            Some(TableInfo {
+                name,
+                rows: cols.get(1).and_then(|v| v.parse().ok()),
+                size: cols.get(2).and_then(|v| v.parse().ok()).unwrap_or(0),
+                engine: none_if_null(cols.get(3).copied()),
+                collation: none_if_null(cols.get(4).copied()),
+                comment: none_if_null(cols.get(5).copied()),
+                updated: none_if_null(cols.get(6).copied()),
+            })
+        })
+        .collect()
+}
+
+fn parse_pg_tables(rows: &str) -> Vec<TableInfo> {
+    rows.lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let name = cols.first()?.to_string();
+            Some(TableInfo {
+                name,
+                // -1: never vacuumed or analyzed, so unknown.
+                rows: cols
+                    .get(1)
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| *v >= 0.0)
+                    .map(|v| v as u64),
+                size: cols.get(2).and_then(|v| v.parse().ok()).unwrap_or(0),
+                engine: None,
+                collation: None,
+                comment: none_if_null(cols.get(3).copied()),
+                updated: None,
+            })
+        })
+        .collect()
+}
+
+/// The tables of a database, whoever created them.
+pub async fn tables(
+    engine: Engine,
+    name: &str,
+    admin: Option<MysqlAdmin>,
+) -> Result<Vec<TableInfo>, String> {
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || match engine {
+        Engine::Mysql => {
+            let admin = admin.ok_or("MySQL is not set up for the panel")?;
+            if !mysql_databases(&admin)?.contains(&name) {
+                return Err(format!("Database {} does not exist", name));
+            }
+            let rows = mysql_query(
+                &admin,
+                &format!(
+                    "SELECT TABLE_NAME, TABLE_ROWS, COALESCE(DATA_LENGTH + INDEX_LENGTH, 0), ENGINE, \
+                     TABLE_COLLATION, TABLE_COMMENT, COALESCE(UPDATE_TIME, CREATE_TIME) \
+                     FROM information_schema.TABLES WHERE TABLE_SCHEMA = {} ORDER BY TABLE_NAME;",
+                    mysql_str(&name)
+                ),
+            )?;
+            Ok(parse_mysql_tables(&rows))
+        }
+        Engine::Postgresql => {
+            if !pg_databases()?.contains(&name) {
+                return Err(format!("Database {} does not exist", name));
+            }
+            let rows = psql(
+                "SELECT n.nspname || '.' || c.relname || chr(9) || c.reltuples::bigint || chr(9) \
+                 || pg_total_relation_size(c.oid) || chr(9) || COALESCE(obj_description(c.oid, 'pg_class'), '') \
+                 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') \
+                 AND n.nspname NOT LIKE 'pg_toast%' ORDER BY 1;",
+                Some(&name),
+            )?;
+            Ok(parse_pg_tables(&rows))
+        }
+        Engine::Redis => Err("Redis has no tables".into()),
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -557,15 +738,17 @@ pub async fn list(
     engine: Engine,
     admin: Option<MysqlAdmin>,
 ) -> Result<Vec<DatabaseRow>, String> {
-    let names = tokio::task::spawn_blocking(move || match engine {
-        Engine::Mysql => admin
-            .ok_or_else(|| "MySQL is not set up for the panel".to_string())
-            .and_then(|admin| mysql_databases(&admin)),
-        Engine::Postgresql => pg_databases(),
-        Engine::Redis => Ok(Vec::new()),
+    let (names, facts) = tokio::task::spawn_blocking(move || match engine {
+        Engine::Mysql => {
+            let admin = admin.ok_or_else(|| "MySQL is not set up for the panel".to_string())?;
+            Ok((mysql_databases(&admin)?, mysql_facts(&admin)))
+        }
+        Engine::Postgresql => Ok((pg_databases()?, pg_facts())),
+        Engine::Redis => Ok((Vec::new(), DatabaseFacts::default())),
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+    .map_err(|e: String| e)?;
 
     let records: Vec<DatabaseRecord> = sqlx::query_as(
         "SELECT name, username, password, host, note, created_at
@@ -588,6 +771,16 @@ pub async fn list(
                 host: record.map(|r| r.host.clone()),
                 note: record.map(|r| r.note.clone()),
                 created_at: record.map(|r| r.created_at.clone()),
+                // An empty MySQL database has no row in information_schema.TABLES.
+                tables: match engine {
+                    Engine::Mysql => Some(facts.tables.get(&name).copied().unwrap_or(0)),
+                    _ => None,
+                },
+                size: facts.size.get(&name).copied().or(match engine {
+                    Engine::Mysql => Some(0),
+                    _ => None,
+                }),
+                users: facts.users.get(&name).cloned().unwrap_or_default(),
                 name,
             }
         })
@@ -721,6 +914,174 @@ pub async fn create(
     Ok(CreatedDatabase {
         engine,
         name,
+        username,
+        password,
+        host,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdoptRequest {
+    /// Defaults to the database name.
+    #[serde(default)]
+    pub username: String,
+    pub password: String,
+    /// MySQL only: localhost (default), % or an IP.
+    #[serde(default)]
+    pub host: String,
+    /// When the user already exists: set this password (its applications
+    /// then need it too) instead of checking that it is the current one.
+    #[serde(default)]
+    pub reset_password: bool,
+}
+
+/// Takes over a database created outside the panel (e.g. on the command
+/// line): gives it a user the panel knows, so passwords, access and the
+/// connection details can be managed from here like any other.
+pub async fn adopt(
+    pool: &SqlitePool,
+    engine: Engine,
+    name: &str,
+    request: AdoptRequest,
+    admin: Option<MysqlAdmin>,
+) -> Result<CreatedDatabase, String> {
+    validate_name(name, "Database name").map_err(|e| {
+        format!("{} (only letters, digits and _ can be managed by the panel)", e)
+    })?;
+    if record(pool, engine, name).await.is_some() {
+        return Err("This database is already managed by the panel".into());
+    }
+    let username = match request.username.trim() {
+        "" => name.to_string(),
+        user => user.to_string(),
+    };
+    validate_name(&username, "User name")?;
+    let password = request.password.trim().to_string();
+    validate_db_password(&password)?;
+    let host = match request.host.trim() {
+        "" => "localhost".to_string(),
+        host => host.to_string(),
+    };
+    validate_host(&host)?;
+
+    let (n, u, p, h, reset) = (
+        name.to_string(),
+        username.clone(),
+        password.clone(),
+        host.clone(),
+        request.reset_password,
+    );
+    tokio::task::spawn_blocking(move || match engine {
+        Engine::Mysql => {
+            let admin = admin.ok_or("MySQL is not set up for the panel")?;
+            if !mysql_databases(&admin)?.contains(&n) {
+                return Err(format!("Database {} does not exist", n));
+            }
+            let exists = mysql_query(
+                &admin,
+                &format!(
+                    "SELECT COUNT(*) FROM mysql.user WHERE User = {} AND Host = {};",
+                    mysql_str(&u),
+                    mysql_str(&h)
+                ),
+            )?
+            .trim()
+                != "0";
+            let mut sql = String::new();
+            if !exists {
+                sql.push_str(&format!("CREATE USER '{u}'@'{h}' IDENTIFIED BY '{p}';\n"));
+            } else if reset {
+                sql.push_str(&format!("ALTER USER '{u}'@'{h}' IDENTIFIED BY '{p}';\n"));
+            } else if h == "localhost" {
+                // Keep the user's password: only record it once it is proven.
+                mysql_query(
+                    &MysqlAdmin {
+                        user: u.clone(),
+                        password: p.clone(),
+                    },
+                    "SELECT 1",
+                )
+                .map_err(|_| {
+                    format!(
+                        "User {u} already exists and this is not its password. \
+                         Enter its current password, or choose to set a new one."
+                    )
+                })?;
+            } else {
+                return Err(format!(
+                    "User {u}@{h} already exists and its password cannot be checked from here. \
+                     Choose to set a new password, or use another user name."
+                ));
+            }
+            sql.push_str(&format!(
+                "GRANT ALL PRIVILEGES ON `{n}`.* TO '{u}'@'{h}';\nFLUSH PRIVILEGES;\n"
+            ));
+            mysql_query(&admin, &sql).map(|_| ())
+        }
+        Engine::Postgresql => {
+            if !pg_databases()?.contains(&n) {
+                return Err(format!("Database {} does not exist", n));
+            }
+            let exists = psql(
+                &format!("SELECT COUNT(*) FROM pg_roles WHERE rolname = {};", pg_str(&u)),
+                None,
+            )?
+            .trim()
+                != "0";
+            if exists && !reset {
+                return Err(format!(
+                    "Role {u} already exists. Choose to set a new password, or use another user name."
+                ));
+            }
+            let verb = if exists { "ALTER" } else { "CREATE" };
+            psql(
+                &format!(
+                    "{verb} ROLE {u} WITH LOGIN PASSWORD '{p}';\n\
+                     GRANT ALL PRIVILEGES ON DATABASE {n} TO {u};\n\
+                     ALTER DATABASE {n} OWNER TO {u};\n"
+                ),
+                None,
+            )?;
+            // Owning the database does not reach the tables already in it
+            // (they keep their creator): grant those, schema by schema.
+            psql(
+                &format!(
+                    "DO $$ DECLARE s text; BEGIN\n\
+                       FOR s IN SELECT nspname FROM pg_namespace\n\
+                         WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' LOOP\n\
+                         EXECUTE format('GRANT ALL ON SCHEMA %I TO {u}', s);\n\
+                         EXECUTE format('GRANT ALL ON ALL TABLES IN SCHEMA %I TO {u}', s);\n\
+                         EXECUTE format('GRANT ALL ON ALL SEQUENCES IN SCHEMA %I TO {u}', s);\n\
+                       END LOOP;\n\
+                     END $$;\n"
+                ),
+                Some(&n),
+            )
+            .map(|_| ())
+        }
+        Engine::Redis => Err("Redis has no databases".into()),
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    sqlx::query(
+        "INSERT INTO databases (engine, name, username, password, host, note)
+         VALUES (?, ?, ?, ?, ?, '')
+         ON CONFLICT(engine, name) DO UPDATE SET username = excluded.username,
+           password = excluded.password, host = excluded.host",
+    )
+    .bind(engine.as_str())
+    .bind(name)
+    .bind(&username)
+    .bind(&password)
+    .bind(&host)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(CreatedDatabase {
+        engine,
+        name: name.to_string(),
         username,
         password,
         host,
@@ -1174,5 +1535,38 @@ mod tests {
         assert_eq!(Engine::parse("mariadb").unwrap(), Engine::Mysql);
         assert_eq!(Engine::parse("postgres").unwrap(), Engine::Postgresql);
         assert!(Engine::parse("oracle").is_err());
+    }
+
+    #[test]
+    fn string_literals_are_escaped() {
+        assert_eq!(mysql_str("shop"), "'shop'");
+        assert_eq!(mysql_str("a'b\\c"), "'a\\'b\\\\c'");
+        assert_eq!(pg_str("o'k"), "'o''k'");
+    }
+
+    #[test]
+    fn parses_mysql_tables() {
+        let out = "orders\t1200\t49152\tInnoDB\tutf8mb4_unicode_ci\tCustomer orders\t2026-10-27 05:00:00\n\
+                   empty\tNULL\t0\tNULL\tNULL\t\tNULL\n";
+        let tables = parse_mysql_tables(out);
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].name, "orders");
+        assert_eq!(tables[0].rows, Some(1200));
+        assert_eq!(tables[0].size, 49152);
+        assert_eq!(tables[0].engine.as_deref(), Some("InnoDB"));
+        assert_eq!(tables[0].comment.as_deref(), Some("Customer orders"));
+        assert_eq!(tables[1].rows, None);
+        assert_eq!(tables[1].engine, None);
+        assert_eq!(tables[1].comment, None);
+        assert_eq!(tables[1].updated, None);
+    }
+
+    #[test]
+    fn parses_pg_tables() {
+        let tables = parse_pg_tables("public.users\t42\t16384\t\npublic.fresh\t-1\t8192\tnew one\n");
+        assert_eq!(tables[0].name, "public.users");
+        assert_eq!(tables[0].rows, Some(42));
+        assert_eq!(tables[1].rows, None);
+        assert_eq!(tables[1].comment.as_deref(), Some("new one"));
     }
 }

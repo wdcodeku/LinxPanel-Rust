@@ -126,22 +126,38 @@
           <div v-if="listLoading" class="lp-card-body">
             <el-skeleton animated :rows="4" />
           </div>
-          <div v-else-if="!rows.length" class="empty">
+          <div v-else-if="!rows.length && !hasExternal" class="empty">
             <el-icon :size="34" class="empty__icon"><Coin /></el-icon>
             <p class="empty__title">{{ t('dbm.empty') }}</p>
             <p class="lp-dim empty__hint">{{ t('dbm.emptyHint') }}</p>
             <el-button type="primary" :icon="Plus" @click="openCreate">{{ t('dbm.create') }}</el-button>
           </div>
-          <el-table v-else :data="filteredRows" :empty-text="t('dbm.noMatch')">
-            <el-table-column :label="t('dbm.name')" min-width="150">
+          <p v-if="hasExternal" class="external-hint">
+            <el-icon><InfoFilled /></el-icon>{{ t('dbm.externalHint') }}
+          </p>
+          <el-table v-if="rows.length" :data="filteredRows" :empty-text="t('dbm.noMatch')">
+            <el-table-column :label="t('dbm.name')" min-width="160">
               <template #default="{ row }">
-                <span class="lp-mono strong">{{ row.name }}</span>
+                <button type="button" class="db-name" :title="t('dbm.viewTables')" @click="openTables(row)">
+                  <span class="lp-mono strong">{{ row.name }}</span>
+                </button>
                 <el-tag v-if="!row.managed" size="small" type="info" class="ml">{{ t('dbm.external') }}</el-tag>
                 <div v-if="row.note" class="lp-dim note">{{ row.note }}</div>
               </template>
             </el-table-column>
-            <el-table-column :label="t('dbm.user')" min-width="120">
-              <template #default="{ row }"><span class="lp-mono">{{ row.username || '—' }}</span></template>
+            <el-table-column :label="t('dbm.tablesSize')" min-width="120">
+              <template #default="{ row }">
+                <button type="button" class="db-stats" @click="openTables(row)">
+                  <template v-if="row.tables !== null && row.tables !== undefined">{{ t('dbm.tableCount', { n: row.tables }) }} · </template>{{ row.size !== null && row.size !== undefined ? formatBytes(row.size) : '—' }}
+                </button>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('dbm.user')" min-width="130">
+              <template #default="{ row }">
+                <span v-if="row.managed" class="lp-mono">{{ row.username || '—' }}</span>
+                <span v-else-if="row.users?.length" class="lp-mono lp-dim users" :title="row.users.join('\n')">{{ row.users.join(', ') }}</span>
+                <span v-else class="lp-dim">—</span>
+              </template>
             </el-table-column>
             <el-table-column :label="t('dbm.password')" min-width="200">
               <template #default="{ row }">
@@ -161,8 +177,9 @@
                 <span v-else class="lp-mono">{{ row.host || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="250" align="right">
+            <el-table-column :label="t('actions')" width="280" align="right">
               <template #default="{ row }">
+                <el-button v-if="!row.managed" link type="primary" size="small" @click="openAdopt(row)">{{ t('dbm.adopt') }}</el-button>
                 <el-button link type="primary" size="small" @click="openConnection(row)">{{ t('dbm.connInfo') }}</el-button>
                 <el-button link type="primary" size="small" @click="openBackups(row)">{{ t('dbm.backups') }}</el-button>
                 <el-button v-if="row.managed" link type="primary" size="small" @click="resetPassword(row)">{{ t('dbm.changePassword') }}</el-button>
@@ -249,6 +266,72 @@
       <template #footer>
         <el-button @click="createDialog = false">{{ t('cancel') }}</el-button>
         <el-button type="primary" :loading="busy === 'create'" @click="submitCreate">{{ t('confirm') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Tables of a database (whoever created them) -->
+    <el-drawer v-model="tablesDrawer" :size="drawerSize" append-to-body class="tables-drawer">
+      <template #header>
+        <div class="drawer-head">
+          <span class="drawer-head__title lp-mono">{{ tablesTarget?.name }}</span>
+          <span class="lp-dim">{{ t('dbm.tableCount', { n: tableList.length }) }} · {{ formatBytes(tablesTotal) }}</span>
+        </div>
+      </template>
+      <div class="tables-tools">
+        <el-input v-model="tableKeyword" :prefix-icon="Search" size="small" clearable :placeholder="t('dbm.searchTables')" class="search" />
+        <el-button size="small" :icon="Refresh" :loading="tablesLoading" @click="loadTables">{{ t('refresh') }}</el-button>
+      </div>
+      <el-skeleton v-if="tablesLoading && !tableList.length" animated :rows="6" />
+      <el-table v-else :data="filteredTables" size="small" :empty-text="tableKeyword ? t('dbm.noMatch') : t('dbm.noTables')">
+        <el-table-column :label="t('dbm.table')" min-width="170">
+          <template #default="{ row }">
+            <span class="lp-mono strong">{{ row.name }}</span>
+            <div v-if="row.comment" class="lp-dim note">{{ row.comment }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('dbm.rows')" width="100" align="right">
+          <template #default="{ row }"><span class="lp-num">{{ row.rows === null ? '—' : '≈ ' + row.rows.toLocaleString() }}</span></template>
+        </el-table-column>
+        <el-table-column :label="t('dbm.size')" width="100" align="right">
+          <template #default="{ row }"><span class="lp-num">{{ formatBytes(row.size) }}</span></template>
+        </el-table-column>
+        <el-table-column v-if="engine === 'mysql'" :label="t('dbm.engine')" width="90">
+          <template #default="{ row }"><span class="lp-dim">{{ row.engine || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column v-if="engine === 'mysql'" :label="t('dbm.updated')" width="160">
+          <template #default="{ row }"><span class="lp-dim lp-num">{{ row.updated || '—' }}</span></template>
+        </el-table-column>
+      </el-table>
+    </el-drawer>
+
+    <!-- Adopt a database created outside the panel -->
+    <el-dialog v-model="adoptDialog" :title="t('dbm.adoptTitle', { name: adoptTarget?.name || '' })" width="480px" append-to-body>
+      <p class="adopt-desc">{{ t('dbm.adoptDesc') }}</p>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item :label="t('dbm.user')">
+          <el-input v-model="adoptForm.username" class="lp-mono" />
+          <span v-if="adoptTarget?.users?.length" class="hint">{{ t('dbm.adoptExisting', { users: adoptTarget.users.join(', ') }) }}</span>
+        </el-form-item>
+        <el-form-item :label="t('dbm.password')">
+          <div class="inline-row">
+            <el-input v-model="adoptForm.password" class="lp-mono" />
+            <el-button @click="adoptForm.password = randomPassword()">{{ t('dbm.generate') }}</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="engine === 'mysql'" :label="t('dbm.host')">
+          <el-radio-group v-model="adoptForm.hostMode">
+            <el-radio-button value="localhost">{{ t('dbm.hostLocal') }}</el-radio-button>
+            <el-radio-button value="%">{{ t('dbm.hostAny') }}</el-radio-button>
+            <el-radio-button value="custom">{{ t('dbm.hostCustom') }}</el-radio-button>
+          </el-radio-group>
+          <el-input v-if="adoptForm.hostMode === 'custom'" v-model="adoptForm.host" class="lp-mono mt" placeholder="203.0.113.7" />
+        </el-form-item>
+        <el-checkbox v-model="adoptForm.reset">{{ t('dbm.adoptReset') }}</el-checkbox>
+        <p class="hint">{{ adoptForm.reset ? t('dbm.adoptResetOn') : t('dbm.adoptResetOff') }}</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="adoptDialog = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="busy === 'adopt'" @click="submitAdopt">{{ t('confirm') }}</el-button>
       </template>
     </el-dialog>
 
@@ -388,7 +471,7 @@ import {
 import {
   backupDatabase, changeDatabaseHost, changeDatabasePassword, createDatabase, deleteDatabase,
   deleteDatabaseBackup, downloadFileApi, getDbEngines, getDbNetwork, getDbVersions, installDbEngine,
-  listDatabaseBackups, listDatabases, restartDbEngine, restoreDatabase, setMysqlAdmin, setMysqlRemote,
+  listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setMysqlAdmin, setMysqlRemote,
   setRedisPassword,
 } from '@/api'
 import { useI18n } from '@/i18n'
@@ -413,6 +496,18 @@ interface DbRow {
   host: string | null
   note: string | null
   managed: boolean
+  tables?: number | null
+  size?: number | null
+  users?: string[]
+}
+interface TableRow {
+  name: string
+  rows: number | null
+  size: number
+  engine: string | null
+  collation: string | null
+  comment: string | null
+  updated: string | null
 }
 interface VersionOption { id: string; label: string; version: string; default: boolean }
 interface NetworkInfo {
@@ -685,6 +780,84 @@ async function submitCreate() {
         t('dbm.created'),
         { customClass: 'credential-box' },
       )
+      await loadRows()
+    }
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    busy.value = ''
+  }
+}
+
+// --- Tables ---
+const hasExternal = computed(() => rows.value.some((r) => !r.managed))
+const tablesDrawer = ref(false)
+const tablesTarget = ref<DbRow | null>(null)
+const tableList = ref<TableRow[]>([])
+const tablesLoading = ref(false)
+const tableKeyword = ref('')
+const drawerSize = computed(() => (window.innerWidth < 760 ? '100%' : '720px'))
+const tablesTotal = computed(() => tableList.value.reduce((sum, row) => sum + (row.size || 0), 0))
+const filteredTables = computed(() => {
+  const q = tableKeyword.value.trim().toLowerCase()
+  return q ? tableList.value.filter((r) => r.name.toLowerCase().includes(q)) : tableList.value
+})
+
+function openTables(row: DbRow) {
+  if (tablesTarget.value?.name !== row.name) tableList.value = []
+  tablesTarget.value = row
+  tableKeyword.value = ''
+  tablesDrawer.value = true
+  void loadTables()
+}
+
+async function loadTables() {
+  if (!tablesTarget.value) return
+  tablesLoading.value = true
+  try {
+    const res: any = await getDatabaseTables(engine.value, tablesTarget.value.name)
+    if (res.success) tableList.value = res.data || []
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    tablesLoading.value = false
+  }
+}
+
+// --- Adopt (databases created outside the panel) ---
+const adoptDialog = ref(false)
+const adoptTarget = ref<DbRow | null>(null)
+const adoptForm = reactive({ username: '', password: '', hostMode: 'localhost', host: '', reset: false })
+
+function openAdopt(row: DbRow) {
+  adoptTarget.value = row
+  // An existing grant suggests the user that application already uses.
+  const first = row.users?.[0] || ''
+  const [user, host] = first.includes('@') ? [first.slice(0, first.lastIndexOf('@')), first.slice(first.lastIndexOf('@') + 1)] : [first, '']
+  const hostMode = !host || host === 'localhost' ? 'localhost' : host === '%' ? '%' : 'custom'
+  Object.assign(adoptForm, {
+    username: user || row.name,
+    password: user ? '' : randomPassword(),
+    hostMode,
+    host: hostMode === 'custom' ? host : '',
+    reset: false,
+  })
+  adoptDialog.value = true
+}
+
+async function submitAdopt() {
+  if (!adoptTarget.value) return
+  busy.value = 'adopt'
+  try {
+    const res: any = await adoptDatabase(engine.value, adoptTarget.value.name, {
+      username: adoptForm.username.trim(),
+      password: adoptForm.password.trim(),
+      host: adoptForm.hostMode === 'custom' ? adoptForm.host.trim() : adoptForm.hostMode,
+      reset_password: adoptForm.reset,
+    })
+    if (res.success) {
+      adoptDialog.value = false
+      ElMessage.success(t('dbm.adopted'))
       await loadRows()
     }
   } catch {
@@ -1100,4 +1273,32 @@ usePage(loadAll)
 <style lang="scss">
 /* Credential pop-ups: keep line breaks so the values can be copied as shown. */
 .credential-box .el-message-box__message { white-space: pre-line; font-family: var(--lp-font-mono, monospace); }
+.external-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: var(--lp-2) var(--lp-5);
+  border-bottom: 1px solid var(--lp-line-soft);
+  font-size: var(--lp-text-sm);
+  color: var(--lp-text-dim);
+}
+.db-name,
+.db-stats {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.db-name:hover .strong { color: var(--lp-accent); text-decoration: underline; text-underline-offset: 3px; }
+.db-stats { color: var(--lp-text-soft); font-variant-numeric: tabular-nums; }
+.db-stats:hover { color: var(--lp-accent); }
+.users { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.drawer-head { display: flex; flex-direction: column; gap: 2px; }
+.drawer-head__title { font-size: var(--lp-text-lg); font-weight: 600; color: var(--lp-text); }
+.tables-tools { display: flex; gap: var(--lp-2); margin-bottom: var(--lp-3); }
+.tables-tools .search { max-width: 260px; }
+.adopt-desc { margin: 0 0 var(--lp-4); color: var(--lp-text-soft); line-height: 1.6; }
 </style>

@@ -208,6 +208,13 @@ export const setMysqlAdmin = (data: { user: string; password: string }) =>
 export const setRedisPassword = (password: string) =>
   request.post('/databases/engines/redis/password', { password })
 export const listDatabases = (engine: string) => request.get('/databases', { params: { engine } })
+export const getDatabaseTables = (engine: string, name: string) =>
+  request.get(`/databases/${engine}/${encodeURIComponent(name)}/tables`, { timeout: 60000 })
+export const adoptDatabase = (
+  engine: string,
+  name: string,
+  data: { username: string; password: string; host: string; reset_password: boolean },
+) => request.post(`/databases/${engine}/${encodeURIComponent(name)}/adopt`, data)
 export const createDatabase = (data: {
   engine: string; name: string; username?: string; password?: string; host?: string; note?: string
 }) => request.post('/databases', data)

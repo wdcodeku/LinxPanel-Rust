@@ -30,6 +30,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/databases", get(list).post(create))
         .route("/databases/{engine}/{name}/delete", post(delete))
+        .route("/databases/{engine}/{name}/tables", get(tables))
+        .route("/databases/{engine}/{name}/adopt", post(adopt))
         .route("/databases/{engine}/{name}/password", post(change_password))
         .route("/databases/mysql/{name}/host", post(change_host))
         .route(
@@ -442,5 +444,37 @@ async fn delete_backup(
     match std::fs::remove_file(&path) {
         Ok(()) => Json(ApiResponse::ok_msg("Backup deleted")),
         Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+/// The tables of a database, including ones created outside the panel.
+async fn tables(
+    State(state): State<Arc<AppState>>,
+    Path((engine, name)): Path<(String, String)>,
+) -> Json<ApiResponse<Vec<database::TableInfo>>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match database::tables(engine, &name, admin(&state).await).await {
+        Ok(list) => Json(ApiResponse::ok(list)),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+/// Gives a database created outside the panel a user the panel manages.
+async fn adopt(
+    State(state): State<Arc<AppState>>,
+    Path((engine, name)): Path<(String, String)>,
+    Json(req): Json<database::AdoptRequest>,
+) -> Json<ApiResponse<database::CreatedDatabase>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    let admin = admin(&state).await;
+    match database::adopt(&state.db, engine, &name, req, admin).await {
+        Ok(created) => Json(ApiResponse::ok(created)),
+        Err(err) => Json(ApiResponse::err(&err)),
     }
 }
