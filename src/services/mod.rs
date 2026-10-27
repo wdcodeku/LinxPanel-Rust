@@ -4,6 +4,7 @@ pub mod backup;
 pub mod cert;
 pub mod cron;
 pub mod database;
+pub mod dbconf;
 pub mod dbnet;
 pub mod defense;
 pub mod firewall;

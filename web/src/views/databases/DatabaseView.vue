@@ -89,16 +89,37 @@
             </span>
             <span class="status__item"><span class="lp-dim">{{ t('dbm.version') }}</span> <span class="lp-mono">{{ shortVersion(current) }}</span></span>
             <span class="status__item"><span class="lp-dim">{{ t('dbm.port') }}</span> <span class="lp-mono">{{ current.port }}</span></span>
+            <button
+              v-if="current.running && network"
+              type="button"
+              class="remote-chip"
+              :class="{ 'is-on': network.public }"
+              @click="openSettings('conn')"
+            >
+              <el-icon><Connection /></el-icon>{{ network.public ? t('dbs.remoteOnShort') : t('dbs.remoteOffShort') }}
+            </button>
           </div>
           <div class="status__actions">
             <el-button
               v-if="current.engine === 'mysql' && current.running && !current.manageable"
               size="small" type="warning" plain @click="adminDialog = true"
             >{{ t('dbm.connect') }}</el-button>
-            <el-button v-if="current.engine === 'redis'" size="small" @click="openRedisPassword(current)">{{ t('dbm.redisPassword') }}</el-button>
-            <el-button size="small" :loading="busy === `restart-${current.engine}`" @click="restart(current.engine)">
-              {{ current.running ? t('dbm.restart') : t('dbm.start') }}
+            <el-button v-if="!current.running" size="small" type="primary" plain :loading="busy === `start-${current.engine}`" @click="startEngine(current.engine)">
+              {{ t('dbm.start') }}
             </el-button>
+            <template v-else>
+              <el-button size="small" :loading="busy === `restart-${current.engine}`" @click="restart(current.engine)">{{ t('dbm.restart') }}</el-button>
+              <el-button size="small" :loading="busy === `stop-${current.engine}`" @click="stopEngine(current.engine)">{{ t('dbs.stop') }}</el-button>
+            </template>
+            <el-button size="small" type="primary" :icon="Setting" :disabled="!current.running" @click="openSettings()">{{ t('dbs.settings') }}</el-button>
+            <el-dropdown trigger="click" @command="(c: string) => c === 'uninstall' && openUninstall()">
+              <el-button size="small" :icon="MoreFilled" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="uninstall" class="danger-item">{{ t('dbs.uninstall') }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </section>
 
@@ -177,7 +198,7 @@
                 <span v-else class="lp-mono">{{ row.host || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="280" align="right">
+            <el-table-column :label="t('actions')" width="320" align="right">
               <template #default="{ row }">
                 <el-button v-if="!row.managed" link type="primary" size="small" @click="openAdopt(row)">{{ t('dbm.adopt') }}</el-button>
                 <el-button link type="primary" size="small" @click="openConnection(row)">{{ t('dbm.connInfo') }}</el-button>
@@ -189,45 +210,28 @@
           </el-table>
         </section>
 
-        <!-- Remote access + diagnosis (MySQL / MariaDB) -->
-        <section v-if="current.engine === 'mysql' && current.running" class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Connection /></el-icon>{{ t('dbm.remote') }}</h2>
-            <el-switch
-              :model-value="!!network?.remote_enabled"
-              :loading="busy === 'remote'"
-              :disabled="!network"
-              @change="(v: string | number | boolean) => toggleRemote(v === true)"
-            />
-          </header>
-          <div class="lp-card-body">
-            <p class="lp-dim remote-desc">{{ t('dbm.remoteDesc') }}</p>
-            <ul v-if="network" class="checks">
-              <li v-for="check in checks" :key="check.key" class="check">
-                <span class="check__icon" :class="`is-${check.level}`">
-                  <el-icon><CircleCheckFilled v-if="check.level === 'ok'" /><WarningFilled v-else-if="check.level === 'warn'" /><CircleCloseFilled v-else /></el-icon>
-                </span>
-                <span class="check__text">
-                  <span class="check__title">{{ check.title }}</span>
-                  <span class="check__detail">{{ check.detail }}</span>
-                </span>
-              </li>
-            </ul>
-            <el-skeleton v-else animated :rows="3" />
-            <div class="tip">
-              <el-icon><InfoFilled /></el-icon>
-              <span>{{ t('dbm.sshTip') }}</span>
-            </div>
-          </div>
-        </section>
-
         <!-- Redis -->
-        <section v-if="current.engine === 'redis'" class="lp-card">
+        <section v-if="current.engine === 'redis' && current.running" class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title"><el-icon><Coin /></el-icon>Redis</h2>
+            <el-button size="small" :icon="Setting" @click="openSettings('password')">{{ t('dbs.settings') }}</el-button>
+          </header>
           <div class="lp-card-body">
             <p class="lp-dim">{{ t('dbm.redisHint') }}</p>
             <dl class="kv">
-              <div><dt>{{ t('dbm.address') }}</dt><dd class="lp-mono">127.0.0.1:{{ current.port }}</dd></div>
-              <div><dt>{{ t('dbm.password') }}</dt><dd class="lp-mono">{{ current.redis_password || t('dbm.noPassword') }}</dd></div>
+              <div><dt>{{ t('dbm.address') }}</dt><dd class="lp-mono">{{ network?.public ? `${serverHost}:${current.port}` : `127.0.0.1:${current.port}` }}</dd></div>
+              <div>
+                <dt>{{ t('dbm.password') }}</dt>
+                <dd>
+                  <template v-if="current.redis_password">
+                    <span class="lp-mono">{{ shown.__redis ? current.redis_password : '••••••••••' }}</span>
+                    <el-button link size="small" :icon="shown.__redis ? Hide : View" @click="shown.__redis = !shown.__redis" />
+                    <el-button link size="small" :icon="CopyDocument" @click="copy(current.redis_password)" />
+                  </template>
+                  <span v-else class="lp-dim">{{ t('dbm.noPassword') }}</span>
+                </dd>
+              </div>
+              <div><dt>{{ t('dbs.remote') }}</dt><dd>{{ network?.public ? t('dbs.remoteOnShort') : t('dbs.remoteOffShort') }}</dd></div>
             </dl>
           </div>
         </section>
@@ -354,26 +358,6 @@
       </template>
     </el-dialog>
 
-    <!-- Enable remote access -->
-    <el-dialog v-model="remoteDialog" :title="t('dbm.remoteEnableTitle')" width="500px" append-to-body>
-      <p class="dialog-text">{{ t('dbm.remoteEnableText') }}</p>
-      <el-form label-position="top">
-        <el-form-item :label="t('dbm.allowFrom')">
-          <el-input v-model="remoteFrom" class="lp-mono" :placeholder="t('dbm.allowFromAny')" clearable />
-          <span class="hint">
-            {{ t('dbm.allowFromHint') }}
-            <el-button v-if="network?.your_ip" link type="primary" size="small" @click="remoteFrom = network.your_ip">
-              {{ t('dbm.useMyIp', { ip: network.your_ip }) }}
-            </el-button>
-          </span>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="remoteDialog = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="busy === 'remote'" @click="submitRemote(true)">{{ t('dbm.remoteEnable') }}</el-button>
-      </template>
-    </el-dialog>
-
     <!-- Connect an existing MySQL -->
     <el-dialog v-model="adminDialog" :title="t('dbm.connect')" width="460px" append-to-body>
       <p class="dialog-text">{{ t('dbm.connectHint') }}</p>
@@ -389,20 +373,33 @@
       </template>
     </el-dialog>
 
-    <!-- Redis password -->
-    <el-dialog v-model="redisDialog" :title="t('dbm.redisPassword')" width="460px" append-to-body>
-      <el-form label-position="top">
-        <el-form-item :label="t('dbm.password')">
-          <div class="inline-row">
-            <el-input v-model="redisPassword" class="lp-mono" clearable />
-            <el-button @click="redisPassword = randomPassword()">{{ t('dbm.generate') }}</el-button>
-          </div>
-          <span class="hint">{{ t('dbm.redisPasswordHint') }}</span>
-        </el-form-item>
-      </el-form>
+    <!-- Engine settings (connection, passwords, tuning, logs, files) -->
+    <DatabaseSettings
+      v-if="current"
+      v-model="settingsOpen"
+      :engine="engine"
+      :display-name="current.display_name"
+      :users="rows.filter((r) => r.managed)"
+      :initial-tab="settingsTab"
+      @changed="onSettingsChanged"
+    />
+
+    <!-- Uninstall -->
+    <el-dialog v-model="uninstallDialog" :title="t('dbs.uninstallTitle', { name: current?.display_name || '' })" width="500px" append-to-body>
+      <p class="dialog-text">{{ t('dbs.uninstallText') }}</p>
+      <el-checkbox v-model="uninstallPurge">{{ t('dbs.uninstallPurge') }}</el-checkbox>
+      <template v-if="uninstallPurge">
+        <el-alert :title="t('dbs.uninstallPurgeWarn')" type="error" :closable="false" show-icon class="purge-warn" />
+        <el-input v-model="uninstallConfirm" class="lp-mono" :placeholder="t('dbs.uninstallType', { word: engine })" />
+      </template>
       <template #footer>
-        <el-button @click="redisDialog = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="busy === 'redis'" @click="submitRedis">{{ t('confirm') }}</el-button>
+        <el-button @click="uninstallDialog = false">{{ t('cancel') }}</el-button>
+        <el-button
+          type="danger"
+          :loading="busy === 'uninstall'"
+          :disabled="uninstallPurge && uninstallConfirm.trim() !== engine"
+          @click="submitUninstall"
+        >{{ t('dbs.uninstall') }}</el-button>
       </template>
     </el-dialog>
 
@@ -466,16 +463,17 @@ import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheckFilled, CircleCloseFilled, Coin, Connection, CopyDocument, EditPen, Hide, InfoFilled,
-  Plus, Refresh, Search, View, WarningFilled,
+  MoreFilled, Plus, Refresh, Search, Setting, View, WarningFilled,
 } from '@element-plus/icons-vue'
 import {
   backupDatabase, changeDatabaseHost, changeDatabasePassword, createDatabase, deleteDatabase,
   deleteDatabaseBackup, downloadFileApi, getDbEngines, getDbNetwork, getDbVersions, installDbEngine,
-  listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setMysqlAdmin, setMysqlRemote,
-  setRedisPassword,
+  listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setMysqlAdmin,
+  startDbEngine, stopDbEngine, uninstallDbEngine,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatBytes } from '@/utils/format'
+import DatabaseSettings from './DatabaseSettings.vue'
 
 type EngineKind = 'mysql' | 'postgresql' | 'redis'
 interface EngineInfo {
@@ -607,11 +605,11 @@ async function loadRows() {
 
 const network = ref<NetworkInfo | null>(null)
 async function loadNetwork() {
-  if (engine.value !== 'mysql' || !current.value?.running) {
+  if (!current.value?.running) {
     network.value = null
     return
   }
-  const res: any = await getDbNetwork('mysql').catch(() => null)
+  const res: any = await getDbNetwork(engine.value).catch(() => null)
   network.value = res?.success ? res.data : null
 }
 
@@ -682,63 +680,63 @@ async function restart(kind: EngineKind) {
   }
 }
 
-// --- Remote access ---
-type Check = { key: string; level: 'ok' | 'warn' | 'bad'; title: string; detail: string }
-const checks = computed<Check[]>(() => {
-  const n = network.value
-  if (!n) return []
-  const list: Check[] = []
-  const addresses = n.listeners.map((l) => l.address).join(', ') || '—'
-  if (n.foreign_listener) {
-    list.push({ key: 'port', level: 'bad', title: t('dbm.chkPortTaken', { process: n.foreign_listener }), detail: t('dbm.chkPortTakenDetail') })
-  }
-  list.push(n.public
-    ? { key: 'listen', level: 'ok', title: t('dbm.chkListenPublic'), detail: addresses }
-    : { key: 'listen', level: 'bad', title: t('dbm.chkListenLocal'), detail: t('dbm.chkListenLocalDetail', { addr: addresses }) })
-  if (!n.firewall.enabled) {
-    list.push({ key: 'fw', level: 'ok', title: t('dbm.chkFwOff'), detail: n.firewall.backend === 'none' ? t('dbm.chkFwNone') : n.firewall.backend })
-  } else if (n.firewall.allowed_from.length) {
-    list.push({ key: 'fw', level: 'ok', title: t('dbm.chkFwOpen'), detail: n.firewall.allowed_from.join(', ') })
-  } else {
-    list.push({ key: 'fw', level: 'bad', title: t('dbm.chkFwClosed', { port: n.port }), detail: t('dbm.chkFwClosedDetail') })
-  }
-  const managed = rows.value.filter((r) => r.managed)
-  const remoteUsers = managed.filter((r) => r.host && r.host !== 'localhost')
-  if (managed.length) {
-    list.push(remoteUsers.length
-      ? { key: 'users', level: 'ok', title: t('dbm.chkUsersRemote', { n: remoteUsers.length }), detail: remoteUsers.map((r) => `${r.username}@${r.host}`).join(', ') }
-      : { key: 'users', level: 'warn', title: t('dbm.chkUsersLocal'), detail: t('dbm.chkUsersLocalDetail') })
-  }
-  list.push({ key: 'cloud', level: 'warn', title: t('dbm.chkCloud', { port: n.port }), detail: t('dbm.chkCloudDetail') })
-  return list
-})
-
-const remoteDialog = ref(false)
-const remoteFrom = ref('')
-function toggleRemote(on: boolean) {
-  if (on) {
-    remoteFrom.value = ''
-    remoteDialog.value = true
-  } else {
-    submitRemote(false)
+// --- Start / stop / settings / uninstall ---
+async function startEngine(kind: EngineKind) {
+  busy.value = `start-${kind}`
+  try {
+    const res: any = await startDbEngine(kind)
+    if (res.success) ElMessage.success(t('dbs.started'))
+    await loadAll()
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    busy.value = ''
   }
 }
-async function submitRemote(enabled: boolean) {
-  if (!enabled) {
-    try {
-      await ElMessageBox.confirm(t('dbm.remoteDisableConfirm'), t('dbm.remote'), { type: 'warning' })
-    } catch {
-      return
-    }
-  }
-  busy.value = 'remote'
+
+async function stopEngine(kind: EngineKind) {
   try {
-    const res: any = await setMysqlRemote({ enabled, allow_from: remoteFrom.value.trim() })
-    if (res.success) {
-      remoteDialog.value = false
-      ElMessage.success(enabled ? t('dbm.remoteOn') : t('dbm.remoteOff'))
-    }
-    await loadNetwork()
+    await ElMessageBox.confirm(t('dbs.stopConfirm', { name: current.value?.display_name || '' }), t('dbs.stop'), { type: 'warning' })
+  } catch {
+    return
+  }
+  busy.value = `stop-${kind}`
+  try {
+    const res: any = await stopDbEngine(kind)
+    if (res.success) ElMessage.success(t('dbs.stopped'))
+    await loadAll()
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    busy.value = ''
+  }
+}
+
+const settingsOpen = ref(false)
+const settingsTab = ref('conn')
+function openSettings(tab = 'conn') {
+  settingsTab.value = tab
+  settingsOpen.value = true
+}
+async function onSettingsChanged() {
+  await Promise.all([loadEngines(), loadNetwork()])
+}
+
+const uninstallDialog = ref(false)
+const uninstallPurge = ref(false)
+const uninstallConfirm = ref('')
+function openUninstall() {
+  uninstallPurge.value = false
+  uninstallConfirm.value = ''
+  uninstallDialog.value = true
+}
+async function submitUninstall() {
+  busy.value = 'uninstall'
+  uninstallDialog.value = false
+  try {
+    // The task window shows the live log.
+    await uninstallDbEngine(engine.value, uninstallPurge.value)
+    await loadAll()
   } catch {
     // Interceptor reports it.
   } finally {
@@ -977,28 +975,6 @@ async function submitAdmin() {
       adminDialog.value = false
       ElMessage.success(t('dbm.connected'))
       await loadAll()
-    }
-  } catch {
-    // Interceptor reports it.
-  } finally {
-    busy.value = ''
-  }
-}
-
-const redisDialog = ref(false)
-const redisPassword = ref('')
-function openRedisPassword(item: EngineInfo) {
-  redisPassword.value = item.redis_password || ''
-  redisDialog.value = true
-}
-async function submitRedis() {
-  busy.value = 'redis'
-  try {
-    const res: any = await setRedisPassword(redisPassword.value.trim())
-    if (res.success) {
-      redisDialog.value = false
-      ElMessage.success(t('ps.saved'))
-      await loadEngines()
     }
   } catch {
     // Interceptor reports it.
@@ -1301,4 +1277,23 @@ usePage(loadAll)
 .tables-tools { display: flex; gap: var(--lp-2); margin-bottom: var(--lp-3); }
 .tables-tools .search { max-width: 260px; }
 .adopt-desc { margin: 0 0 var(--lp-4); color: var(--lp-text-soft); line-height: 1.6; }
+.remote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-muted-soft);
+  color: var(--lp-muted);
+  font: inherit;
+  font-size: var(--lp-text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  &.is-on { background: var(--lp-warn-soft); color: var(--lp-warn); }
+  &:hover { filter: brightness(0.96); }
+}
+.purge-warn { margin: var(--lp-3) 0; }
+:global(.danger-item) { color: var(--lp-danger) !important; }
 </style>

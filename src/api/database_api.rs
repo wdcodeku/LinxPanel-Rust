@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::database::{self, Engine, MysqlAdmin};
-use crate::services::{dbnet, tasks};
+use crate::services::{dbconf, dbnet, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -21,7 +21,31 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/databases/engines/{engine}/install", post(install))
         .route("/databases/engines/{engine}/versions", get(versions))
         .route("/databases/engines/{engine}/network", get(network))
-        .route("/databases/engines/mysql/remote", post(set_remote))
+        .route("/databases/engines/{engine}/remote", post(set_remote))
+        .route(
+            "/databases/engines/{engine}/settings",
+            get(engine_settings).post(apply_settings),
+        )
+        .route(
+            "/databases/engines/{engine}/superuser-password",
+            post(set_superuser_password),
+        )
+        .route("/databases/engines/{engine}/start", post(start_engine))
+        .route("/databases/engines/{engine}/stop", post(stop_engine))
+        .route(
+            "/databases/engines/{engine}/uninstall",
+            post(uninstall_engine),
+        )
+        .route(
+            "/databases/engines/{engine}/config",
+            get(read_config).post(write_config),
+        )
+        .route("/databases/engines/{engine}/logs/{kind}", get(read_log))
+        .route(
+            "/databases/engines/{engine}/logs/{kind}/clear",
+            post(clear_log),
+        )
+        .route("/databases/engines/mysql/binlog/purge", post(purge_binlogs))
         .route("/databases/engines/{engine}/restart", post(restart))
         .route("/databases/engines/mysql/admin", post(set_mysql_admin))
         .route(
@@ -159,7 +183,14 @@ struct RemoteRequest {
     allow_from: String,
 }
 
-async fn set_remote(Json(req): Json<RemoteRequest>) -> Json<ApiResponse<String>> {
+async fn set_remote(
+    Path(engine): Path<String>,
+    Json(req): Json<RemoteRequest>,
+) -> Json<ApiResponse<String>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
     let allow_from = req.allow_from.trim().to_string();
     if !allow_from.is_empty() {
         if let Err(err) = crate::services::panel_access::parse_ip_list(&allow_from) {
@@ -167,10 +198,11 @@ async fn set_remote(Json(req): Json<RemoteRequest>) -> Json<ApiResponse<String>>
         }
     }
     let result = tokio::task::spawn_blocking(move || {
-        dbnet::set_mysql_remote(
-            req.enabled,
-            Some(allow_from.as_str()).filter(|s| !s.is_empty()),
-        )
+        let allow_from = Some(allow_from.as_str()).filter(|s| !s.is_empty());
+        match engine {
+            Engine::Mysql => dbnet::set_mysql_remote(req.enabled, allow_from),
+            _ => dbconf::set_remote(engine, req.enabled, allow_from),
+        }
     })
     .await;
     match result {
@@ -476,5 +508,243 @@ async fn adopt(
     match database::adopt(&state.db, engine, &name, req, admin).await {
         Ok(created) => Json(ApiResponse::ok(created)),
         Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+// ===== Engine settings =====
+
+async fn engine_settings(
+    State(state): State<Arc<AppState>>,
+    Path(engine): Path<String>,
+) -> Json<ApiResponse<dbconf::EngineSettings>> {
+    match Engine::parse(&engine) {
+        Ok(engine) => Json(ApiResponse::ok(dbconf::settings(&state.db, engine).await)),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+/// Parameters and log switches; the server restarts (and rolls back if it fails).
+async fn apply_settings(
+    State(state): State<Arc<AppState>>,
+    Path(engine): Path<String>,
+    Json(change): Json<dbconf::SettingsChange>,
+) -> Json<ApiResponse<String>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match dbconf::apply(&state.db, engine, change).await {
+        Ok(log) => Json(ApiResponse::ok(log)),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct SuperuserPasswordRequest {
+    #[serde(default)]
+    password: String,
+}
+
+async fn set_superuser_password(
+    State(state): State<Arc<AppState>>,
+    Path(engine): Path<String>,
+    Json(req): Json<SuperuserPasswordRequest>,
+) -> Json<ApiResponse<()>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match dbconf::set_superuser_password(&state.db, engine, &req.password).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Password updated")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn start_engine(Path(engine): Path<String>) -> Json<ApiResponse<()>> {
+    let engine = match parse_engine(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return err,
+    };
+    match tokio::task::spawn_blocking(move || dbconf::start(engine)).await {
+        Ok(Ok(_)) => Json(ApiResponse::ok_msg("Started")),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+async fn stop_engine(Path(engine): Path<String>) -> Json<ApiResponse<()>> {
+    let engine = match parse_engine(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return err,
+    };
+    match tokio::task::spawn_blocking(move || dbconf::stop(engine)).await {
+        Ok(Ok(_)) => Json(ApiResponse::ok_msg("Stopped")),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct UninstallRequest {
+    /// Also delete the data directory (every database on this server).
+    #[serde(default)]
+    purge_data: bool,
+}
+
+/// Removes the engine as a background task (its log streams to the browser).
+async fn uninstall_engine(
+    State(state): State<Arc<AppState>>,
+    Path(engine): Path<String>,
+    Json(req): Json<UninstallRequest>,
+) -> Json<ApiResponse<tasks::Started>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    let title = format!("Uninstall {}", engine.as_str());
+    let task_state = state.clone();
+    Json(ApiResponse::ok(state.tasks.start(
+        "db-uninstall",
+        &title,
+        uninstall_task(task_state, engine, req.purge_data),
+    )))
+}
+
+async fn uninstall_task(
+    state: Arc<AppState>,
+    engine: Engine,
+    purge_data: bool,
+) -> ApiResponse<LogResult> {
+    match tasks::blocking(move || dbconf::uninstall(engine, purge_data)).await {
+        Ok(Ok(log)) => {
+            dbconf::forget(&state.db, engine, purge_data).await;
+            ApiResponse::ok(LogResult { success: true, log })
+        }
+        Ok(Err(err)) => ApiResponse::err(&err),
+        Err(err) => ApiResponse::err(&err.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfigQuery {
+    #[serde(default)]
+    file: String,
+}
+
+#[derive(Serialize)]
+struct ConfigView {
+    files: Vec<dbconf::ConfigFile>,
+    file: Option<dbconf::ConfigFile>,
+    content: String,
+}
+
+async fn read_config(
+    Path(engine): Path<String>,
+    Query(query): Query<ConfigQuery>,
+) -> Json<ApiResponse<ConfigView>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let files = dbconf::config_files(engine);
+        let id = if query.file.is_empty() {
+            files.first().map(|f| f.id).unwrap_or("main").to_string()
+        } else {
+            query.file
+        };
+        match dbconf::read_config(engine, &id) {
+            Ok((file, content)) => Ok(ConfigView {
+                files,
+                file: Some(file),
+                content,
+            }),
+            Err(_) if files.is_empty() => Ok(ConfigView {
+                files,
+                file: None,
+                content: String::new(),
+            }),
+            Err(err) => Err(err),
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(view)) => Json(ApiResponse::ok(view)),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfigWrite {
+    file: String,
+    content: String,
+}
+
+async fn write_config(
+    Path(engine): Path<String>,
+    Json(req): Json<ConfigWrite>,
+) -> Json<ApiResponse<String>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match tokio::task::spawn_blocking(move || {
+        dbconf::write_config_file(engine, &req.file, &req.content)
+    })
+    .await
+    {
+        Ok(Ok(log)) => Json(ApiResponse::ok(log)),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct LogQuery {
+    #[serde(default = "default_lines")]
+    lines: usize,
+}
+
+fn default_lines() -> usize {
+    300
+}
+
+async fn read_log(
+    State(state): State<Arc<AppState>>,
+    Path((engine, kind)): Path<(String, String)>,
+    Query(query): Query<LogQuery>,
+) -> Json<ApiResponse<String>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match dbconf::tail_log(&state.db, engine, &kind, query.lines).await {
+        Ok(text) => Json(ApiResponse::ok(text)),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn clear_log(
+    State(state): State<Arc<AppState>>,
+    Path((engine, kind)): Path<(String, String)>,
+) -> Json<ApiResponse<()>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match dbconf::clear_log(&state.db, engine, &kind).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Log cleared")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+/// Deletes MySQL binary logs except the current one; returns the bytes freed.
+async fn purge_binlogs(State(state): State<Arc<AppState>>) -> Json<ApiResponse<u64>> {
+    let admin = database::load_mysql_admin(&state.db).await;
+    match tokio::task::spawn_blocking(move || dbconf::mysql_purge_binlogs(admin.as_ref())).await {
+        Ok(Ok(freed)) => Json(ApiResponse::ok(freed)),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
     }
 }

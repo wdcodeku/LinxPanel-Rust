@@ -24,6 +24,8 @@ const PRIVATE_KEYS: &[&str] = &[
     "jwt_secret",
     crate::services::database::SETTING_MYSQL_ADMIN_USER,
     crate::services::database::SETTING_MYSQL_ADMIN_PASSWORD,
+    crate::services::dbconf::SETTING_MYSQL_ROOT_PASSWORD,
+    crate::services::dbconf::SETTING_POSTGRES_PASSWORD,
 ];
 
 /// Readable here, but only writable through their dedicated, validating endpoints.

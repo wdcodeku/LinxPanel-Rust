@@ -49,7 +49,7 @@ impl Engine {
         }
     }
 
-    fn display_name(self) -> &'static str {
+    pub(crate) fn display_name(self) -> &'static str {
         match self {
             Self::Mysql => "MySQL / MariaDB",
             Self::Postgresql => "PostgreSQL",
@@ -57,7 +57,7 @@ impl Engine {
         }
     }
 
-    fn services(self) -> &'static [&'static str] {
+    pub(crate) fn services(self) -> &'static [&'static str] {
         match self {
             Self::Mysql => &["mariadb", "mysql", "mysqld"],
             Self::Postgresql => &["postgresql"],
@@ -116,7 +116,7 @@ fn client_binary(engine: Engine) -> Option<&'static str> {
         .find(|bin| shell::has_binary(bin))
 }
 
-fn service_name(engine: Engine) -> String {
+pub(crate) fn service_name(engine: Engine) -> String {
     let names: Vec<String> = engine.services().iter().map(|s| s.to_string()).collect();
     sysservice::first_existing(&names).unwrap_or_else(|| names[0].clone())
 }
@@ -388,7 +388,7 @@ fn mysql_databases(admin: &MysqlAdmin) -> Result<Vec<String>, String> {
 // ===== PostgreSQL =====
 
 /// Runs SQL through `psql` as the `postgres` OS account (peer authentication).
-fn psql(sql: &str, database: Option<&str>) -> Result<String, String> {
+pub(crate) fn psql(sql: &str, database: Option<&str>) -> Result<String, String> {
     let mut args: Vec<&str> = vec![
         "-u",
         "postgres",
@@ -559,12 +559,12 @@ struct DatabaseFacts {
 
 /// A MySQL string literal (names reaching here may come from the server,
 /// e.g. databases created on the command line).
-fn mysql_str(value: &str) -> String {
+pub(crate) fn mysql_str(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 /// A PostgreSQL string literal.
-fn pg_str(value: &str) -> String {
+pub(crate) fn pg_str(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
@@ -1238,7 +1238,7 @@ pub async fn change_password(
 
 // ===== Redis =====
 
-fn redis_conf() -> Option<PathBuf> {
+pub(crate) fn redis_conf() -> Option<PathBuf> {
     [
         "/etc/redis/redis.conf",
         "/etc/redis.conf",

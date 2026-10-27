@@ -70,3 +70,43 @@ pub fn enable_and_restart(name: &str) -> Result<String, String> {
         Err(err) => Err(format!("{}\n{}", log, err)),
     }
 }
+
+/// Starts the service (and enables it at boot).
+pub fn start(name: &str) -> Result<String, String> {
+    enable_and_restart(name)
+}
+
+/// Stops the service; `disable` also keeps it from starting at boot.
+pub fn stop(name: &str, disable: bool) -> Result<String, String> {
+    let timeout = std::time::Duration::from_secs(120);
+    let run = |program: &str, args: &[&str]| -> Result<String, String> {
+        let output = shell::run_privileged_with_timeout(program, args, timeout)?;
+        let text = format!(
+            "$ {} {}\n{}{}",
+            program,
+            args.join(" "),
+            output.stdout,
+            output.stderr
+        );
+        if output.ok() {
+            Ok(text)
+        } else {
+            Err(format!("{}{}", text, output.error_text()))
+        }
+    };
+    if systemd_running() {
+        let mut log = run("systemctl", &["stop", name])?;
+        if disable {
+            log.push_str(&run("systemctl", &["disable", name]).unwrap_or_default());
+        }
+        Ok(log)
+    } else if shell::has_binary("rc-service") {
+        let mut log = run("rc-service", &[name, "stop"])?;
+        if disable {
+            log.push_str(&run("rc-update", &["del", name, "default"]).unwrap_or_default());
+        }
+        Ok(log)
+    } else {
+        run("service", &[name, "stop"])
+    }
+}

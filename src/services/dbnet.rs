@@ -9,7 +9,7 @@
 //! - Diagnosis: listening addresses, firewall and user hosts, explained, so a
 //!   failed connection (e.g. "2013 Lost connection ... handshake") has a reason.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
@@ -303,7 +303,17 @@ pub fn network_info(engine: Engine) -> NetworkInfo {
         port,
         listeners,
         public,
-        remote_enabled: drop_in_path().is_some_and(|p| p.exists()),
+        remote_enabled: match engine {
+            Engine::Mysql => drop_in_path()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .is_some_and(|text| {
+                    text.lines().any(|l| {
+                        let l = l.trim().replace('-', "_");
+                        l.starts_with("bind_address") && !l.contains("127.0.0.1")
+                    })
+                }),
+            _ => public,
+        },
         foreign_listener,
         firewall: FirewallCheck {
             backend: fw.backend,
@@ -321,27 +331,10 @@ fn engine_port(engine: Engine) -> u16 {
     }
 }
 
-pub const DROP_IN_CONTENT: &str = "\
-# Written by LinxPanel (Databases > Remote access). Removing remote access deletes this file.
-[mysqld]
-bind-address = 0.0.0.0
-";
-
 /// Turns remote access on or off: the bind address, a service restart, and
 /// (on) a firewall rule for the port, limited to `allow_from` when given.
 pub fn set_mysql_remote(enabled: bool, allow_from: Option<&str>) -> Result<String, String> {
-    let path = drop_in_path().ok_or("MySQL / MariaDB configuration directory not found")?;
-    let mut log = String::new();
-    if enabled {
-        write_root_file(&path, DROP_IN_CONTENT)?;
-        log.push_str(&format!("Wrote {}\n", path.display()));
-    } else if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Cannot remove {}: {}", path.display(), e))?;
-        log.push_str(&format!("Removed {}\n", path.display()));
-    }
-    log.push_str(&super::database::restart(Engine::Mysql)?);
-
+    let mut log = super::dbconf::mysql_set_remote(enabled)?;
     if enabled {
         let fw = firewall::status();
         if fw.enabled && fw.manageable {
@@ -372,14 +365,6 @@ pub fn set_mysql_remote(enabled: bool, allow_from: Option<&str>) -> Result<Strin
         ));
     }
     Ok(log)
-}
-
-fn write_root_file(path: &Path, content: &str) -> Result<(), String> {
-    std::fs::write(path, content).map_err(|e| format!("Cannot write {}: {}", path.display(), e))?;
-    // Readable by mysqld (which does not run as root); world-writable it must not be.
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644));
-    Ok(())
 }
 
 #[cfg(test)]

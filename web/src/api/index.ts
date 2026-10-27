@@ -199,8 +199,33 @@ export const installDbEngine = (engine: string, version?: string) =>
 export const restartDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/restart`)
 export const getDbVersions = (engine: string) => request.get(`/databases/engines/${engine}/versions`, { timeout: 60000 })
 export const getDbNetwork = (engine: string) => request.get(`/databases/engines/${engine}/network`)
-export const setMysqlRemote = (data: { enabled: boolean; allow_from: string }) =>
-  request.post('/databases/engines/mysql/remote', data, { timeout: 120000 })
+export const setDbRemote = (engine: string, data: { enabled: boolean; allow_from: string }) =>
+  request.post(`/databases/engines/${engine}/remote`, data, { timeout: 180000 })
+// Settings changes restart the server (and roll back if it does not come up).
+const RESTART = { timeout: 300000 }
+export const getDbSettings = (engine: string) =>
+  request.get(`/databases/engines/${engine}/settings`, { timeout: 60000 })
+export const applyDbSettings = (
+  engine: string,
+  data: { params?: Record<string, string>; logs?: Record<string, { enabled?: boolean; threshold?: string }> },
+) => request.post(`/databases/engines/${engine}/settings`, data, RESTART)
+export const setDbSuperuserPassword = (engine: string, password: string) =>
+  request.post(`/databases/engines/${engine}/superuser-password`, { password }, RESTART)
+export const startDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/start`, {}, RESTART)
+export const stopDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/stop`, {}, RESTART)
+export const uninstallDbEngine = (engine: string, purgeData: boolean) =>
+  runTask(t('task.uninstall', { name: productName(engine) }), () =>
+    request.post(`/databases/engines/${engine}/uninstall`, { purge_data: purgeData }),
+  )
+export const getDbConfig = (engine: string, file?: string) =>
+  request.get(`/databases/engines/${engine}/config`, { params: file ? { file } : {} })
+export const saveDbConfig = (engine: string, file: string, content: string) =>
+  request.post(`/databases/engines/${engine}/config`, { file, content }, RESTART)
+export const getDbLog = (engine: string, kind: string, lines = 300) =>
+  request.get(`/databases/engines/${engine}/logs/${kind}`, { params: { lines } })
+export const clearDbLog = (engine: string, kind: string) =>
+  request.post(`/databases/engines/${engine}/logs/${kind}/clear`)
+export const purgeBinlogs = () => request.post('/databases/engines/mysql/binlog/purge', {}, { timeout: 120000 })
 export const changeDatabaseHost = (name: string, host: string) =>
   request.post(`/databases/mysql/${encodeURIComponent(name)}/host`, { host })
 export const setMysqlAdmin = (data: { user: string; password: string }) =>
