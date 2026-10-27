@@ -576,7 +576,16 @@ pub fn install_packages(packages: &[&str], log: &mut String) -> bool {
                     log.push_str(result.stderr.trim_end());
                 }
                 log.push('\n');
-                        if !result.ok() {
+                if !result.ok() {
+                    // An index refresh fails when any one source is broken (a
+                    // leftover Docker repo, an unreachable mirror) though the
+                    // rest refreshed; the install itself decides.
+                    if arg_refs.first() == Some(&"update") {
+                        let line = "[LinxPanel] Package index refresh reported errors (often one unrelated broken source); continuing\n";
+                        super::tasks::note(line);
+                        log.push_str(line);
+                        continue;
+                    }
                     super::tasks::note(&format!("[LinxPanel] {} failed", program));
                     return false;
                 }

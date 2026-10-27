@@ -28,350 +28,8 @@ const DEFAULT_OPENRESTY_SITES_DIR: &str = "C:\\openresty\\nginx\\conf\\sites-ena
 const DEFAULT_OPENRESTY_SITES_DIR: &str = "/usr/local/openresty/nginx/conf/sites-enabled";
 
 #[cfg(target_os = "linux")]
-const QUICK_INSTALL_SCRIPT: &str = r#"
-set -eu
-
-# Unattended package operations: no debconf / needrestart / conffile prompts
-# (nothing can answer them from the panel), and wait for the dpkg lock that
-# automatic updates hold for minutes after boot instead of failing at once.
-# Passed through env because sudo drops the caller's environment.
-run() {
-  if [ "$1" = "apt-get" ]; then
-    shift
-    set -- apt-get -o DPkg::Lock::Timeout=600 \
-      -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
-  fi
-  if [ "${USE_SUDO:-0}" = "1" ]; then
-    sudo -n env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"
-  else
-    env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"
-  fi
-}
-
-repair_apt_state() {
-  echo "[LinxPanel] Attempting to repair apt/dpkg state..."
-  run dpkg --force-confdef --force-confold --configure -a || true
-  run apt-get -y -f install || true
-}
-
-apt_update_safe() {
-  if run apt-get update; then
-    return 0
-  fi
-  echo "[LinxPanel] apt-get update failed, retrying after repair..."
-  repair_apt_state
-  run apt-get update
-}
-
-apt_install_safe() {
-  if run apt-get install -y "$@"; then
-    return 0
-  fi
-  echo "[LinxPanel] apt-get install failed for: $*"
-  repair_apt_state
-  run apt-get update || true
-  if run apt-get install -y "$@"; then
-    return 0
-  fi
-  echo "[LinxPanel] apt install still failed after automatic repair."
-  echo "[LinxPanel] Please run manually:"
-  echo "[LinxPanel]   sudo dpkg --configure -a"
-  echo "[LinxPanel]   sudo apt-get -f install -y"
-  echo "[LinxPanel]   sudo apt-get update"
-  return 1
-}
-
-install_openresty_from_source() {
-  echo "[LinxPanel] Falling back to source build install..."
-
-  if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    run rm -f /etc/apt/sources.list.d/openresty.list || true
-    repair_apt_state
-    apt_update_safe
-    apt_install_safe build-essential perl make curl tar gzip ca-certificates libpcre3-dev zlib1g-dev libssl-dev
-  elif command -v dnf >/dev/null 2>&1; then
-    run dnf install -y gcc gcc-c++ make perl curl tar gzip pcre pcre-devel zlib zlib-devel openssl openssl-devel
-  elif command -v yum >/dev/null 2>&1; then
-    run yum install -y gcc gcc-c++ make perl curl tar gzip pcre pcre-devel zlib zlib-devel openssl openssl-devel
-  else
-    echo "[LinxPanel] No supported package manager found for source build dependencies."
-    return 1
-  fi
-
-  OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-/usr/local/openresty}"
-  OPENRESTY_CONFIGURE_ARGS="${OPENRESTY_CONFIGURE_ARGS:---with-stream --with-http_v2_module --with-http_ssl_module --with-http_slice_module --with-http_stub_status_module --with-http_sub_module --with-http_realip_module --with-pcre-jit}"
-  BUILD_JOBS="${OPENRESTY_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
-  if [ -z "$BUILD_JOBS" ] || [ "$BUILD_JOBS" -lt 1 ] 2>/dev/null; then
-    BUILD_JOBS=2
-  fi
-  MAKE_BIN="make"
-  if command -v gmake >/dev/null 2>&1; then
-    MAKE_BIN="gmake"
-  fi
-
-  SOURCE_CANDIDATES=""
-  add_source_candidate() {
-    local url="$1"
-    if [ -z "$url" ]; then
-      return 0
-    fi
-    case " $SOURCE_CANDIDATES " in
-      *" $url "*) ;;
-      *) SOURCE_CANDIDATES="$SOURCE_CANDIDATES $url" ;;
-    esac
-  }
-
-  if [ -n "${OPENRESTY_SOURCE_URL:-}" ]; then
-    add_source_candidate "${OPENRESTY_SOURCE_URL}"
-  fi
-
-  if [ -n "${OPENRESTY_SOURCE_VERSION:-}" ]; then
-    add_source_candidate "https://openresty.org/download/openresty-${OPENRESTY_SOURCE_VERSION}.tar.gz"
-  fi
-
-  INDEX_HTML="$(curl -fsSL https://openresty.org/download/ || true)"
-  RELATIVE_PATH="$(printf "%s" "$INDEX_HTML" \
-    | grep -Eo 'download/openresty-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.tar\.gz' \
-    | sort -u \
-    | sed -E 's#download/openresty-([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz#\1 download/openresty-\1.tar.gz#' \
-    | sort -V \
-    | tail -n 1 \
-    | awk '{print $2}' || true)"
-  if [ -n "$RELATIVE_PATH" ]; then
-    add_source_candidate "https://openresty.org/${RELATIVE_PATH}"
-  fi
-
-  for version in 1.27.1.2 1.21.4.3 1.19.9.1 1.17.8.2; do
-    add_source_candidate "https://openresty.org/download/openresty-${version}.tar.gz"
-  done
-
-  try_source_candidate() {
-    local source_url="$1"
-    local tmp_root="/tmp/linxpanel-openresty-src-$$-$(date +%s)"
-    local tar_file="${tmp_root}/openresty.tar.gz"
-    local src_dir=""
-
-    echo "[LinxPanel] Trying source package: ${source_url}"
-    if ! run rm -rf "$tmp_root"; then return 1; fi
-    if ! run mkdir -p "$tmp_root"; then return 1; fi
-    if ! run curl -fL "$source_url" -o "$tar_file"; then run rm -rf "$tmp_root" || true; return 1; fi
-    if ! run tar -xzf "$tar_file" -C "$tmp_root"; then run rm -rf "$tmp_root" || true; return 1; fi
-
-    src_dir="$(find "$tmp_root" -maxdepth 2 -type d -name 'openresty-*' | head -n 1)"
-    if [ -z "$src_dir" ]; then
-      echo "[LinxPanel] Cannot locate extracted OpenResty source directory."
-      run rm -rf "$tmp_root" || true
-      return 1
-    fi
-
-    if ! run sh -c "cd \"$src_dir\" && ./configure --prefix=\"$OPENRESTY_PREFIX\" $OPENRESTY_CONFIGURE_ARGS"; then
-      echo "[LinxPanel] Configure failed for ${source_url}"
-      run rm -rf "$tmp_root" || true
-      return 1
-    fi
-    if ! run sh -c "cd \"$src_dir\" && ${MAKE_BIN} -j${BUILD_JOBS}"; then
-      echo "[LinxPanel] Build failed for ${source_url}"
-      run rm -rf "$tmp_root" || true
-      return 1
-    fi
-    if ! run sh -c "cd \"$src_dir\" && ${MAKE_BIN} install"; then
-      echo "[LinxPanel] Install failed for ${source_url}"
-      run rm -rf "$tmp_root" || true
-      return 1
-    fi
-
-    if [ ! -x "${OPENRESTY_PREFIX}/nginx/sbin/nginx" ]; then
-      echo "[LinxPanel] OpenResty install finished but nginx binary is missing at ${OPENRESTY_PREFIX}/nginx/sbin/nginx"
-      run rm -rf "$tmp_root" || true
-      return 1
-    fi
-
-    run mkdir -p /usr/local/bin
-    run ln -sf "${OPENRESTY_PREFIX}/nginx/sbin/nginx" /usr/local/bin/openresty || true
-    run rm -rf "$tmp_root" || true
-    echo "[LinxPanel] Source install succeeded with: ${source_url}"
-    return 0
-  }
-
-  SOURCE_SUCCESS=0
-  for source_url in $SOURCE_CANDIDATES; do
-    if try_source_candidate "$source_url"; then
-      SOURCE_SUCCESS=1
-      break
-    fi
-  done
-
-  if [ "$SOURCE_SUCCESS" != "1" ]; then
-    echo "[LinxPanel] All source packages failed."
-    return 1
-  fi
-
-  echo "[LinxPanel] OpenResty source build install completed."
-  return 0
-}
-
-echo "[LinxPanel] Starting OpenResty quick install"
-
-if command -v openresty >/dev/null 2>&1 || [ -x /usr/local/openresty/nginx/sbin/nginx ]; then
-  echo "[LinxPanel] OpenResty already installed."
-  exit 0
-fi
-
-if command -v apt-get >/dev/null 2>&1; then
-  export DEBIAN_FRONTEND=noninteractive
-  repair_apt_state
-  apt_update_safe
-  apt_install_safe curl gnupg ca-certificates lsb-release
-
-  DISTRO_ID=""
-  DISTRO_LIKE=""
-  CODENAME=""
-  if [ -r /etc/os-release ]; then
-    . /etc/os-release
-    DISTRO_ID="${ID:-}"
-    DISTRO_LIKE="${ID_LIKE:-}"
-    CODENAME="${VERSION_CODENAME:-}"
-  fi
-  if [ -z "$CODENAME" ] && command -v lsb_release >/dev/null 2>&1; then
-    CODENAME="$(lsb_release -sc || true)"
-  fi
-  if [ -z "$CODENAME" ]; then
-    if [ "$DISTRO_ID" = "debian" ]; then
-      CODENAME="bookworm"
-    else
-      CODENAME="jammy"
-    fi
-  fi
-
-  if [ "$DISTRO_ID" = "debian" ]; then
-    case "$CODENAME" in
-      testing|unstable|sid|trixie|forky)
-        echo "[LinxPanel] Debian codename '$CODENAME' not supported yet, fallback to 'bookworm'."
-        CODENAME="bookworm"
-        ;;
-    esac
-  fi
-
-  REPO_BASE="https://openresty.org/package/debian"
-  case "$DISTRO_ID" in
-    ubuntu) REPO_BASE="https://openresty.org/package/ubuntu" ;;
-    debian) REPO_BASE="https://openresty.org/package/debian" ;;
-    *)
-      if echo "$DISTRO_LIKE" | grep -qi ubuntu; then
-        REPO_BASE="https://openresty.org/package/ubuntu"
-      fi
-      ;;
-  esac
-
-  write_openresty_repo() {
-    local candidate="$1"
-    if [ "${USE_SUDO:-0}" = "1" ]; then
-      echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${candidate} openresty" | sudo -n tee /etc/apt/sources.list.d/openresty.list >/dev/null
-    else
-      echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] ${REPO_BASE} ${candidate} openresty" > /etc/apt/sources.list.d/openresty.list
-    fi
-  }
-
-  try_openresty_repo() {
-    local candidate="$1"
-    echo "[LinxPanel] Trying OpenResty apt repo codename: ${candidate}"
-    write_openresty_repo "${candidate}"
-    if apt_update_safe; then
-      CODENAME="${candidate}"
-      return 0
-    fi
-    return 1
-  }
-
-  TMP_KEY="$(mktemp)"
-  curl -fsSL --retry 3 https://openresty.org/package/pubkey.gpg -o "$TMP_KEY"
-  run mkdir -p /usr/share/keyrings
-  # --batch --yes: a keyring left by an earlier attempt must be overwritten
-  # without gpg asking on /dev/tty, which a panel install does not have.
-  run gpg --batch --yes --dearmor -o /usr/share/keyrings/openresty.gpg "$TMP_KEY"
-  rm -f "$TMP_KEY"
-
-  ORIGINAL_CODENAME="$CODENAME"
-  repo_ready=0
-  if try_openresty_repo "$CODENAME"; then
-    repo_ready=1
-  else
-    if [ "$DISTRO_ID" = "debian" ]; then
-      for fallback in bookworm bullseye; do
-        if [ "$fallback" = "$CODENAME" ]; then
-          continue
-        fi
-        if try_openresty_repo "$fallback"; then
-          repo_ready=1
-          break
-        fi
-      done
-    elif [ "$DISTRO_ID" = "ubuntu" ] || echo "$DISTRO_LIKE" | grep -qi ubuntu; then
-      for fallback in jammy focal; do
-        if [ "$fallback" = "$CODENAME" ]; then
-          continue
-        fi
-        if try_openresty_repo "$fallback"; then
-          repo_ready=1
-          break
-        fi
-      done
-    fi
-  fi
-
-  if [ "$repo_ready" != "1" ]; then
-    echo "[LinxPanel] OpenResty apt repo is not available for codename '${ORIGINAL_CODENAME}'."
-    echo "[LinxPanel] Tried fallback codenames, but all failed."
-    if ! install_openresty_from_source; then
-      echo "[LinxPanel] OpenResty source fallback failed."
-      exit 51
-    fi
-  else
-    echo "[LinxPanel] OpenResty apt repo ready with codename: ${CODENAME}"
-    if ! apt_install_safe openresty; then
-      echo "[LinxPanel] OpenResty apt install failed, trying source fallback..."
-      if ! install_openresty_from_source; then
-        echo "[LinxPanel] OpenResty source fallback failed."
-        exit 53
-      fi
-    fi
-  fi
-elif command -v dnf >/dev/null 2>&1; then
-  run dnf install -y dnf-plugins-core
-  run dnf config-manager --add-repo https://openresty.org/package/centos/openresty.repo
-  if ! run dnf install -y openresty; then
-    echo "[LinxPanel] OpenResty dnf install failed, trying source fallback..."
-    if ! install_openresty_from_source; then
-      echo "[LinxPanel] OpenResty source fallback failed."
-      exit 54
-    fi
-  fi
-elif command -v yum >/dev/null 2>&1; then
-  run yum install -y yum-utils
-  run yum-config-manager --add-repo https://openresty.org/package/centos/openresty.repo
-  if ! run yum install -y openresty; then
-    echo "[LinxPanel] OpenResty yum install failed, trying source fallback..."
-    if ! install_openresty_from_source; then
-      echo "[LinxPanel] OpenResty source fallback failed."
-      exit 55
-    fi
-  fi
-else
-  echo "[LinxPanel] Unsupported Linux package manager for repository install, trying source fallback..."
-  if ! install_openresty_from_source; then
-    echo "[LinxPanel] OpenResty source fallback failed."
-    exit 52
-  fi
-fi
-
-if command -v systemctl >/dev/null 2>&1; then
-  run systemctl enable openresty || true
-  run systemctl start openresty || true
-fi
-
-echo "[LinxPanel] OpenResty package install completed."
-"#;
+/// Repository install first, source build as fallback; see the script.
+const QUICK_INSTALL_SCRIPT: &str = include_str!("../../scripts/openresty-install.sh");
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenRestyStatus {
@@ -873,63 +531,81 @@ fn detect_install_privilege_mode() -> Result<bool> {
 
 #[cfg(target_os = "linux")]
 fn install_openresty_package() -> Result<String> {
+    use std::os::unix::fs::OpenOptionsExt;
     let use_sudo = detect_install_privilege_mode()?;
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(QUICK_INSTALL_SCRIPT)
-        .env("USE_SUDO", if use_sudo { "1" } else { "0" })
-        .output()
-        .context("Failed to execute OpenResty quick install script")?;
+    // From a private file rather than stdin: a command in the script that
+    // reads stdin would otherwise swallow the rest of the script.
+    let path = std::env::temp_dir().join(format!(
+        "linxpanel-openresty-{}.sh",
+        uuid::Uuid::new_v4().simple()
+    ));
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&path)
+            .context("Cannot write the OpenResty install script")?;
+        file.write_all(QUICK_INSTALL_SCRIPT.as_bytes())?;
+    }
+    let shell = if super::shell::has_binary("bash") {
+        "bash"
+    } else {
+        "sh"
+    };
+    let mut command = Command::new(shell);
+    command
+        .arg(&path)
+        .env("USE_SUDO", if use_sudo { "1" } else { "0" });
+    // Through the shared runner, so the task window streams the output.
+    let output = super::shell::run_command(command, None, std::time::Duration::from_secs(45 * 60));
+    let _ = fs::remove_file(&path);
+    let output =
+        output.map_err(|e| anyhow!("Failed to run the OpenResty install script: {}", e))?;
 
-    let text = combine_output(&output);
-    if output.status.success() {
+    let text = format!("{}{}", output.stdout, output.stderr);
+    if output.ok() {
         return Ok(text);
     }
-
-    let detail =
-        last_non_empty_line(&text).unwrap_or_else(|| format!("Exit status: {}", output.status));
-    let detail = summarize_linux_install_error(&text, detail);
-    Err(anyhow!(detail))
+    Err(anyhow!(summarize_linux_install_error(&text)))
 }
 
 #[cfg(target_os = "linux")]
-fn summarize_linux_install_error(full_log: &str, fallback_detail: String) -> String {
+fn summarize_linux_install_error(full_log: &str) -> String {
     let lower = full_log.to_ascii_lowercase();
-
-    if lower.contains("openresty source fallback failed")
-        || lower.contains("source build install")
-            && (lower.contains("failed") || lower.contains("error"))
-        || lower.contains("all source packages failed")
-    {
-        return format!(
-            "OpenResty repository install was unavailable and source-build fallback also failed. Detail: {}. Please install build dependencies (gcc/make/perl/openssl/pcre/zlib), then retry or set OPENRESTY_SOURCE_VERSION (for example 1.17.8.2).",
-            fallback_detail
-        );
-    }
-
-    if lower.contains("sub-process /usr/bin/dpkg returned an error code (1)")
-        || lower.contains("dpkg was interrupted")
-        || lower.contains("you must manually run 'sudo dpkg --configure -a'")
-    {
-        return "APT/DPKG is in a broken state. LinxPanel auto-repair was attempted but failed. Please run: sudo dpkg --configure -a && sudo apt-get -f install -y && sudo apt-get update".to_string();
-    }
-
     if lower.contains("could not get lock")
         || lower.contains("unable to acquire the dpkg frontend lock")
-        || lower.contains("is another process using it")
     {
-        return "APT is locked by another process. Wait for other package tasks to finish, then retry OpenResty install.".to_string();
+        return "OpenResty install failed: another package operation held the apt lock for over 10 minutes; retry when it has finished".to_string();
     }
-
-    if lower.contains("does not have a release file")
-        || lower.contains("repository")
-            && lower.contains("release")
-            && lower.contains("openresty.org/package")
+    if lower.contains("dpkg was interrupted")
+        || lower.contains("you must manually run 'sudo dpkg --configure -a'")
     {
-        return "OpenResty apt repository for current distro codename is unavailable. LinxPanel already tried fallback codenames and then source-build fallback automatically, but it still did not succeed. Please check install log details and system build dependencies.".to_string();
+        return "OpenResty install failed: the package system is in a broken state; run `dpkg --configure -a && apt-get -f install -y` on the server, then retry".to_string();
     }
-
-    fallback_detail
+    // The script narrates each step; the last real one says where it stopped.
+    let reason = full_log
+        .lines()
+        .rev()
+        .filter_map(|line| line.trim().strip_prefix("[LinxPanel] "))
+        .find(|line| {
+            !line.contains("source fallback failed")
+                && !line.starts_with("Building ")
+                && !line.contains("falling back to a source build")
+        })
+        .or_else(|| {
+            full_log
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+        })
+        .unwrap_or("no output");
+    format!(
+        "OpenResty install failed: {} (the full log is in the task window)",
+        reason
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -1185,6 +861,7 @@ fn combine_output(output: &Output) -> String {
     text
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn last_non_empty_line(text: &str) -> Option<String> {
     text.lines()
         .rev()
@@ -2525,14 +2202,46 @@ mod rewrite_tests {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod install_summary_tests {
+    #[test]
+    fn the_last_real_step_is_reported() {
+        let log = "[LinxPanel] Starting OpenResty install\n\
+            [LinxPanel] Installing build tools: make gcc\n\
+            E: Unable to locate package libpcre3-dev\n\
+            [LinxPanel] Build tool 'make' could not be installed; see the package manager output above\n\
+            [LinxPanel] OpenResty source fallback failed\n";
+        let summary = super::summarize_linux_install_error(log);
+        assert!(
+            summary.contains("Build tool 'make' could not be installed"),
+            "{summary}"
+        );
+        assert!(!summary.contains("source fallback failed"));
+        let locked = "E: Could not get lock /var/lib/dpkg/lock-frontend";
+        assert!(super::summarize_linux_install_error(locked).contains("apt lock"));
+    }
+
+    #[test]
+    fn the_script_is_embedded_as_written() {
+        assert!(super::QUICK_INSTALL_SCRIPT.starts_with("#!/usr/bin/env bash"));
+        assert!(super::QUICK_INSTALL_SCRIPT.contains("drop_openresty_repo"));
+    }
+}
+
 #[cfg(test)]
 mod reload_tests {
     #[test]
     fn recognises_a_stopped_server() {
-        assert!(super::not_running("[alert] 18667#18667: kill(7872, 1) failed (3: No such process)"));
-        assert!(super::not_running("nginx: [error] invalid PID number \"\" in \"/run/openresty.pid\""));
+        assert!(super::not_running(
+            "[alert] 18667#18667: kill(7872, 1) failed (3: No such process)"
+        ));
+        assert!(super::not_running(
+            "nginx: [error] invalid PID number \"\" in \"/run/openresty.pid\""
+        ));
         assert!(super::not_running("nginx: [error] open() \"/usr/local/openresty/nginx/logs/nginx.pid\" failed (2: No such file or directory)"));
-        assert!(!super::not_running("nginx: [emerg] unknown directive \"foo\""));
+        assert!(!super::not_running(
+            "nginx: [emerg] unknown directive \"foo\""
+        ));
     }
 }
 
