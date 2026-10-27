@@ -197,6 +197,12 @@ export const installDbEngine = (engine: string, version?: string) =>
     request.post(`/databases/engines/${engine}/install`, version ? { version } : {}),
   )
 export const restartDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/restart`)
+export const getDbVersions = (engine: string) => request.get(`/databases/engines/${engine}/versions`, { timeout: 60000 })
+export const getDbNetwork = (engine: string) => request.get(`/databases/engines/${engine}/network`)
+export const setMysqlRemote = (data: { enabled: boolean; allow_from: string }) =>
+  request.post('/databases/engines/mysql/remote', data, { timeout: 120000 })
+export const changeDatabaseHost = (name: string, host: string) =>
+  request.post(`/databases/mysql/${encodeURIComponent(name)}/host`, { host })
 export const setMysqlAdmin = (data: { user: string; password: string }) =>
   request.post('/databases/engines/mysql/admin', data)
 export const setRedisPassword = (password: string) =>

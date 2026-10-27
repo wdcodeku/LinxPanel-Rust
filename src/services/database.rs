@@ -435,11 +435,26 @@ fn pg_databases() -> Result<Vec<String>, String> {
 
 /// Installs and starts an engine; for MySQL also sets up the panel's admin login.
 /// Returns the install log and, for MySQL, the new admin credentials.
-pub fn install(engine: Engine) -> (String, Option<MysqlAdmin>) {
+/// Installs the engine; `version` is an id from `dbnet::versions` (None or
+/// "default": the distro default packages).
+pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAdmin>) {
     let mut log = format!("[LinxPanel] Installing {}\n", engine.display_name());
     super::tasks::note(&log);
     let manager = runtime::package_manager();
-    let packages = engine.packages(manager);
+    // MariaDB and MySQL (or two PostgreSQL clusters on one port) do not mix.
+    if version.is_some_and(|v| !v.is_empty() && v != "default") && status(engine, None).installed {
+        let line = "[LinxPanel] Already installed; remove the current version before choosing another\n";
+        super::tasks::note(line);
+        log.push_str(line);
+        return (log, None);
+    }
+    let chosen = super::dbnet::packages_for(engine, manager, version);
+    let chosen_refs: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
+    let packages: &[&str] = if chosen.is_some() {
+        &chosen_refs
+    } else {
+        engine.packages(manager)
+    };
     if packages.is_empty() {
         log.push_str("[LinxPanel] No install recipe for this system\n");
         return (log, None);
@@ -776,6 +791,42 @@ pub async fn delete(
 }
 
 /// Sets a new password for the database's user; returns it.
+/// Changes where a panel-created MySQL user may connect from
+/// (localhost / % / an IP), keeping its password and grants.
+pub async fn change_host(
+    pool: &SqlitePool,
+    name: &str,
+    host: &str,
+    admin: Option<MysqlAdmin>,
+) -> Result<(), String> {
+    let host = host.trim().to_string();
+    validate_host(&host)?;
+    let record = record(pool, Engine::Mysql, name)
+        .await
+        .ok_or("This database was not created by the panel, so its user is unknown")?;
+    if record.host == host {
+        return Ok(());
+    }
+    let (u, old, new) = (record.username.clone(), record.host.clone(), host.clone());
+    tokio::task::spawn_blocking(move || {
+        let admin = admin.ok_or("MySQL is not set up for the panel")?;
+        mysql_query(
+            &admin,
+            &format!("RENAME USER '{u}'@'{old}' TO '{u}'@'{new}';\nFLUSH PRIVILEGES;\n"),
+        )
+        .map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    sqlx::query("UPDATE databases SET host = ? WHERE engine = 'mysql' AND name = ?")
+        .bind(&host)
+        .bind(name)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub async fn change_password(
     pool: &SqlitePool,
     engine: Engine,

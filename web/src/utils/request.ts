@@ -65,6 +65,7 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'An update is already running': 'upd.alreadyRunning',
   'Already up to date': 'upd.alreadyLatest',
   'Update started': 'upd.started',
+  'Access host changed': 'dbm.hostChanged',
   'Failed - see the log': 'task.failedSeeLog',
   'Update time must be HH:MM': 'upd.timeFormat',
   'Enter an http(s):// address': 'upd.urlFormat',

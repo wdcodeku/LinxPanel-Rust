@@ -2,22 +2,26 @@
 //! users, rotate passwords, back up and restore.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::database::{self, Engine, MysqlAdmin};
-use crate::services::tasks;
+use crate::services::{dbnet, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/databases/engines", get(engines))
         .route("/databases/engines/{engine}/install", post(install))
+        .route("/databases/engines/{engine}/versions", get(versions))
+        .route("/databases/engines/{engine}/network", get(network))
+        .route("/databases/engines/mysql/remote", post(set_remote))
         .route("/databases/engines/{engine}/restart", post(restart))
         .route("/databases/engines/mysql/admin", post(set_mysql_admin))
         .route(
@@ -27,6 +31,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/databases", get(list).post(create))
         .route("/databases/{engine}/{name}/delete", post(delete))
         .route("/databases/{engine}/{name}/password", post(change_password))
+        .route("/databases/mysql/{name}/host", post(change_host))
         .route(
             "/databases/{engine}/{name}/backups",
             get(list_backups).post(create_backup),
@@ -81,26 +86,125 @@ struct LogResult {
     log: String,
 }
 
+#[derive(Deserialize, Default)]
+struct InstallRequest {
+    /// An id from the versions endpoint; empty for the distro default.
+    #[serde(default)]
+    version: String,
+}
+
 /// Starts the install as a background task (its log streams to the browser).
 async fn install(
     State(state): State<Arc<AppState>>,
     Path(engine): Path<String>,
+    body: Option<Json<InstallRequest>>,
 ) -> Json<ApiResponse<tasks::Started>> {
     let engine = match Engine::parse(&engine) {
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
+    let version = body.map(|Json(b)| b.version).unwrap_or_default();
     let title = format!("Install {}", engine.as_str());
     let task_state = state.clone();
     Json(ApiResponse::ok(state.tasks.start(
         "db-install",
         &title,
-        install_task(task_state, engine),
+        install_task(task_state, engine, version),
     )))
 }
 
-async fn install_task(state: Arc<AppState>, engine: Engine) -> ApiResponse<LogResult> {
-    let (log, created_admin) = match tasks::blocking(move || database::install(engine)).await {
+async fn versions(Path(engine): Path<String>) -> Json<ApiResponse<Vec<dbnet::VersionOption>>> {
+    match Engine::parse(&engine) {
+        Ok(engine) => Json(ApiResponse::ok(
+            tokio::task::spawn_blocking(move || dbnet::versions(engine))
+                .await
+                .unwrap_or_default(),
+        )),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+#[derive(Serialize)]
+struct NetworkView {
+    #[serde(flatten)]
+    info: dbnet::NetworkInfo,
+    /// The visitor's address, offered as the allowed source.
+    your_ip: String,
+}
+
+async fn network(
+    Path(engine): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> Json<ApiResponse<NetworkView>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    match tokio::task::spawn_blocking(move || dbnet::network_info(engine)).await {
+        Ok(info) => Json(ApiResponse::ok(NetworkView {
+            info,
+            your_ip: peer.ip().to_canonical().to_string(),
+        })),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct RemoteRequest {
+    enabled: bool,
+    /// Limit the firewall rule to this IP / CIDR; empty for any.
+    #[serde(default)]
+    allow_from: String,
+}
+
+async fn set_remote(Json(req): Json<RemoteRequest>) -> Json<ApiResponse<String>> {
+    let allow_from = req.allow_from.trim().to_string();
+    if !allow_from.is_empty() {
+        if let Err(err) = crate::services::panel_access::parse_ip_list(&allow_from) {
+            return Json(ApiResponse::err(&err));
+        }
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        dbnet::set_mysql_remote(
+            req.enabled,
+            Some(allow_from.as_str()).filter(|s| !s.is_empty()),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(log)) => Json(ApiResponse::ok(log)),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct HostRequest {
+    host: String,
+}
+
+async fn change_host(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<HostRequest>,
+) -> Json<ApiResponse<()>> {
+    let admin = database::load_mysql_admin(&state.db).await;
+    match database::change_host(&state.db, &name, &req.host, admin).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Access host changed")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn install_task(
+    state: Arc<AppState>,
+    engine: Engine,
+    version: String,
+) -> ApiResponse<LogResult> {
+    let (log, created_admin) = match tasks::blocking(move || {
+        database::install(engine, Some(version.as_str()).filter(|v| !v.is_empty()))
+    })
+    .await
+    {
         Ok(result) => result,
         Err(err) => return ApiResponse::err(&err.to_string()),
     };

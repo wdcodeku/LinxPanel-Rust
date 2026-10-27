@@ -89,7 +89,8 @@ pub fn run_command(
     }
 
     // Inside a background task, show the command and stream its output live.
-    let task = super::tasks::current();
+    // `which` lookups are internal plumbing, not steps worth showing.
+    let task = super::tasks::current().filter(|_| program != "which");
     if let Some(task) = &task {
         task.append(&format!("$ {}\n", describe(&command)));
     }
@@ -169,11 +170,22 @@ fn describe(command: &Command) -> String {
         let secret = ["password", "passwd", "secret", "token", "identified by"]
             .iter()
             .any(|word| lower.contains(word));
-        parts.push(if secret { "***".into() } else { arg.into_owned() });
+        parts.push(if secret {
+            "***".into()
+        } else {
+            arg.into_owned()
+        });
     }
     let line = parts.join(" ");
     if line.len() > 400 {
-        format!("{}…", &line[..line.char_indices().nth(400).map(|(i, _)| i).unwrap_or(line.len())])
+        format!(
+            "{}…",
+            &line[..line
+                .char_indices()
+                .nth(400)
+                .map(|(i, _)| i)
+                .unwrap_or(line.len())]
+        )
     } else {
         line
     }
