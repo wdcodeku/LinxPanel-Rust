@@ -372,7 +372,6 @@ pub fn start(
         ("LINXPANEL_VERSION", release.tag.clone()),
         ("LINXPANEL_GITHUB_REPO", repo.clone()),
         ("LINXPANEL_GITHUB_PROXY", prefix.to_string()),
-        ("LINXPANEL_LANG", "en".into()),
         (
             "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),

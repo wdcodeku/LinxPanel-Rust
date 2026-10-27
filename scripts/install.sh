@@ -44,6 +44,10 @@ HEALTH_TIMEOUT="${LINXPANEL_HEALTH_TIMEOUT:-30}"
 HARDEN_KERNEL="${LINXPANEL_HARDEN:-1}"
 SERVICE_NAME="linxpanel"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+# Choices made at install time; upgrades reuse them instead of asking again.
+INSTALL_CONF="${INSTALL_ROOT}/install.conf"
+IS_UPGRADE=0
+[[ -x "${INSTALL_ROOT}/bin/linxpanel" ]] && IS_UPGRADE=1
 
 normalize_lang() {
   local value="${1:-}"
@@ -79,7 +83,19 @@ prompt() {
   printf '%s' "${reply}"
 }
 
+saved_setting() {
+  [[ -r "${INSTALL_CONF}" ]] || return 0
+  sed -n -E "s/^$1=([A-Za-z0-9_-]*)$/\1/p" "${INSTALL_CONF}" | head -n1
+}
+
+# Upgrades never ask: they take the saved choice, else a sensible default.
 select_language() {
+  if [[ -z "${LANGUAGE}" && "${IS_UPGRADE}" == "1" ]]; then
+    LANGUAGE="$(saved_setting LANGUAGE)"
+    if [[ -z "${LANGUAGE}" ]]; then
+      case "${LC_ALL:-${LANG:-}}" in zh*) LANGUAGE="zh" ;; *) LANGUAGE="en" ;; esac
+    fi
+  fi
   if [[ -n "${LANGUAGE}" ]]; then
     LANGUAGE="$(normalize_lang "${LANGUAGE}")"
     return
@@ -96,6 +112,10 @@ select_language() {
 }
 
 select_install_mode() {
+  if [[ -z "${INSTALL_MODE}" && "${IS_UPGRADE}" == "1" ]]; then
+    INSTALL_MODE="$(saved_setting INSTALL_MODE)"
+    INSTALL_MODE="${INSTALL_MODE:-binary}"
+  fi
   if [[ -n "${INSTALL_MODE}" ]]; then
     INSTALL_MODE="$(normalize_install_mode "${INSTALL_MODE}")"
     return
@@ -780,11 +800,22 @@ existing_port() {
 }
 
 # Saved for nohup mode and `Lp`, which have no unit file to read settings from.
+# Lines added by hand are kept across upgrades.
 write_env_file() {
-  ${SUDO} tee "${INSTALL_ROOT}/linxpanel.env" >/dev/null <<EOF
-PORT=${PORT}
-DATABASE_URL=sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc
-EOF
+  local env_file="${INSTALL_ROOT}/linxpanel.env" extra=""
+  if [[ -f "${env_file}" ]]; then
+    extra="$(grep -v -E '^(PORT|DATABASE_URL)=' "${env_file}" || true)"
+  fi
+  {
+    echo "PORT=${PORT}"
+    echo "DATABASE_URL=sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc"
+    [[ -n "${extra}" ]] && printf '%s\n' "${extra}"
+  } | ${SUDO} tee "${env_file}" >/dev/null
+}
+
+write_install_conf() {
+  printf 'LANGUAGE=%s\nINSTALL_MODE=%s\n' "${LANGUAGE}" "${CHOSEN_MODE}" \
+    | ${SUDO} tee "${INSTALL_CONF}" >/dev/null
 }
 
 stop_panel() {
@@ -1171,9 +1202,7 @@ if require_cmd systemctl && [[ -d /run/systemd/system ]]; then
   USE_SYSTEMD=1
 fi
 
-IS_UPGRADE=0
-if [[ -x "${INSTALL_ROOT}/bin/linxpanel" ]]; then
-  IS_UPGRADE=1
+if [[ "${IS_UPGRADE}" == "1" ]]; then
   logf upgrade_detected "$(bin_version "${INSTALL_ROOT}/bin/linxpanel" || true)"
   # An upgrade keeps the port it was installed with unless one is given explicitly.
   PORT="${PORT:-$(existing_port)}"
@@ -1185,6 +1214,8 @@ if [[ "${IS_UPGRADE}" == "0" ]] && port_in_use "${PORT}"; then
 fi
 
 select_install_mode
+# Saved as chosen: a one-off fallback to a source build must not stick.
+CHOSEN_MODE="${INSTALL_MODE}"
 if [[ "${INSTALL_MODE}" == "build" ]]; then
   logf install_mode_selected "$(msg mode_build)"
 else
@@ -1241,6 +1272,7 @@ ${SUDO} chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}"
 ${SUDO} chmod 700 "${INSTALL_ROOT}/data"
 
 write_env_file
+write_install_conf
 write_logrotate
 harden_kernel
 if [[ "${USE_SYSTEMD}" == "1" ]]; then
