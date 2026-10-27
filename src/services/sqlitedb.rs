@@ -66,17 +66,7 @@ fn modified(meta: &std::fs::Metadata) -> Option<String> {
 
 fn owner_name(meta: &std::fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
-    let uid = meta.uid();
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    passwd
-        .lines()
-        .find_map(|line| {
-            let mut cols = line.split(':');
-            let name = cols.next()?;
-            let id: u32 = cols.nth(1)?.parse().ok()?;
-            (id == uid).then(|| name.to_string())
-        })
-        .or_else(|| Some(uid.to_string()))
+    Some(crate::utils::user_name(meta.uid()))
 }
 
 fn canonical(path: &Path) -> PathBuf {

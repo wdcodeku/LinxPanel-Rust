@@ -149,7 +149,12 @@ function connect(path?: string) {
     attempts = 0
     emit('connected')
     refit()
-    if (target) ws.send(JSON.stringify({ type: 'chdir', path: target }))
+    // The shell starts in `target` already (it is in the URL); typing a cd
+    // as well only echoed a stray command before the first prompt.
+    if (target) {
+      cwd.value = target
+      emit('update:cwd', target)
+    }
     term?.focus()
   }
 

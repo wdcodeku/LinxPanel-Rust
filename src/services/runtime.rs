@@ -177,34 +177,27 @@ pub struct RuntimeInstallRequest {
     pub kind: String,
 }
 
-/// Returns the detected package manager, preferring the distro's native one.
+/// Returns the detected package manager, preferring the distro's native one
+/// (looked up once: it does not change while the panel runs).
 pub fn package_manager() -> &'static str {
-    for candidate in ["apt-get", "dnf", "yum", "apk"] {
-        if shell::has_binary(candidate) {
-            return candidate;
-        }
-    }
-    if shell::has_binary("brew") {
-        return "brew";
-    }
-    "none"
+    static MANAGER: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    MANAGER.get_or_init(|| {
+        ["apt-get", "dnf", "yum", "apk", "brew"]
+            .into_iter()
+            .find(|candidate| shell::has_binary(candidate))
+            .unwrap_or("none")
+    })
 }
 
 fn spec_for(kind: &str) -> Option<&'static RuntimeSpec> {
     RUNTIMES.iter().find(|spec| spec.kind == kind)
 }
 
-/// Reads a version string from a binary. Some tools print to stderr, so both are read.
+/// Reads a version string from a binary (cached until the binary changes).
+/// Some tools print to stderr, so both are read.
 fn probe_version(binary: &str, args: &[&str]) -> Option<(String, String)> {
-    if !shell::has_binary(binary) {
-        return None;
-    }
-    let output = shell::run(binary, args).ok()?;
-    let text = if output.stdout.trim().is_empty() {
-        output.stderr
-    } else {
-        output.stdout
-    };
+    let path = shell::which(binary)?;
+    let text = shell::cached_version_output(binary, args)?;
     // The JVM announces JAVA_TOOL_OPTIONS / _JAVA_OPTIONS before its version.
     let first_line = text
         .lines()
@@ -212,11 +205,7 @@ fn probe_version(binary: &str, args: &[&str]) -> Option<(String, String)> {
         .find(|line| !line.is_empty() && !line.starts_with("Picked up "))
         .unwrap_or("")
         .to_string();
-    let path = shell::run(if cfg!(windows) { "where" } else { "which" }, &[binary])
-        .ok()
-        .and_then(|out| out.stdout.lines().next().map(|s| s.trim().to_string()))
-        .unwrap_or_default();
-    Some((extract_version(&first_line), path))
+    Some((extract_version(&first_line), path.display().to_string()))
 }
 
 /// Pulls `8.3.2` out of lines like `PHP 8.3.2 (cli) (built: ...)` or `go version go1.22.0 linux/amd64`.
@@ -314,8 +303,19 @@ fn packages_for(spec: &RuntimeSpec, manager: &str) -> Vec<&'static str> {
     }
 }
 
+/// All runtimes, probed in parallel (a cold JVM alone takes a while).
 pub fn list() -> Vec<RuntimeStatus> {
-    RUNTIMES.iter().map(detect_one).collect()
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = RUNTIMES
+            .iter()
+            .map(|spec| scope.spawn(move || detect_one(spec)))
+            .collect();
+        handles
+            .into_iter()
+            .zip(RUNTIMES.iter())
+            .map(|(handle, spec)| handle.join().unwrap_or_else(|_| detect_one(spec)))
+            .collect()
+    })
 }
 
 /// Extensions common PHP apps (WordPress, Laravel, Typecho...) need. Installed one

@@ -104,7 +104,9 @@ router.beforeEach((to, _from, next) => {
   const isLoginRoute = to.name === 'Login' || normalizedPath === '/login'
 
   if (!token && !to.meta.public) {
-    next('/login')
+    // Come back to this page after logging in.
+    const back = to.fullPath && to.fullPath !== '/' && !isLoginRoute ? { redirect: to.fullPath } : undefined
+    next({ path: '/login', query: back })
     return
   }
 

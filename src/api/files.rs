@@ -36,15 +36,29 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/files/delete", post(delete_path))
         .route("/files/rename", post(rename_path))
         .route("/files/info", get(file_info))
+        .route("/files/exists", get(path_exists))
         .route(
             "/files/upload",
-            post(upload_files).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)),
+            post(upload_files).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
         )
         .route("/files/exec", post(exec_cmd))
         .route("/files/exec/stream", post(exec_cmd_stream))
         .route("/files/terminal/ws", get(terminal_ws))
         .route("/files/chmod", post(chmod_path))
+        .route("/files/chown", post(chown_path))
+        .route("/files/owners", get(owner_choices))
 }
+
+/// Uploads stream to disk, so the limit is about disk space, not memory:
+/// 20 GB (what 32-bit builds can express, at most).
+const UPLOAD_LIMIT: usize = {
+    let limit: u64 = 20 << 30;
+    if limit > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        limit as usize
+    }
+};
 
 #[derive(Debug, Deserialize)]
 struct PathQuery {
@@ -59,6 +73,8 @@ struct FileEntry {
     size: u64,
     modified: String,
     permissions: String,
+    owner: String,
+    group: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,6 +171,17 @@ async fn file_roots() -> Json<ApiResponse<FileRootsPayload>> {
     }))
 }
 
+/// Runs filesystem work on the blocking pool: a large directory or a slow
+/// disk must not hold one of the few async workers (every other request of
+/// the panel would wait behind it on a busy server).
+async fn off_runtime<T: Serialize + Send + 'static>(
+    work: impl FnOnce() -> Json<ApiResponse<T>> + Send + 'static,
+) -> Json<ApiResponse<T>> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|err| Json(ApiResponse::err(&err.to_string())))
+}
+
 fn normalize_fs_path(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     #[cfg(windows)]
@@ -209,6 +236,21 @@ fn format_permissions(metadata: &std::fs::Metadata) -> String {
     }
 }
 
+fn owner_group(metadata: Option<&std::fs::Metadata>) -> (String, String) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(meta) = metadata {
+            return (
+                crate::utils::user_name(meta.uid()),
+                crate::utils::group_name(meta.gid()),
+            );
+        }
+    }
+    let _ = metadata;
+    (String::new(), String::new())
+}
+
 fn file_allocated_size(metadata: &std::fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
@@ -246,6 +288,10 @@ fn calculate_directory_size(path: &Path) -> u64 {
 }
 
 async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntry>>> {
+    off_runtime(move || list_files_blocking(q)).await
+}
+
+fn list_files_blocking(q: PathQuery) -> Json<ApiResponse<Vec<FileEntry>>> {
     let normalized_path = normalize_fs_path(&q.path);
     let dir = std::path::Path::new(&normalized_path);
     if !dir.exists() {
@@ -279,6 +325,7 @@ async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntr
                         "644".into()
                     }
                 });
+                let (owner, group) = owner_group(meta.as_ref());
                 entries.push(FileEntry {
                     name,
                     path,
@@ -286,6 +333,8 @@ async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntr
                     size,
                     modified,
                     permissions,
+                    owner,
+                    group,
                 });
             }
             entries.sort_by(|a, b| {
@@ -299,6 +348,10 @@ async fn list_files(Query(q): Query<PathQuery>) -> Json<ApiResponse<Vec<FileEntr
     }
 }
 async fn read_file(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileContent>> {
+    off_runtime(move || read_file_blocking(q)).await
+}
+
+fn read_file_blocking(q: PathQuery) -> Json<ApiResponse<FileContent>> {
     let normalized_path = normalize_fs_path(&q.path);
     let p = std::path::Path::new(&normalized_path);
     if !p.exists() || !p.is_file() {
@@ -387,6 +440,10 @@ async fn directory_size(Query(q): Query<PathQuery>) -> Json<ApiResponse<DirSizeP
 }
 
 async fn write_file(Json(req): Json<WriteRequest>) -> Json<ApiResponse<()>> {
+    off_runtime(move || write_file_blocking(req)).await
+}
+
+fn write_file_blocking(req: WriteRequest) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
     if let Some(parent) = std::path::Path::new(&normalized_path).parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -398,6 +455,10 @@ async fn write_file(Json(req): Json<WriteRequest>) -> Json<ApiResponse<()>> {
 }
 
 async fn mkdir(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
+    off_runtime(move || mkdir_blocking(req)).await
+}
+
+fn mkdir_blocking(req: PathQuery) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
     match std::fs::create_dir_all(&normalized_path) {
         Ok(_) => Json(ApiResponse::ok_msg("Directory created")),
@@ -406,6 +467,10 @@ async fn mkdir(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
 }
 
 async fn delete_path(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
+    off_runtime(move || delete_path_blocking(req)).await
+}
+
+fn delete_path_blocking(req: PathQuery) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
     let p = std::path::Path::new(&normalized_path);
     if !p.exists() {
@@ -423,6 +488,10 @@ async fn delete_path(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
 }
 
 async fn rename_path(Json(req): Json<RenameRequest>) -> Json<ApiResponse<()>> {
+    off_runtime(move || rename_path_blocking(req)).await
+}
+
+fn rename_path_blocking(req: RenameRequest) -> Json<ApiResponse<()>> {
     let from = normalize_fs_path(&req.from);
     let to = normalize_fs_path(&req.to);
     match std::fs::rename(&from, &to) {
@@ -432,6 +501,10 @@ async fn rename_path(Json(req): Json<RenameRequest>) -> Json<ApiResponse<()>> {
 }
 
 async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
+    off_runtime(move || file_info_blocking(q)).await
+}
+
+fn file_info_blocking(q: PathQuery) -> Json<ApiResponse<FileEntry>> {
     let normalized_path = normalize_fs_path(&q.path);
     let p = std::path::Path::new(&normalized_path);
     if !p.exists() {
@@ -452,12 +525,15 @@ async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
             dt.format("%Y-%m-%d %H:%M:%S").to_string()
         })
         .unwrap_or_default();
+    let (owner, group) = owner_group(meta.as_ref());
     Json(ApiResponse::ok(FileEntry {
         name,
         path: normalized_path,
         is_dir,
         size,
         modified,
+        owner,
+        group,
         permissions: meta.as_ref().map(format_permissions).unwrap_or_else(|| {
             if is_dir {
                 "755".into()
@@ -468,10 +544,156 @@ async fn file_info(Query(q): Query<PathQuery>) -> Json<ApiResponse<FileEntry>> {
     }))
 }
 
+#[derive(Debug, Serialize)]
+struct PathState {
+    exists: bool,
+    is_dir: bool,
+}
+
+/// Whether a path exists, without it being an error when it does not (the
+/// pages use it to offer creating a missing directory).
+async fn path_exists(Query(q): Query<PathQuery>) -> Json<ApiResponse<PathState>> {
+    off_runtime(move || {
+        let path = normalize_fs_path(&q.path);
+        let meta = std::fs::metadata(&path).ok();
+        Json(ApiResponse::ok(PathState {
+            exists: meta.is_some(),
+            is_dir: meta.map(|m| m.is_dir()).unwrap_or(false),
+        }))
+    })
+    .await
+}
+
 #[derive(Debug, Deserialize)]
 struct ChmodRequest {
     path: String,
     mode: String,
+    /// Directories: also everything inside.
+    #[serde(default)]
+    recursive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChownRequest {
+    path: String,
+    /// Name or number; empty keeps the current one.
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    recursive: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OwnerChoices {
+    users: Vec<String>,
+    groups: Vec<String>,
+}
+
+/// Users and groups for the permission dialog: people and service accounts
+/// first (www-data, mysql ...), then the rest.
+async fn owner_choices() -> Json<ApiResponse<OwnerChoices>> {
+    off_runtime(|| {
+        let names = |list: Vec<(u32, String)>| -> Vec<String> {
+            let mut list = list;
+            list.sort_by_key(|(id, name)| (*id == 65534, *id != 0 && *id < 33, name.clone()));
+            list.into_iter().map(|(_, name)| name).collect()
+        };
+        Json(ApiResponse::ok(OwnerChoices {
+            users: names(crate::utils::all_users()),
+            groups: names(crate::utils::all_groups()),
+        }))
+    })
+    .await
+}
+
+/// Applies `apply` to `root` and, when `recursive`, to everything below it.
+/// The chosen path itself acts like plain chmod / chown (a link means its
+/// target); links met on the way down are never followed (a link to / inside
+/// a website must not hand the whole system to its user). Returns how many
+/// entries failed.
+#[cfg(unix)]
+fn walk_apply(
+    root: &Path,
+    recursive: bool,
+    apply: &dyn Fn(&Path, bool) -> std::io::Result<()>,
+) -> Result<usize, String> {
+    let meta = std::fs::symlink_metadata(root).map_err(|e| e.to_string())?;
+    apply(root, false).map_err(|e| e.to_string())?;
+    let mut failed = 0;
+    if recursive && meta.is_dir() {
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                failed += 1;
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                let path = entry.path();
+                if apply(&path, kind.is_symlink()).is_err() {
+                    failed += 1;
+                }
+                if kind.is_dir() {
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    Ok(failed)
+}
+
+async fn chown_path(Json(req): Json<ChownRequest>) -> Json<ApiResponse<()>> {
+    off_runtime(move || {
+        #[cfg(unix)]
+        {
+            let path = PathBuf::from(normalize_fs_path(&req.path));
+            if std::fs::symlink_metadata(&path).is_err() {
+                return Json(ApiResponse::err("Path not found"));
+            }
+            let uid = match req.user.trim() {
+                "" => None,
+                user => match crate::utils::uid_of(user) {
+                    Some(uid) => Some(uid),
+                    None => return Json(ApiResponse::err(&format!("No such user: {}", user))),
+                },
+            };
+            let gid = match req.group.trim() {
+                "" => None,
+                group => match crate::utils::gid_of(group) {
+                    Some(gid) => Some(gid),
+                    None => return Json(ApiResponse::err(&format!("No such group: {}", group))),
+                },
+            };
+            if uid.is_none() && gid.is_none() {
+                return Json(ApiResponse::err("Choose a user or a group"));
+            }
+            let apply = |path: &Path, link: bool| {
+                if link {
+                    std::os::unix::fs::lchown(path, uid, gid)
+                } else {
+                    std::os::unix::fs::chown(path, uid, gid)
+                }
+            };
+            match walk_apply(&path, req.recursive, &apply) {
+                Ok(0) => Json(ApiResponse::ok_msg("Owner changed")),
+                Ok(failed) => Json(ApiResponse::err(&format!(
+                    "Owner changed, but {} entries could not be changed",
+                    failed
+                ))),
+                Err(err) => Json(ApiResponse::err(&format!("Failed: {}", err))),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = req;
+            Json(ApiResponse::err("Not supported on this system"))
+        }
+    })
+    .await
 }
 
 /// "644", "0755", "4755" -> mode bits; anything else is rejected.
@@ -484,6 +706,10 @@ fn parse_octal_mode(raw: &str) -> Option<u32> {
 }
 
 async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
+    off_runtime(move || chmod_path_blocking(req)).await
+}
+
+fn chmod_path_blocking(req: ChmodRequest) -> Json<ApiResponse<()>> {
     let normalized_path = normalize_fs_path(&req.path);
     let p = std::path::Path::new(&normalized_path);
     if !p.exists() {
@@ -499,8 +725,20 @@ async fn chmod_path(Json(req): Json<ChmodRequest>) -> Json<ApiResponse<()>> {
             return Json(ApiResponse::err("Mode must be octal, e.g. 644 or 0755"));
         };
         use std::os::unix::fs::PermissionsExt;
-        match std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)) {
-            Ok(()) => Json(ApiResponse::ok_msg("Permission changed")),
+        // Links have no mode of their own; changing one would change its target.
+        let apply = |path: &Path, link: bool| {
+            if link {
+                Ok(())
+            } else {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            }
+        };
+        match walk_apply(p, req.recursive, &apply) {
+            Ok(0) => Json(ApiResponse::ok_msg("Permission changed")),
+            Ok(failed) => Json(ApiResponse::err(&format!(
+                "Permission changed, but {} entries could not be changed",
+                failed
+            ))),
             Err(e) => Json(ApiResponse::err(&format!("Failed: {}", e))),
         }
     }
@@ -1106,6 +1344,10 @@ async fn stream_pipe_output<R>(
 }
 
 async fn exec_cmd(Json(req): Json<ExecRequest>) -> Json<ApiResponse<ExecResult>> {
+    off_runtime(move || exec_cmd_blocking(req)).await
+}
+
+fn exec_cmd_blocking(req: ExecRequest) -> Json<ApiResponse<ExecResult>> {
     let cwd = normalize_fs_path(&req.cwd.unwrap_or_else(|| "/".into()));
     let shell = if cfg!(windows) { "cmd" } else { "sh" };
     let flag = if cfg!(windows) { "/C" } else { "-c" };
@@ -1128,6 +1370,52 @@ async fn exec_cmd(Json(req): Json<ExecRequest>) -> Json<ApiResponse<ExecResult>>
         }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
+}
+
+/// Streams one uploaded file to disk: chunks go to a hidden temporary file
+/// next to the target (memory stays flat however large the file), which
+/// replaces the target only once complete - an interrupted upload never
+/// leaves a truncated file behind.
+async fn receive_upload(
+    mut field: axum::extract::multipart::Field<'_>,
+    target: &Path,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let parent = target.parent().ok_or("Invalid upload path")?;
+    let partial = parent.join(format!(
+        ".{}.uploading-{}",
+        target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let result = async {
+        let mut file = tokio::fs::File::create(&partial)
+            .await
+            .map_err(|e| format!("Failed to save upload: {}", e))?;
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|e| format!("Upload interrupted: {}", e))?
+        {
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("Failed to save upload: {}", e))?;
+        }
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to save upload: {}", e))?;
+        drop(file);
+        tokio::fs::rename(&partial, target)
+            .await
+            .map_err(|e| format!("Failed to save upload: {}", e))
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&partial).await;
+    }
+    result
 }
 
 async fn upload_files(mut multipart: Multipart) -> Json<ApiResponse<UploadResult>> {
@@ -1186,22 +1474,9 @@ async fn upload_files(mut multipart: Multipart) -> Json<ApiResponse<UploadResult
             return Json(ApiResponse::err("Invalid upload file name"));
         };
 
-        let file_bytes = match field.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return Json(ApiResponse::err(&format!(
-                    "Failed to read upload field: {}",
-                    error
-                )))
-            }
-        };
-
         let target_file = std::path::Path::new(&target_dir_path).join(&file_name);
-        if let Err(error) = std::fs::write(&target_file, file_bytes) {
-            return Json(ApiResponse::err(&format!(
-                "Failed to save upload: {}",
-                error
-            )));
+        if let Err(error) = receive_upload(field, &target_file).await {
+            return Json(ApiResponse::err(&error));
         }
 
         uploaded_files.push(target_file.to_string_lossy().replace('\\', "/"));

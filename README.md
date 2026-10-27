@@ -196,6 +196,9 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 - **站点默认加固**：上传上限 256MB、禁止访问 `.env` / `.git` 等隐藏文件、FastCGI 超时 300 秒；服务器未启用 IPv6 时不再生成 `listen [::]`（否则 nginx 无法启动）
 - **项目依赖**（运行环境 → 应用 →「安装依赖」）：Python 自动创建 `.venv` 并 `pip install -r requirements.txt`；Node 按锁文件使用 npm / pnpm / yarn 安装并执行 build；PHP 执行 `composer install`。可在应用环境变量中设置 `PIP_INDEX_URL`、`npm_config_registry` 使用镜像
   - 启动入口支持 `main.py`、`-m uvicorn main:app`、`gunicorn app:app`、`npm start`、`next start` 等写法，自动使用项目的 `.venv` 与 `node_modules/.bin`
+- **文件管理**：上传带逐个文件进度、速度、取消与重试（流式写入磁盘，大文件不占内存，中断不留残缺文件）；可视化权限编辑（读写执行勾选、所有者 / 用户组、可应用到子目录）；记住上次浏览的目录；输入或跳转到不存在的目录时提示创建
+- **运行环境**：应用目录可一键在文件管理或终端中打开；新建应用时可浏览选择目录、目录不存在时提示创建、启动文件按语言自动提示；端口可选
+- **高负载下依然流畅**：外部命令改为即时等待（原先每条命令至少多等 20ms），程序查找不再启动子进程，运行环境 / 数据库版本信息缓存，文件操作移出异步线程，面板数据库写入不再逐次 fsync；面板管理的应用和长任务以普通优先级运行，不与面板争抢
 - **备份**：站点详情「备份」页可立即备份整站目录（`.tar.gz`）、下载、恢复（恢复失败自动还原原目录）；计划任务新增「备份网站 / 备份数据库」类型，可设置保留份数（底层为 `linxpanel backup site|db ... --keep N`）
 
 ### 网站类型与伪静态
@@ -493,6 +496,9 @@ The panel detects and installs language runtimes, and supervises application pro
 - **Hardened site defaults**: 256MB uploads, dotfiles (`.env`, `.git`) denied, 300s FastCGI timeout; no `listen [::]` on hosts without IPv6 (nginx would refuse to start)
 - **Project dependencies** (Runtimes → Apps → "Install dependencies"): Python gets a `.venv` and `pip install -r requirements.txt`; Node uses npm / pnpm / yarn per lockfile and runs the build script; PHP runs `composer install`. Set `PIP_INDEX_URL` / `npm_config_registry` in the app's environment for mirrors
   - Entries such as `main.py`, `-m uvicorn main:app`, `gunicorn app:app`, `npm start` or `next start` work, using the project's `.venv` and `node_modules/.bin`
+- **Files**: uploads show per-file progress and speed with cancel and retry (streamed to disk: no memory spike, no half-written files); a visual permission editor (read / write / execute boxes, owner and group, optionally recursive); the last directory is remembered; a missing directory typed or linked to is offered for creation
+- **Runtimes**: open an app's directory in the file manager or a terminal in one click; browse for the directory when creating an app, create it when missing, entry files suggested per language; the port is optional
+- **Smooth under heavy load**: external commands are awaited exactly (each used to cost at least 20 ms more), binaries are found without spawning processes, runtime and database versions are cached, file operations run off the async workers and panel database writes no longer fsync one by one; managed apps and long jobs run at normal priority instead of competing with the panel
 - **Backups**: the site's Backups tab archives the whole directory (`.tar.gz`), downloads and restores it (a failed restore puts the old files back); cron gains "Back up website / database" job types with retention (`linxpanel backup site|db ... --keep N` underneath)
 
 ### Site Types and Rewrite Rules

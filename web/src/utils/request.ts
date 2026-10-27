@@ -153,9 +153,12 @@ request.interceptors.response.use(
     return res.data
   },
   (err) => {
+    // A request the page canceled itself (e.g. an upload) is not an error.
+    if (axios.isCancel(err)) return Promise.reject(err)
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
-      router.push('/login')
+      const here = router.currentRoute.value
+      router.push(here.path === '/login' ? '/login' : { path: '/login', query: { redirect: here.fullPath } })
     }
     const message = /timeout/i.test(err?.message || '')
       ? t('api.timeout')

@@ -363,7 +363,10 @@ fn project_path(work_dir: &std::path::Path) -> Option<String> {
 pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, String> {
     let work_dir = std::path::Path::new(&record.work_dir);
     if !work_dir.is_dir() {
-        return Err(format!("Working directory does not exist: {}", record.work_dir));
+        return Err(format!(
+            "Working directory does not exist: {}",
+            record.work_dir
+        ));
     }
     let has = |file: &str| work_dir.join(file).exists();
     let mut log = String::new();
@@ -395,9 +398,14 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
 
     let result = match record.runtime.as_str() {
         "python" => {
-            let venv = if work_dir.join("venv/bin/python").is_file() { "venv" } else { ".venv" };
+            let venv = if work_dir.join("venv/bin/python").is_file() {
+                "venv"
+            } else {
+                ".venv"
+            };
             if !work_dir.join(venv).join("bin/python").is_file() {
-                let python = runtime::interpreter_path("python").unwrap_or_else(|| "python3".into());
+                let python =
+                    runtime::interpreter_path("python").unwrap_or_else(|| "python3".into());
                 step(&python, &["-m", "venv", venv])?;
             }
             let pip = format!("{}/bin/pip", venv);
@@ -447,7 +455,12 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
             }
             step(
                 "composer",
-                &["install", "--no-dev", "--optimize-autoloader", "--no-interaction"],
+                &[
+                    "install",
+                    "--no-dev",
+                    "--optimize-autoloader",
+                    "--no-interaction",
+                ],
             )
         }
         _ => Err("This runtime has no dependency step".into()),
@@ -580,6 +593,10 @@ fn spawn_child(
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(err_file))
         .kill_on_drop(false);
+    // SAFETY: the hook only makes a system call (see shell::normal_priority).
+    unsafe {
+        command.pre_exec(shell::normal_priority);
+    }
 
     let work_dir = std::path::Path::new(&record.work_dir);
     if let Some(path) = project_path(work_dir) {
@@ -689,7 +706,11 @@ async fn supervise(
 
 fn append_log(path: &std::path::Path, text: &str) {
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = file.write_all(text.as_bytes());
     }
 }
@@ -757,7 +778,14 @@ pub async fn start_autostart_apps(
         }
     };
     for record in records.into_iter().filter(|record| record.autostart) {
-        match start(supervisor.clone(), pool.clone(), data_dir.clone(), record.id).await {
+        match start(
+            supervisor.clone(),
+            pool.clone(),
+            data_dir.clone(),
+            record.id,
+        )
+        .await
+        {
             Ok(()) => tracing::info!("Autostarted application '{}'", record.name),
             Err(err) => tracing::warn!("Autostart failed for '{}': {}", record.name, err),
         }

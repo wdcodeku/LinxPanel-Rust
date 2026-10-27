@@ -73,10 +73,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/sqlite/create", post(sqlite_create))
         .route("/sqlite/remove", post(sqlite_remove))
         .route("/sqlite/tables", get(sqlite_tables))
-        .route(
-            "/sqlite/backups",
-            get(sqlite_backups).post(sqlite_backup),
-        )
+        .route("/sqlite/backups", get(sqlite_backups).post(sqlite_backup))
         .route("/sqlite/restore", post(sqlite_restore))
         .route("/sqlite/backups/delete", post(sqlite_delete_backup))
 }
@@ -102,22 +99,29 @@ struct EngineInfo {
 async fn engines(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<EngineInfo>>> {
     let mysql_admin = admin(&state, Engine::Mysql).await;
     let mongo_admin = admin(&state, Engine::Mongodb).await;
+    // Each engine's checks are independent; run them side by side.
     let result = tokio::task::spawn_blocking(move || {
-        database::ENGINES
-            .iter()
-            .map(|engine| EngineInfo {
-                status: database::status(
-                    *engine,
-                    match engine {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = database::ENGINES
+                .iter()
+                .map(|engine| {
+                    let admin = match engine {
                         Engine::Mongodb => mongo_admin.as_ref(),
                         _ => mysql_admin.as_ref(),
-                    },
-                ),
-                redis_password: (*engine == Engine::Redis)
-                    .then(database::redis_password)
-                    .flatten(),
-            })
-            .collect::<Vec<_>>()
+                    };
+                    scope.spawn(move || EngineInfo {
+                        status: database::status(*engine, admin),
+                        redis_password: (*engine == Engine::Redis)
+                            .then(database::redis_password)
+                            .flatten(),
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect::<Vec<_>>()
+        })
     })
     .await;
     match result {
@@ -318,9 +322,7 @@ async fn set_admin(
         };
         match (engine, given.user.is_empty()) {
             (Engine::Mongodb, true) => crate::services::mongo::bootstrap_admin(),
-            (Engine::Mongodb, false) => {
-                crate::services::mongo::ping(Some(&given)).map(|_| given)
-            }
+            (Engine::Mongodb, false) => crate::services::mongo::ping(Some(&given)).map(|_| given),
             (_, true) => database::bootstrap_mysql_admin(),
             (_, false) => database::verify_mysql_admin(&given).map(|_| given),
         }
@@ -412,8 +414,14 @@ async fn change_password(
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    match database::change_password(&state.db, engine, &name, req.password, admin(&state, engine).await)
-        .await
+    match database::change_password(
+        &state.db,
+        engine,
+        &name,
+        req.password,
+        admin(&state, engine).await,
+    )
+    .await
     {
         Ok(password) => Json(ApiResponse::ok(serde_json::json!({ "password": password }))),
         Err(err) => Json(ApiResponse::err(&err)),

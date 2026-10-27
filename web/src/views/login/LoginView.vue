@@ -40,7 +40,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useI18n } from '@/i18n'
 import { login } from '@/api'
@@ -48,6 +48,7 @@ import { User, Lock, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const { t } = useI18n()
 const formRef = ref()
@@ -76,7 +77,9 @@ async function handleLogin() {
     if (res.success) {
       userStore.setLogin(res.data.token, res.data.user.username)
       ElMessage.success(t('login.success'))
-      router.push('/dashboard')
+      // Back to the page the session expired on; only same-site paths.
+      const back = route.query.redirect
+      router.push(typeof back === 'string' && back.startsWith('/') && !back.startsWith('//') ? back : '/dashboard')
     }
   } finally { loading.value = false }
 }

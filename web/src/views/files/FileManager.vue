@@ -80,6 +80,7 @@
             {{ t('fm.modified') }}
             <el-icon v-if="sortKey === 'modified'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
           </span>
+          <span class="fm-col-owner">{{ t('fm.owner') }}</span>
           <span class="fm-col-perm fm-col-header-sortable" @click="setSort('permissions')">
             {{ t('fm.permissions') }}
             <el-icon v-if="sortKey === 'permissions'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
@@ -112,6 +113,7 @@
               <span v-else>{{ fmtSize(f.size) }}</span>
             </span>
             <span class="fm-col-time">{{ f.modified }}</span>
+            <span class="fm-col-owner" :title="f.owner ? `${f.owner}:${f.group}` : ''">{{ f.owner ? `${f.owner}:${f.group}` : '-' }}</span>
             <span class="fm-col-perm">{{ permissionDigits(f.permissions) }}</span>
           </div>
           <div v-if="!loading && sortedVisibleFiles.length === 0" class="fm-empty">
@@ -151,6 +153,41 @@
           <span>{{ t('fm.dropToUpload') }}</span>
         </div>
       </transition>
+
+      <div v-if="uploadQueue.length" class="fm-uploads" @mousedown.stop @contextmenu.stop>
+        <div class="fm-uploads__head" @click="uploadPanelOpen = !uploadPanelOpen">
+          <el-icon :size="15"><Upload /></el-icon>
+          <span class="fm-uploads__title">
+            {{ uploadActive ? t('fm.uploadingN', { done: uploadDoneCount, total: uploadQueue.filter((u) => u.status !== 'canceled').length }) : t('fm.uploadFinished', { n: uploadDoneCount }) }}
+          </span>
+          <span class="fm-uploads__pct lp-num">{{ uploadOverallPercent }}%</span>
+          <el-button v-if="uploadActive" link size="small" @click.stop="cancelAllUploads">{{ t('fm.cancelAll') }}</el-button>
+          <el-button v-else link size="small" @click.stop="clearFinishedUploads">{{ t('close') }}</el-button>
+          <el-icon class="fm-uploads__chevron" :class="{ open: uploadPanelOpen }"><CaretTop /></el-icon>
+        </div>
+        <el-progress v-if="uploadActive" :percentage="uploadOverallPercent" :show-text="false" :stroke-width="3" class="fm-uploads__bar" />
+        <div v-show="uploadPanelOpen" class="fm-uploads__list">
+          <div v-for="u in uploadQueue" :key="u.id" class="fm-upload" :class="`is-${u.status}`">
+            <div class="fm-upload__line">
+              <span class="fm-upload__name" :title="`${u.dir}/${u.file.name}`">{{ u.file.name }}</span>
+              <span class="fm-upload__meta lp-num">
+                <template v-if="u.status === 'uploading'">{{ fmtSize(u.loaded) }} / {{ fmtSize(u.file.size) }} · {{ fmtSize(u.speed) }}/s</template>
+                <template v-else-if="u.status === 'failed'">{{ u.error }}</template>
+                <template v-else>{{ fmtSize(u.file.size) }} · {{ t(`fm.upload_${u.status}`) }}</template>
+              </span>
+              <el-button v-if="u.status === 'uploading' || u.status === 'waiting'" link size="small" :icon="Close" @click="cancelUpload(u)" />
+              <el-button v-else-if="u.status === 'failed' || u.status === 'canceled'" link size="small" :icon="RefreshRight" @click="retryUpload(u)" />
+            </div>
+            <el-progress
+              v-if="u.status === 'uploading' || u.status === 'failed'"
+              :percentage="uploadPercent(u)"
+              :status="u.status === 'failed' ? 'exception' : undefined"
+              :stroke-width="4"
+              :show-text="false"
+            />
+          </div>
+        </div>
+      </div>
 
       <div v-show="termVisible" class="fm-term-resize" @mousedown.stop.prevent="startTermResize"></div>
       <div v-show="termVisible" class="fm-terminal" :style="{ height: termHeight + 'px' }" @contextmenu.prevent.stop="onTerminalContext">
@@ -252,11 +289,7 @@
       <el-input v-model="renameTo" @keyup.enter="doRename" autofocus />
       <template #footer><el-button @click="showRename = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doRename">{{ t('ok') }}</el-button></template>
     </el-dialog>
-    <el-dialog v-model="showChmod" :title="t('fm.chmodTitle')" width="400px" v-drag :modal="false" :close-on-click-modal="false">
-      <div style="margin-bottom:8px;color:var(--lp-text-secondary);font-size:13px">{{ chmodTargetLabel }}</div>
-      <el-input v-model="chmodMode" placeholder="755" @keyup.enter="doChmod" autofocus />
-      <template #footer><el-button @click="showChmod = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doChmod">{{ t('ok') }}</el-button></template>
-    </el-dialog>
+    <PermissionDialog v-model="showChmod" :targets="chmodItems" @done="loadFiles" />
     <el-dialog v-model="showProps" :title="t('fm.fileProps')" width="450px" v-drag :modal="false" :close-on-click-modal="false">
       <el-descriptions :column="1" border size="small">
         <template v-if="!propsData.is_batch">
@@ -287,10 +320,11 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { usePage } from '@/utils/page'
 import { useRoute } from 'vue-router'
+import PermissionDialog from '@/components/PermissionDialog.vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
-import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, uploadFilesApi, mkdirApi, deletePathApi, renamePathApi, fileInfo, chmodApi } from '@/api'
+import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, uploadFileApi, mkdirApi, pathState, deletePathApi, renamePathApi, fileInfo } from '@/api'
 import { useI18n } from '@/i18n'
 import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -307,7 +341,15 @@ const routePath = computed(() => {
   const p = route.query.path
   return typeof p === 'string' ? p : ''
 })
-const currentPath = ref(normPath(props.initPath || routePath.value || '/'))
+// The last directory browsed comes back next time (also after logging in
+// again: logout only clears the session).
+const LAST_PATH_KEY = 'fm_last_path'
+function savedPath() {
+  if (props.pickerMode) return ''
+  try { return localStorage.getItem(LAST_PATH_KEY) || '' } catch { return '' }
+}
+const restoredPath = props.initPath || routePath.value ? '' : savedPath()
+const currentPath = ref(normPath(props.initPath || routePath.value || restoredPath || '/'))
 const files = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'list' | 'grid'>('list')
@@ -348,7 +390,6 @@ const renameTo = ref('')
 const showChmod = ref(false)
 const chmodPath = ref('')
 const chmodTargets = ref<string[]>([])
-const chmodMode = ref('755')
 const showProps = ref(false)
 const propsData = ref<any>({})
 const dirSizeCache = ref<Record<string, number>>({})
@@ -597,10 +638,6 @@ const indeterminateVisibleSelected = computed(() => {
   const selectedCount = selectableVisibleFiles.value.filter((item) => selectedSet.has(item.path)).length
   return selectedCount > 0 && selectedCount < total
 })
-const chmodTargetLabel = computed(() => {
-  if (chmodTargets.value.length <= 1) return chmodTargets.value[0] || chmodPath.value
-  return t('fm.batchTargetN', { n: chmodTargets.value.length })
-})
 
 function triggerUpload() {
   if (isVirtualDriveView.value) {
@@ -610,28 +647,146 @@ function triggerUpload() {
   uploadInputRef.value?.click()
 }
 
+// --- Upload queue: one file per request, with progress, speed and cancel ---
+type UploadItem = {
+  id: number
+  file: File
+  dir: string
+  loaded: number
+  speed: number
+  status: 'waiting' | 'uploading' | 'done' | 'failed' | 'canceled'
+  error: string
+  controller?: AbortController
+}
+let uploadSeq = 0
+const uploadQueue = ref<UploadItem[]>([])
+const uploadPanelOpen = ref(true)
+const uploadActive = computed(() => uploadQueue.value.some((u) => u.status === 'waiting' || u.status === 'uploading'))
+const uploadDoneCount = computed(() => uploadQueue.value.filter((u) => u.status === 'done').length)
+const uploadTotalBytes = computed(() => uploadQueue.value.filter((u) => u.status !== 'canceled').reduce((n, u) => n + u.file.size, 0))
+const uploadLoadedBytes = computed(() => uploadQueue.value.filter((u) => u.status !== 'canceled').reduce((n, u) => n + (u.status === 'done' ? u.file.size : u.loaded), 0))
+const uploadOverallPercent = computed(() => uploadTotalBytes.value ? Math.min(100, Math.round((uploadLoadedBytes.value / uploadTotalBytes.value) * 100)) : 100)
+let uploadRunning = false
+
+function uploadPercent(item: UploadItem) {
+  if (item.status === 'done') return 100
+  return item.file.size ? Math.min(100, Math.floor((item.loaded / item.file.size) * 100)) : 0
+}
+
 async function uploadPickedFiles(fileList: File[] | FileList) {
-  const filesToUpload = Array.from(fileList || [])
-  if (filesToUpload.length === 0) return
+  const picked = Array.from(fileList || [])
+  if (picked.length === 0) return
   if (isVirtualDriveView.value) {
     ElMessage.warning(t('fm.uploadNeedDir'))
     return
   }
+  const dir = currentPath.value
+  const existing = new Set(files.value.filter((f: any) => !f.is_dir).map((f: any) => f.name))
+  const clashes = picked.filter((f) => existing.has(f.name))
+  if (clashes.length) {
+    try {
+      await ElMessageBox.confirm(
+        t('fm.uploadOverwrite', { n: clashes.length, names: clashes.slice(0, 3).map((f) => f.name).join(', ') }),
+        t('fm.uploadFiles'),
+        { type: 'warning', confirmButtonText: t('fm.overwrite') },
+      )
+    } catch {
+      return
+    }
+  }
+  for (const file of picked) {
+    uploadQueue.value.push({ id: ++uploadSeq, file, dir, loaded: 0, speed: 0, status: 'waiting', error: '' })
+  }
+  uploadPanelOpen.value = true
+  void runUploadQueue()
+}
 
+async function runUploadQueue() {
+  if (uploadRunning) return
+  uploadRunning = true
   uploadingFiles.value = true
   try {
-    const res: any = await uploadFilesApi(currentPath.value, filesToUpload)
-    if (res.success) {
-      const uploadedCount = Number(res.data?.uploaded || filesToUpload.length)
-      ElMessage.success(t('fm.uploadedN', { n: uploadedCount }))
-      await loadFiles()
-    } else {
-      ElMessage.error(res.message)
+    for (;;) {
+      const item = uploadQueue.value.find((u) => u.status === 'waiting')
+      if (!item) break
+      await uploadOne(item)
+      if (item.status === 'done' && normPath(item.dir) === normPath(currentPath.value)) scheduleUploadRefresh()
     }
   } finally {
+    uploadRunning = false
     uploadingFiles.value = false
-    if (uploadInputRef.value) uploadInputRef.value.value = ''
   }
+  const failed = uploadQueue.value.filter((u) => u.status === 'failed').length
+  if (!failed && uploadQueue.value.every((u) => u.status === 'done' || u.status === 'canceled')) {
+    ElMessage.success(t('fm.uploadedN', { n: uploadDoneCount.value }))
+  }
+}
+
+async function uploadOne(item: UploadItem) {
+  item.status = 'uploading'
+  item.loaded = 0
+  item.error = ''
+  item.controller = new AbortController()
+  let lastAt = performance.now()
+  let lastLoaded = 0
+  try {
+    const res: any = await uploadFileApi(item.dir, item.file, item.controller.signal, (loaded) => {
+      item.loaded = loaded
+      const now = performance.now()
+      if (now - lastAt >= 500) {
+        item.speed = ((loaded - lastLoaded) * 1000) / (now - lastAt)
+        lastAt = now
+        lastLoaded = loaded
+      }
+    })
+    if (res?.success) {
+      item.status = 'done'
+      item.loaded = item.file.size
+    } else {
+      item.status = 'failed'
+      item.error = res?.message || t('fm.uploadFailed')
+    }
+  } catch (err: any) {
+    if ((item.status as UploadItem['status']) === 'canceled' || err?.code === 'ERR_CANCELED') {
+      item.status = 'canceled'
+    } else {
+      item.status = 'failed'
+      item.error = err?.response?.data?.message || err?.message || t('fm.uploadFailed')
+    }
+  } finally {
+    item.controller = undefined
+  }
+}
+
+function cancelUpload(item: UploadItem) {
+  if (item.status === 'uploading') {
+    item.status = 'canceled'
+    item.controller?.abort()
+  } else if (item.status === 'waiting') {
+    item.status = 'canceled'
+  }
+}
+
+function retryUpload(item: UploadItem) {
+  item.status = 'waiting'
+  void runUploadQueue()
+}
+
+function cancelAllUploads() {
+  uploadQueue.value.forEach(cancelUpload)
+}
+
+function clearFinishedUploads() {
+  uploadQueue.value = uploadQueue.value.filter((u) => u.status === 'waiting' || u.status === 'uploading')
+}
+
+let uploadRefreshTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleUploadRefresh() {
+  if (uploadRefreshTimer) clearTimeout(uploadRefreshTimer)
+  uploadRefreshTimer = setTimeout(() => {
+    uploadRefreshTimer = null
+    void loadFiles()
+  }, 400)
 }
 
 async function onUploadInputChange(event: Event) {
@@ -741,8 +896,19 @@ async function loadFiles() {
       return
     }
     const res: any = await listFiles(currentPath.value)
-    if (res.success) files.value = res.data
-    else ElMessage.error(res.message)
+    if (res.success) {
+      files.value = res.data
+      if (!props.pickerMode) {
+        try { localStorage.setItem(LAST_PATH_KEY, currentPath.value) } catch { /* private mode */ }
+      }
+    } else if (restoredPath && currentPath.value === normPath(restoredPath) && navHistory.value.length === 1) {
+      // The remembered directory is gone: start at the root instead.
+      currentPath.value = rootPath.value
+      navHistory.value = [rootPath.value]
+      navIndex.value = 0
+      const retry: any = await listFiles(currentPath.value)
+      if (retry.success) files.value = retry.data
+    } else ElMessage.error(res.message)
   } catch { ElMessage.error(t('fm.loadFailed')) }
   finally { loading.value = false }
 }
@@ -931,12 +1097,13 @@ async function downloadTargets(targets: any[]) {
   ElMessage.success(t('fm.downloadedN', { n: fileTargets.length }))
 }
 
+const chmodItems = ref<any[]>([])
 function openChmodDialog(targets: any[]) {
-  const paths = targets.map((item) => String(item.path || '')).filter(Boolean)
-  if (paths.length === 0) return
-  chmodTargets.value = paths
-  chmodPath.value = paths[0]
-  chmodMode.value = '755'
+  const items = targets.filter((item) => item?.path && !item.is_virtual_drive)
+  if (items.length === 0) return
+  chmodItems.value = items
+  chmodTargets.value = items.map((item) => String(item.path))
+  chmodPath.value = items[0].path
   showChmod.value = true
 }
 
@@ -1086,11 +1253,41 @@ function startEditPath() {
   }
   nextTick(() => { pathInputRef.value?.focus(); pathInputRef.value?.select() })
 }
+/**
+ * A directory that does not exist yet: offer to create it (like typing a
+ * new folder into an address bar). Returns whether it exists afterwards.
+ */
+async function offerCreateDir(dir: string): Promise<boolean> {
+  try {
+    const state: any = await pathState(dir)
+    if (!state.success) return false
+    if (state.data.exists) return true
+  } catch {
+    return false
+  }
+  try {
+    await ElMessageBox.confirm(t('fm.createMissing', { path: dir }), t('fm.pathMissing'), {
+      type: 'info',
+      confirmButtonText: t('fm.createIt'),
+    })
+  } catch {
+    return false
+  }
+  const res: any = await mkdirApi(dir).catch(() => null)
+  if (res?.success) ElMessage.success(t('fm.dirCreated'))
+  return !!res?.success
+}
+
 async function confirmPath() {
   editingPath.value = false
   const input = pathInputVal.value.trim()
   if (!input) return
   const np = normPath(input)
+  const state: any = await pathState(np).catch(() => null)
+  if (state?.success && !state.data.exists) {
+    if (await offerCreateDir(np)) navigate(np)
+    return
+  }
   try {
     const res: any = await fileInfo(np)
     if (res.success) {
@@ -1338,26 +1535,6 @@ async function doRename() {
 async function handleDelete(f: any) {
   await deleteTargets([f])
 }
-async function doChmod() {
-  if (!chmodMode.value.trim()) return
-  const targets = chmodTargets.value.length > 0 ? chmodTargets.value : [chmodPath.value]
-  let ok = 0
-  for (const path of targets) {
-    try {
-      const res: any = await chmodApi(path, chmodMode.value.trim())
-      if (res.success) ok++
-    } catch {}
-  }
-  if (ok > 0) {
-    ElMessage.success(targets.length > 1 ? t('fm.permChangedN', { n: ok }) : t('fm.permChanged'))
-    showChmod.value = false
-    chmodTargets.value = []
-    await loadFiles()
-    return
-  }
-  ElMessage.error(t('failed'))
-}
-
 function cssVar(name: string, fallback: string) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return value || fallback
@@ -1616,11 +1793,12 @@ function fmtSize(b: number) {
 
 watch(
   () => route.query.path,
-  (newPath) => {
+  async (newPath) => {
     if (props.initPath) return
     if (typeof newPath !== 'string' || !newPath.trim()) return
     const targetPath = normPath(newPath)
-    if (targetPath !== currentPath.value) navigate(targetPath)
+    if (targetPath === currentPath.value) return
+    if (await offerCreateDir(targetPath)) navigate(targetPath)
   },
 )
 watch(
@@ -1650,10 +1828,26 @@ watch(
   },
 )
 
+// Links from other pages: /files?path=/dir&terminal=1 also opens the terminal there.
+function openRequestedTerminal() {
+  if (props.initPath || props.pickerMode) return
+  if (route.query.terminal === '1' && routePath.value) openTerminal(routePath.value)
+}
+watch(() => route.fullPath, openRequestedTerminal)
+
 onMounted(async () => {
   document.addEventListener('click', closeAllCtx)
   await loadFileRoots()
+  // Opened from a link to a directory that is not there yet.
+  if (routePath.value && !props.initPath && currentPath.value === normPath(routePath.value)) {
+    if (!(await offerCreateDir(currentPath.value))) {
+      currentPath.value = normPath(savedPath() || rootPath.value)
+      navHistory.value = [currentPath.value]
+      navIndex.value = 0
+    }
+  }
   await loadFiles()
+  openRequestedTerminal()
 })
 usePage(() => loadFiles())
 onUnmounted(() => {
@@ -1751,6 +1945,41 @@ onUnmounted(() => {
 }
 .fm-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .fm-upload-input { display: none; }
+.fm-uploads {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  width: min(420px, calc(100% - 32px));
+  background: var(--lp-surface, var(--el-bg-color));
+  border: 1px solid var(--lp-border-light);
+  border-radius: var(--lp-radius-lg, 10px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+}
+.fm-uploads__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.fm-uploads__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-uploads__pct { color: var(--lp-text-secondary); font-weight: 500; }
+.fm-uploads__chevron { transition: transform 0.15s; transform: rotate(180deg); }
+.fm-uploads__chevron.open { transform: rotate(0deg); }
+.fm-uploads__bar { margin: 0 12px 6px; }
+.fm-uploads__list { max-height: 260px; overflow-y: auto; border-top: 1px solid var(--lp-border-light); }
+.fm-upload { padding: 8px 12px; border-bottom: 1px solid var(--lp-border-light); }
+.fm-upload:last-child { border-bottom: none; }
+.fm-upload__line { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.fm-upload__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lp-text-primary); }
+.fm-upload__meta { color: var(--lp-text-secondary); white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+.fm-upload.is-done .fm-upload__meta { color: var(--el-color-success); }
+.fm-upload.is-failed .fm-upload__meta { color: var(--el-color-danger); }
+.fm-upload.is-canceled .fm-upload__name { text-decoration: line-through; color: var(--lp-text-secondary); }
 .fm-body { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .fm-list {
   flex: 1; background: var(--lp-card-bg); border-radius: var(--lp-radius-lg);
@@ -1807,6 +2036,7 @@ onUnmounted(() => {
 .fm-col-size { width: 96px; text-align: right; flex-shrink: 0; }
 .fm-col-time { width: 172px; text-align: right; flex-shrink: 0; }
 .fm-col-perm { width: 118px; text-align: right; flex-shrink: 0; font-family: monospace; }
+.fm-col-owner { width: 150px; text-align: right; flex-shrink: 0; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 8px; }
 .fm-row {
   display: flex; align-items: center; padding: 9px 18px;
   font-size: 14px; cursor: default; transition: background 0.1s;
@@ -1815,7 +2045,7 @@ onUnmounted(() => {
   &:last-child { border-bottom: none; }
   &:hover { background: var(--lp-table-row-hover); }
   &.selected { background: var(--lp-primary-bg); }
-  .fm-col-size, .fm-col-time, .fm-col-perm { color: var(--lp-text-secondary); font-size: 12px; }
+  .fm-col-size, .fm-col-time, .fm-col-perm, .fm-col-owner { color: var(--lp-text-secondary); font-size: 12px; }
 }
 .fm-fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lp-text-primary); font-weight: 500; }
 .fm-empty { padding: 40px 0; text-align: center; }

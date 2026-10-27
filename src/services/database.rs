@@ -134,15 +134,8 @@ pub(crate) fn service_name(engine: Engine) -> String {
 }
 
 fn first_line_version(program: &str) -> String {
-    shell::run(program, &["--version"])
-        .map(|o| {
-            let text = if o.stdout.trim().is_empty() {
-                o.stderr
-            } else {
-                o.stdout
-            };
-            text.lines().next().unwrap_or_default().trim().to_string()
-        })
+    shell::cached_version_output(program, &["--version"])
+        .map(|text| text.lines().next().unwrap_or_default().trim().to_string())
         .unwrap_or_default()
 }
 
@@ -169,9 +162,7 @@ pub fn status(engine: Engine, admin: Option<&MysqlAdmin>) -> EngineStatus {
     let running = installed && sysservice::is_active(&service);
     let version = match engine {
         // mongosh --version prints the shell's version, not the server's.
-        Engine::Mongodb if installed => shell::run("mongod", &["--version"])
-            .map(|o| o.stdout.lines().next().unwrap_or_default().trim().to_string())
-            .unwrap_or_default(),
+        Engine::Mongodb if installed => first_line_version("mongod"),
         _ => client.map(first_line_version).unwrap_or_default(),
     };
 
@@ -310,7 +301,11 @@ pub async fn load_admin(pool: &SqlitePool, engine: Engine) -> Option<MysqlAdmin>
     }
 }
 
-pub async fn save_admin(pool: &SqlitePool, engine: Engine, admin: &MysqlAdmin) -> anyhow::Result<()> {
+pub async fn save_admin(
+    pool: &SqlitePool,
+    engine: Engine,
+    admin: &MysqlAdmin,
+) -> anyhow::Result<()> {
     match engine {
         Engine::Mongodb => {
             db::set_setting(pool, super::mongo::SETTING_ADMIN_USER, &admin.user).await?;
@@ -510,7 +505,8 @@ pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAd
     let manager = runtime::package_manager();
     // MariaDB and MySQL (or two PostgreSQL clusters on one port) do not mix.
     if version.is_some_and(|v| !v.is_empty() && v != "default") && status(engine, None).installed {
-        let line = "[LinxPanel] Already installed; remove the current version before choosing another\n";
+        let line =
+            "[LinxPanel] Already installed; remove the current version before choosing another\n";
         super::tasks::note(line);
         log.push_str(line);
         return (log, None);
@@ -1089,7 +1085,10 @@ pub async fn adopt(
     admin: Option<MysqlAdmin>,
 ) -> Result<CreatedDatabase, String> {
     validate_name(name, "Database name").map_err(|e| {
-        format!("{} (only letters, digits and _ can be managed by the panel)", e)
+        format!(
+            "{} (only letters, digits and _ can be managed by the panel)",
+            e
+        )
     })?;
     if record(pool, engine, name).await.is_some() {
         return Err("This database is already managed by the panel".into());
@@ -1735,7 +1734,8 @@ mod tests {
 
     #[test]
     fn parses_pg_tables() {
-        let tables = parse_pg_tables("public.users\t42\t16384\t\npublic.fresh\t-1\t8192\tnew one\n");
+        let tables =
+            parse_pg_tables("public.users\t42\t16384\t\npublic.fresh\t-1\t8192\tnew one\n");
         assert_eq!(tables[0].name, "public.users");
         assert_eq!(tables[0].rows, Some(42));
         assert_eq!(tables[1].rows, None);

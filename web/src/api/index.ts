@@ -358,15 +358,21 @@ export const downloadFileApi = async (path: string, fallbackName?: string) => {
   URL.revokeObjectURL(url)
 }
 export const writeFileContent = (path: string, content: string) => request.post('/files/write', { path, content })
-export const uploadFilesApi = (path: string, files: File[]) => {
+/** One file per request so each has its own progress and can be canceled. */
+export const uploadFileApi = (path: string, file: File, signal: AbortSignal, onProgress: (loaded: number) => void) => {
   const formData = new FormData()
   formData.append('path', path)
-  files.forEach((file) => {
-    formData.append('files', file, file.name)
+  formData.append('files', file, file.name)
+  return request.post('/files/upload', formData, {
+    // Large files on a slow link take as long as they take.
+    timeout: 0,
+    signal,
+    onUploadProgress: (event) => onProgress(event.loaded),
   })
-  return request.post('/files/upload', formData, { timeout: 10 * 60 * 1000 })
 }
 export const mkdirApi = (path: string) => request.post('/files/mkdir', { path })
+/** { exists, is_dir } - never an error toast for a missing path. */
+export const pathState = (path: string) => request.get('/files/exists', { params: { path } })
 export const deletePathApi = (path: string) => request.post('/files/delete', { path })
 export const renamePathApi = (from: string, to: string) => request.post('/files/rename', { from, to })
 export const execCmd = (cmd: string, cwd?: string) => request.post('/files/exec', { cmd, cwd })
@@ -428,4 +434,8 @@ export const execCmdStream = async (
   }
 }
 export const fileInfo = (path: string) => request.get('/files/info', { params: { path } })
-export const chmodApi = (path: string, mode: string) => request.post('/files/chmod', { path, mode })
+export const chmodApi = (path: string, mode: string, recursive = false) =>
+  request.post('/files/chmod', { path, mode, recursive }, { timeout: 10 * 60 * 1000 })
+export const chownApi = (path: string, user: string, group: string, recursive = false) =>
+  request.post('/files/chown', { path, user, group, recursive }, { timeout: 10 * 60 * 1000 })
+export const getOwnerChoices = () => request.get('/files/owners')

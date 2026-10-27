@@ -99,7 +99,11 @@
             <template #default="{ row }">
               <div class="cell-stack">
                 <span class="app-name">{{ row.name }}</span>
-                <span class="lp-dim lp-truncate lp-mono">{{ row.work_dir }}</span>
+                <span class="dir-line">
+                  <button type="button" class="dir-link lp-mono lp-truncate" :title="t('rt.openDir')" @click="openDir(row.work_dir)">{{ row.work_dir }}</button>
+                  <button type="button" class="dir-icon" :title="t('rt.openDir')" :aria-label="t('rt.openDir')" @click="openDir(row.work_dir)"><el-icon><FolderOpened /></el-icon></button>
+                  <button type="button" class="dir-icon" :title="t('rt.openTerminal')" :aria-label="t('rt.openTerminal')" @click="openTerminalAt(row.work_dir)"><el-icon><Monitor /></el-icon></button>
+                </span>
               </div>
             </template>
           </el-table-column>
@@ -162,12 +166,26 @@
         </div>
 
         <el-form-item :label="t('rt.workDir')" prop="work_dir">
-          <el-input v-model="form.work_dir" placeholder="/opt/myapp" class="lp-mono" />
+          <div class="inline-row">
+            <el-input v-model="form.work_dir" placeholder="/opt/myapp" class="lp-mono" />
+            <el-button :icon="FolderOpened" @click="dirPickerOpen = true">{{ t('rt.chooseDir') }}</el-button>
+          </div>
         </el-form-item>
 
         <div class="form-row">
           <el-form-item :label="entryLabel" prop="entry" class="form-row__item">
-            <el-input v-model="form.entry" :placeholder="entryPlaceholder" class="lp-mono" />
+            <el-autocomplete
+              v-model="form.entry"
+              :fetch-suggestions="suggestEntries"
+              :placeholder="entryPlaceholder"
+              :trigger-on-focus="true"
+              class="lp-mono entry-input"
+              style="width: 100%"
+            >
+              <template #default="{ item }">
+                <span class="lp-mono">{{ item.value }}</span>
+              </template>
+            </el-autocomplete>
             <span v-if="entryHint" class="entry-hint">{{ entryHint }}</span>
           </el-form-item>
           <el-form-item :label="t('rt.portOptional')" class="form-row__item form-row__item--narrow">
@@ -210,6 +228,12 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="dirPickerOpen" :title="t('rt.chooseDir')" width="760px" destroy-on-close append-to-body>
+      <div class="dir-picker-shell">
+        <DirPicker :init-path="form.work_dir || '/www/wwwroot'" @select="onDirPicked" />
+      </div>
+    </el-dialog>
+
     <!-- App logs -->
     <el-dialog v-model="logsVisible" :title="logsTitle" width="820px" top="6vh" @closed="stopLogPolling">
       <div class="log-view" v-loading="logsLoading">
@@ -232,10 +256,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { FolderOpened, Monitor, Plus, Refresh } from '@element-plus/icons-vue'
+import DirPicker from '@/components/DirPicker.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
-  installAppDeps, installRuntime, updateApp,
+  installAppDeps, installRuntime, listFiles, mkdirApi, pathState, updateApp,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatDuration } from '@/utils/format'
@@ -486,6 +511,51 @@ const rules = computed<FormRules>(() => ({
   entry: [{ required: true, message: t('rt.entryRequired'), trigger: 'blur' }],
 }))
 
+// --- Entry: suggest matching files from the project directory ---
+const ENTRY_EXTENSIONS: Record<string, string[]> = {
+  node: ['.js', '.mjs', '.cjs', '.ts'],
+  python: ['.py'],
+  java: ['.jar'],
+  php: ['.php'],
+}
+function suggestEntries(query: string, done: (items: { value: string }[]) => void) {
+  void entryCandidates(query).then(done)
+}
+async function entryCandidates(query: string): Promise<{ value: string }[]> {
+  const dir = form.work_dir.trim()
+  if (!dir.startsWith('/')) return []
+  try {
+    const state: any = await pathState(dir)
+    if (!state.success || !state.data.is_dir) return []
+    const res: any = await listFiles(dir)
+    if (!res.success) return []
+    const exts = ENTRY_EXTENSIONS[form.runtime]
+    const q = query.trim().toLowerCase()
+    return (res.data as { name: string; is_dir: boolean; permissions: string }[])
+      .filter((f) => !f.is_dir)
+      // Go / binaries: anything executable.
+      .filter((f) => (exts ? exts.some((e) => f.name.toLowerCase().endsWith(e)) : /[1357]/.test(String(f.permissions))))
+      .filter((f) => !q || f.name.toLowerCase().includes(q))
+      .slice(0, 50)
+      .map((f) => ({ value: exts ? f.name : `./${f.name}` }))
+  } catch {
+    return []
+  }
+}
+
+// --- Directory: file manager / terminal / picker ---
+function openDir(path: string) {
+  router.push({ path: '/files', query: { path } })
+}
+function openTerminalAt(path: string) {
+  router.push({ path: '/terminal', query: { cwd: path } })
+}
+const dirPickerOpen = ref(false)
+function onDirPicked(path: string) {
+  form.work_dir = path || form.work_dir
+  dirPickerOpen.value = false
+}
+
 function openCreate() {
   editing.value = null
   const runtime = LANG_RUNTIMES[active.value][0]
@@ -521,6 +591,25 @@ async function submit() {
   try {
     await formRef.value?.validate()
   } catch {
+    return
+  }
+  // A project directory that is not there yet: offer to create it.
+  const dir = form.work_dir.trim()
+  try {
+    const state: any = await pathState(dir)
+    if (state.success && !state.data.exists) {
+      await ElMessageBox.confirm(t('rt.createDirConfirm', { path: dir }), t('rt.workDir'), {
+        type: 'info',
+        confirmButtonText: t('fm.createIt'),
+      })
+      const made: any = await mkdirApi(dir)
+      if (!made.success) return
+    } else if (state.success && !state.data.is_dir) {
+      ElMessage.error(t('rt.workDirNotDir'))
+      return
+    }
+  } catch {
+    // Declined, or the interceptor reported it.
     return
   }
   saving.value = true
@@ -812,6 +901,28 @@ onUnmounted(() => {
 /* ---------- App table ---------- */
 .cell-stack { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
 .cell-stack .lp-dim { font-size: 11px; }
+.dir-line { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.dir-link,
+.dir-icon {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--lp-text-dim);
+  cursor: pointer;
+}
+.dir-link { font-size: 11px; min-width: 0; text-align: left; }
+.dir-link:hover { color: var(--lp-accent); text-decoration: underline; text-underline-offset: 2px; }
+.dir-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; }
+.dir-icon:hover { color: var(--lp-accent); background: var(--lp-accent-soft); }
+.inline-row { display: flex; gap: var(--lp-2); width: 100%; }
+.inline-row .el-input { flex: 1; min-width: 0; }
+.dir-picker-shell {
+  height: 520px;
+  padding: 4px;
+  border-radius: var(--lp-r-lg);
+  background: var(--lp-bg-page);
+}
 .app-name { font-weight: 600; }
 .entry { display: block; font-size: var(--lp-text-sm); color: var(--lp-text-soft); }
 .pid { margin-left: 6px; font-size: var(--lp-text-xs); }

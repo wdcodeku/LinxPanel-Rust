@@ -216,7 +216,19 @@ pub(crate) async fn open_database() -> anyhow::Result<(sqlx::SqlitePool, std::pa
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| format!("sqlite:{}?mode=rwc", db_path.display()));
 
-    let pool = sqlx::SqlitePool::connect(&db_url).await?;
+    // WAL with synchronous=NORMAL: commits no longer wait for an fsync each
+    // (on a disk saturated by other programs that wait can take seconds);
+    // the database still never corrupts, at worst the last commit before a
+    // power loss is lost. Readers never wait for writers.
+    let options = <sqlx::sqlite::SqliteConnectOptions as std::str::FromStr>::from_str(&db_url)?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(15));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(8)
+        .min_connections(1)
+        .connect_with(options)
+        .await?;
     db::migrate(&pool).await?;
     db::seed_admin(&pool).await?;
     Ok((pool, data_dir))

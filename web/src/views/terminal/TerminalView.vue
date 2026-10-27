@@ -64,6 +64,7 @@
 
 <script setup lang="ts">
 import { nextTick, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { usePage } from '@/utils/page'
 import { Plus } from '@element-plus/icons-vue'
 import TerminalPane from '@/components/TerminalPane.vue'
@@ -78,8 +79,13 @@ type Session = {
 
 const { t } = useI18n()
 
+// Other pages open a terminal in a directory with /terminal?cwd=/path.
+const route = useRoute()
+const requestedCwd = () => (typeof route.query.cwd === 'string' ? route.query.cwd.trim() : '')
+let handledRequest = route.fullPath
+
 let nextId = 1
-const sessions = reactive<Session[]>([{ id: nextId++, title: '', cwd: '', connected: false }])
+const sessions = reactive<Session[]>([{ id: nextId++, title: '', cwd: requestedCwd(), connected: false }])
 const activeId = ref(sessions[0].id)
 const cwdInput = ref('')
 
@@ -97,6 +103,20 @@ function add() {
 }
 
 usePage(() => activate(activeId.value))
+
+// Back on the (kept-alive) page with a new directory: open it in a new tab.
+watch(
+  () => route.fullPath,
+  (path) => {
+    if (!route.path.startsWith('/terminal')) return
+    const cwd = requestedCwd()
+    if (!cwd || path === handledRequest) return
+    handledRequest = path
+    const session: Session = { id: nextId++, title: '', cwd, connected: false }
+    sessions.push(session)
+    activate(session.id)
+  },
+)
 
 function activate(id: number) {
   activeId.value = id
