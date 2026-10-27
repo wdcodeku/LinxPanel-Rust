@@ -809,7 +809,7 @@ write_env_file() {
   {
     echo "PORT=${PORT}"
     echo "DATABASE_URL=sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc"
-    [[ -n "${extra}" ]] && printf '%s\n' "${extra}"
+    if [[ -n "${extra}" ]]; then printf '%s\n' "${extra}"; fi
   } | ${SUDO} tee "${env_file}" >/dev/null
 }
 
@@ -1223,8 +1223,36 @@ else
 fi
 
 TMP_DIR="$(mktemp -d -t linxpanel-install-XXXXXX)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
 BACKUP_DIR=""
+# Set while an upgrade has the old panel stopped: whatever ends the script
+# then (a failed health check or an unexpected error), the old version is
+# put back and started, so an upgrade never leaves the panel down.
+UPGRADE_ARMED=0
+
+rollback_upgrade() {
+  UPGRADE_ARMED=0
+  logf rollback
+  stop_panel
+  if [[ -n "${BACKUP_DIR}" && -f "${BACKUP_DIR}/linxpanel" ]]; then
+    ${SUDO} install -m 755 "${BACKUP_DIR}/linxpanel" "${INSTALL_ROOT}/bin/linxpanel"
+    local db_file=""
+    for db_file in "${BACKUP_DIR}"/linxpanel.db*; do
+      [[ -f "${db_file}" ]] && ${SUDO} cp -a "${db_file}" "${INSTALL_ROOT}/data/"
+    done
+  fi
+  start_panel
+  health_check && logf rollback_done
+}
+
+on_exit() {
+  local rc=$?
+  set +e
+  if [[ "${rc}" -ne 0 && "${UPGRADE_ARMED}" == "1" ]]; then
+    rollback_upgrade
+  fi
+  rm -rf "${TMP_DIR}"
+}
+trap on_exit EXIT
 
 ensure_base_deps
 
@@ -1250,6 +1278,7 @@ if [[ "${INSTALL_MODE}" == "build" ]]; then
 fi
 
 if [[ "${IS_UPGRADE}" == "1" ]]; then
+  UPGRADE_ARMED=1
   stop_panel
   backup_existing
 fi
@@ -1283,18 +1312,10 @@ start_panel
 if ! health_check; then
   logf health_failed "${HEALTH_TIMEOUT}"
   show_recent_logs
-  if [[ "${IS_UPGRADE}" == "1" && -n "${BACKUP_DIR}" ]]; then
-    logf rollback
-    stop_panel
-    ${SUDO} install -m 755 "${BACKUP_DIR}/linxpanel" "${INSTALL_ROOT}/bin/linxpanel"
-    for db_file in "${BACKUP_DIR}"/linxpanel.db*; do
-      [[ -f "${db_file}" ]] && ${SUDO} cp -a "${db_file}" "${INSTALL_ROOT}/data/"
-    done
-    start_panel
-    health_check && logf rollback_done
-  fi
+  [[ "${UPGRADE_ARMED}" == "1" ]] && rollback_upgrade
   exit 1
 fi
+UPGRADE_ARMED=0
 
 # Only now: after a rollback, Lp must keep matching the binary that is running.
 install_lp_cli
