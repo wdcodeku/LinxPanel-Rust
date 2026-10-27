@@ -1,5 +1,5 @@
 <template>
-  <div class="site-detail" v-loading="loading">
+  <div class="site-detail lp-page" v-loading="loading">
     <el-card v-if="!canManageSites" shadow="hover" class="guard-card">
       <div class="guard-title">
         <el-icon><WarningFilled /></el-icon>
@@ -860,5 +860,48 @@ async function handleRemoveDomain(id: number) {
 }
 .config-actions {
   margin-top: 12px;
+}
+</style>
+
+<style scoped lang="scss">
+/* Same page frame and tab style as the rest of the panel. */
+.site-detail.lp-page { gap: var(--lp-4); }
+.site-detail .detail-header {
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+.site-detail .site-name { font-size: var(--lp-text-xl, 22px); }
+.site-detail .section-nav {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--lp-5);
+  width: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--lp-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+.site-detail .section-item {
+  height: auto;
+  padding: 0 2px 10px;
+  text-decoration: none;
+  font-size: var(--lp-text-sm);
+  line-height: 1.5;
+  cursor: pointer;
+  margin-bottom: -1px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--lp-text-soft);
+  font-weight: 500;
+  min-width: 0;
+  &:hover { color: var(--lp-text); background: none; }
+  &.active { color: var(--lp-accent); border-bottom-color: var(--lp-accent); background: none; box-shadow: none; }
 }
 </style>

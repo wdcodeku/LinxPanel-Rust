@@ -1,289 +1,219 @@
 <template>
-  <div class="sites-view">
-    <div class="top-nav">
-      <div class="category-nav">
-        <button
-          type="button"
-          class="category-item"
-          :class="{ active: activeCategory === 'sites' }"
-          @click="setActiveCategory('sites')"
-        >
-          {{ t('si.tabSite') }}
-        </button>
-        <button
-          type="button"
-          class="category-item"
-          :class="{ active: activeCategory === 'certs' }"
-          @click="setActiveCategory('certs')"
-        >
-          {{ t('si.tabCert') }}
-        </button>
-        <button
-          type="button"
-          class="category-item"
-          :class="{ active: activeCategory === 'openresty' }"
-          @click="setActiveCategory('openresty')"
-        >
-          {{ t('si.tabOpenresty') }}
-        </button>
+  <div class="lp-page">
+    <div class="lp-page-head">
+      <div>
+        <h1 class="lp-page-title">{{ t('si.title') }}</h1>
+        <p class="lp-page-sub">{{ t('si.pageSub') }}</p>
       </div>
-      <el-button
-        v-if="activeCategory === 'sites'"
-        type="primary"
-        :icon="Plus"
-        :disabled="!canManageSites"
-        @click="showCreate = true"
-      >
-        {{ t('si.addSite') }}
-      </el-button>
+      <div class="lp-page-actions">
+        <el-button
+          v-if="activeCategory === 'sites'"
+          type="primary"
+          :icon="Plus"
+          :disabled="!canManageSites"
+          @click="openCreate"
+        >{{ t('si.addSite') }}</el-button>
+      </div>
     </div>
 
-    <el-card
-      v-if="activeCategory === 'sites' && !canManageSites"
-      shadow="hover"
-      class="openresty-guard-card"
-      v-loading="statusLoading || installingOpenresty"
-    >
-      <div class="openresty-guard">
-        <div class="guard-title">
-          <el-icon><WarningFilled /></el-icon>
-          <span>{{ t('si.openrestyRequiredTitle') }}</span>
-        </div>
-        <div class="guard-desc">{{ openrestyStatus.message || t('si.openrestyRequiredDesc') }}</div>
-        <div class="guard-actions">
-          <el-button
-            type="primary"
-            :disabled="!openrestyStatus.supported"
-            :loading="installingOpenresty"
-            @click="handleQuickInstallOpenResty"
-          >
-            {{ t('si.quickInstallOpenresty') }}
-          </el-button>
-          <el-button :disabled="!installLog" @click="installLogDialogVisible = true">
-            {{ t('st.viewInstallLog') }}
-          </el-button>
-          <el-button @click="setActiveCategory('openresty')">{{ t('si.openrestyGoSettings') }}</el-button>
-          <el-button @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
-        </div>
-      </div>
-    </el-card>
-    <el-card v-else-if="activeCategory === 'sites'" shadow="hover">
-      <el-table :data="sites" v-loading="loading" stripe style="width:100%">
-        <el-table-column prop="name" :label="t('si.siteName')" min-width="140">
-          <template #default="{ row }">
-            <el-link type="primary" @click="router.push(`/sites/${row.id}`)">{{ row.name }}</el-link>
-          </template>
-        </el-table-column>
-        <el-table-column prop="domains" :label="t('si.domain')" min-width="200">
-          <template #default="{ row }">
-            <el-popover
-              trigger="hover"
-              placement="top-start"
-              :width="460"
-              popper-class="domain-popper"
-            >
-              <template #reference>
-                <div class="domain-cell">
-                  <el-tag
-                    v-for="domain in getVisibleDomains(row.domains)"
-                    :key="domain"
-                    size="small"
-                    class="domain-chip"
-                    @click.stop="openDomain(domain)"
-                  >
-                    {{ domain }}
-                  </el-tag>
-                  <el-tag
-                    v-if="getHiddenDomainCount(row.domains) > 0"
-                    size="small"
-                    type="info"
-                    class="domain-more"
-                  >
-                    +{{ getHiddenDomainCount(row.domains) }}
-                  </el-tag>
+    <el-tabs :model-value="activeCategory" class="tabs" @tab-change="(name: any) => setActiveCategory(name)">
+      <!-- ============ Sites ============ -->
+      <el-tab-pane :label="t('si.tabSite')" name="sites">
+        <!-- OpenResty missing: say what to do, with one button. -->
+        <section v-if="!canManageSites && statusChecked" class="lp-card guard">
+          <div class="guard__icon"><el-icon :size="26"><WarningFilled /></el-icon></div>
+          <div class="guard__body">
+            <h2 class="guard__title">{{ t('si.openrestyRequiredTitle') }}</h2>
+            <p class="guard__desc">{{ t('si.guardDesc') }}</p>
+            <div class="guard__actions">
+              <el-button
+                type="primary"
+                :disabled="!openrestyStatus.supported"
+                :loading="installingOpenresty"
+                @click="handleQuickInstallOpenResty"
+              >{{ t('si.quickInstallOpenresty') }}</el-button>
+              <el-button @click="setActiveCategory('openresty')">{{ t('si.openrestyGoSettings') }}</el-button>
+            </div>
+          </div>
+        </section>
+
+        <section v-else class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title">
+              <el-icon><Connection /></el-icon>{{ t('si.tabSite') }}
+              <span v-if="sitesLoaded" class="count">{{ sites.length }}</span>
+            </h2>
+            <el-input
+              v-if="sites.length"
+              v-model="keyword"
+              :prefix-icon="Search"
+              size="small"
+              clearable
+              :placeholder="t('si.search')"
+              class="search"
+            />
+          </header>
+
+          <div v-if="!sitesLoaded" class="lp-card-body"><el-skeleton animated :rows="4" /></div>
+
+          <div v-else-if="!sites.length" class="empty">
+            <el-icon :size="36" class="empty__icon"><Connection /></el-icon>
+            <p class="empty__title">{{ t('si.emptyTitle') }}</p>
+            <p class="lp-dim empty__hint">{{ t('si.emptyHint') }}</p>
+            <div class="empty__actions">
+              <el-button type="primary" :icon="Plus" @click="openCreate">{{ t('si.addSite') }}</el-button>
+              <el-button @click="router.push('/appstore')">{{ t('si.fromAppStore') }}</el-button>
+            </div>
+          </div>
+
+          <el-table v-else :data="filteredSites" v-loading="loading" :empty-text="t('si.noMatch')" class="site-table">
+            <el-table-column :label="t('si.site')" min-width="240">
+              <template #default="{ row }">
+                <div class="site-cell">
+                  <span class="dot" :class="row.status === 'running' ? 'dot--ok' : 'dot--off'"></span>
+                  <div class="site-cell__text">
+                    <a class="site-cell__name" @click="router.push(`/sites/${row.id}`)">{{ primaryDomain(row) }}</a>
+                    <span class="site-cell__sub">
+                      <template v-if="getHiddenDomainCount(row.domains, 1)">{{ t('si.moreDomains', { n: getHiddenDomainCount(row.domains, 1) }) }}</template>
+                      <template v-if="row.name && row.name !== primaryDomain(row)"> · {{ row.name }}</template>
+                    </span>
+                  </div>
                 </div>
               </template>
-              <div class="domain-pop-content">
-                <div class="domain-pop-title">{{ t('si.allDomains') }}</div>
-                <div class="domain-pop-tags">
-                  <a
-                    v-for="domain in getDomainList(row.domains)"
-                    :key="domain"
-                    class="domain-pop-tag-link"
-                    :href="toDomainUrl(domain)"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    @click.stop
-                  >
-                    <el-tag size="small" class="domain-pop-tag">{{ domain }}</el-tag>
-                  </a>
-                </div>
-              </div>
-            </el-popover>
-          </template>
-        </el-table-column>
-        <el-table-column prop="doc_root" :label="t('si.siteDir')" min-width="220">
-          <template #default="{ row }">
-            <el-link type="primary" class="site-dir-link" @click="openSiteDir(row)">
-              <el-icon><FolderOpened /></el-icon>
-              <span>{{ row.doc_root || '/' }}</span>
-            </el-link>
-          </template>
-        </el-table-column>
-        <el-table-column prop="site_type" :label="t('si.siteType')" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.site_type === 'proxy' ? 'warning' : 'info'" size="small">{{ row.site_type }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" :label="t('si.status')" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'running' ? 'success' : 'danger'" size="small" effect="dark">
-              {{ row.status === 'running' ? t('si.running') : t('si.stopped') }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" :label="t('si.createdAt')" width="180" />
-        <el-table-column width="156" fixed="right" align="right" header-align="right">
-          <template #header></template>
-          <template #default="{ row }">
-            <div class="site-actions">
-              <el-tooltip :content="row.status === 'stopped' ? t('si.start') : t('si.stop')" :show-after="250">
-                <el-button
-                  size="small"
-                  circle
-                  class="action-btn"
-                  :class="row.status === 'stopped' ? 'action-success' : 'action-warning'"
-                  @click="row.status === 'stopped' ? handleStart(row.id) : handleStop(row.id)"
-                >
-                  <el-icon><VideoPlay v-if="row.status === 'stopped'" /><VideoPause v-else /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip :content="t('ct.sslSettings')" :show-after="250">
-                <el-button
-                  size="small"
-                  circle
-                  class="action-btn"
-                  :class="{ 'action-success': row.ssl_enabled }"
-                  @click="openSslDialog(row)"
-                >
-                  <el-icon><Lock /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip :content="t('si.config')" :show-after="250">
-                <el-button size="small" circle class="action-btn" @click="router.push(`/sites/${row.id}`)">
-                  <el-icon><Setting /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip :content="t('delete')" :show-after="250">
-                <el-button size="small" circle class="action-btn action-danger" @click="handleDelete(row)">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-    <el-card v-else-if="activeCategory === 'openresty'" shadow="hover" class="openresty-settings-card">
-      <div class="openresty-settings-header">
-        <div class="openresty-settings-title">{{ t('st.openrestySettings') }}</div>
-        <div class="openresty-settings-actions">
-          <el-button size="small" @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
-          <el-button
-            size="small"
-            type="primary"
-            :disabled="!openrestyStatus.supported || openrestyStatus.installed"
-            :loading="installingOpenresty"
-            @click="handleQuickInstallOpenResty"
-          >
-            {{ t('st.quickInstallOpenresty') }}
-          </el-button>
-          <el-button size="small" :disabled="!installLog" @click="installLogDialogVisible = true">
-            {{ t('st.viewInstallLog') }}
-          </el-button>
-        </div>
-      </div>
-      <div class="openresty-status-box" v-loading="statusLoading || installingOpenresty">
-        <div class="openresty-status-tags">
-          <el-tag :type="openrestyStatus.installed ? 'success' : 'danger'" effect="dark" size="small">
-            {{ openrestyStatus.installed ? t('st.openrestyInstalled') : t('st.openrestyNotInstalled') }}
-          </el-tag>
-          <el-tag :type="openrestyForm.openresty_enabled ? 'success' : 'info'" size="small">
-            {{ t('st.openrestyEnabled') }}: {{ openrestyForm.openresty_enabled ? 'ON' : 'OFF' }}
-          </el-tag>
-          <el-tag v-if="openrestyStatus.version" type="info" size="small">
-            {{ openrestyStatus.version }}
-          </el-tag>
-        </div>
-        <div class="openresty-status-message">{{ openrestyStatus.message || '-' }}</div>
-        <div class="openresty-status-meta">
-          <span>{{ t('st.openrestyCurrentBin') }}: {{ openrestyStatus.nginx_bin || '-' }}</span>
-          <span>{{ t('st.openrestyCurrentConf') }}: {{ openrestyStatus.nginx_conf || '-' }}</span>
-          <span>{{ t('st.openrestyCurrentSitesDir') }}: {{ openrestyStatus.sites_dir || '-' }}</span>
-        </div>
-      </div>
-      <el-alert
-        v-if="!openrestyStatus.installed"
-        type="warning"
-        show-icon
-        :closable="false"
-        :title="t('si.openrestyRequiredTitle')"
-        :description="t('si.openrestyRequiredDesc')"
-      />
-      <el-form :model="openrestyForm" label-width="120px" label-position="left" class="openresty-settings-form">
-        <el-form-item :label="t('st.openrestyEnabled')">
-          <el-switch v-model="openrestyForm.openresty_enabled" />
-        </el-form-item>
-        <el-form-item :label="t('st.openrestyBin')">
-          <el-input v-model="openrestyForm.openresty_bin" :placeholder="t('st.openrestyBinPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="t('st.openrestySitesDir')">
-          <el-input v-model="openrestyForm.openresty_sites_dir" :placeholder="t('st.openrestySitesDirPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="t('st.openrestyConfPath')">
-          <el-input v-model="openrestyForm.openresty_conf_path" :placeholder="t('st.openrestyConfPathPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="t('st.phpFpmAddr')">
-          <el-input v-model="openrestyForm.php_fpm_addr" :placeholder="t('st.phpFpmAddrPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="t('st.openrestyIpv6')">
-          <el-switch v-model="openrestyForm.openresty_listen_ipv6" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="savingOpenresty" @click="saveOpenrestySettings">
-            {{ t('st.saveSettings') }}
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-    <CertPanel v-else ref="certPanelRef" :sites="certSiteOptions" />
+            </el-table-column>
+            <el-table-column :label="t('si.siteType')" width="120">
+              <template #default="{ row }">
+                <span class="lp-pill" :class="typePill(row.site_type)">{{ typeLabel(row.site_type) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('si.siteDir')" min-width="200">
+              <template #default="{ row }">
+                <a class="dir-link lp-mono" :title="t('si.openSiteDir')" @click="openSiteDir(row)">
+                  <el-icon><FolderOpened /></el-icon><span class="lp-truncate">{{ row.doc_root || '/' }}</span>
+                </a>
+              </template>
+            </el-table-column>
+            <el-table-column label="SSL" width="110">
+              <template #default="{ row }">
+                <button type="button" class="ssl-chip" :class="{ 'is-on': row.ssl_enabled }" @click="openSslDialog(row)">
+                  <el-icon><Lock /></el-icon>{{ row.ssl_enabled ? t('si.sslOn') : t('si.sslOff') }}
+                </button>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('si.status')" width="100">
+              <template #default="{ row }">
+                <el-switch
+                  :model-value="row.status === 'running'"
+                  :loading="toggling === row.id"
+                  @change="(v: string | number | boolean) => toggleSite(row, v === true)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('actions')" width="190" align="right">
+              <template #default="{ row }">
+                <el-button link type="primary" size="small" @click="openDomain(primaryDomain(row))">{{ t('si.visit') }}</el-button>
+                <el-button link type="primary" size="small" @click="router.push(`/sites/${row.id}`)">{{ t('si.config') }}</el-button>
+                <el-button link type="danger" size="small" @click="handleDelete(row)">{{ t('delete') }}</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </section>
+      </el-tab-pane>
 
-    <el-dialog v-model="showCreate" :title="t('si.addSite')" width="500px" v-drag :modal="false" :close-on-click-modal="false">
-      <el-form :model="createForm" label-width="80px">
-        <el-form-item :label="t('si.siteName')">
-          <el-input v-model="createForm.name" />
-        </el-form-item>
-        <el-form-item :label="t('si.domain')">
+      <!-- ============ Certificates ============ -->
+      <el-tab-pane :label="t('si.tabCert')" name="certs" lazy>
+        <CertPanel ref="certPanelRef" :sites="certSiteOptions" />
+      </el-tab-pane>
+
+      <!-- ============ OpenResty ============ -->
+      <el-tab-pane :label="t('si.tabOpenresty')" name="openresty">
+        <section class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title"><el-icon><Setting /></el-icon>{{ t('st.openrestySettings') }}</h2>
+            <div class="head-tools">
+              <el-button size="small" @click="loadOpenRestyStatus(true)">{{ t('refresh') }}</el-button>
+              <el-button
+                size="small"
+                type="primary"
+                :disabled="!openrestyStatus.supported || openrestyStatus.installed"
+                :loading="installingOpenresty"
+                @click="handleQuickInstallOpenResty"
+              >{{ t('st.quickInstallOpenresty') }}</el-button>
+            </div>
+          </header>
+          <div class="lp-card-body" v-loading="statusLoading">
+            <div class="or-status">
+              <span class="lp-pill" :class="openrestyStatus.installed ? 'lp-pill--ok' : 'lp-pill--danger'">
+                <span class="lp-pill__dot"></span>{{ openrestyStatus.installed ? t('st.openrestyInstalled') : t('st.openrestyNotInstalled') }}
+              </span>
+              <span v-if="openrestyStatus.version" class="lp-mono lp-dim">{{ openrestyStatus.version }}</span>
+            </div>
+            <dl class="or-meta">
+              <div><dt>{{ t('st.openrestyCurrentBin') }}</dt><dd class="lp-mono">{{ openrestyStatus.nginx_bin || '—' }}</dd></div>
+              <div><dt>{{ t('st.openrestyCurrentConf') }}</dt><dd class="lp-mono">{{ openrestyStatus.nginx_conf || '—' }}</dd></div>
+              <div><dt>{{ t('st.openrestyCurrentSitesDir') }}</dt><dd class="lp-mono">{{ openrestyStatus.sites_dir || '—' }}</dd></div>
+            </dl>
+            <el-form :model="openrestyForm" label-position="top" class="or-form">
+              <el-form-item :label="t('st.openrestyEnabled')">
+                <el-switch v-model="openrestyForm.openresty_enabled" />
+              </el-form-item>
+              <el-form-item :label="t('st.openrestyBin')">
+                <el-input v-model="openrestyForm.openresty_bin" class="lp-mono" :placeholder="t('st.openrestyBinPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('st.openrestySitesDir')">
+                <el-input v-model="openrestyForm.openresty_sites_dir" class="lp-mono" :placeholder="t('st.openrestySitesDirPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('st.openrestyConfPath')">
+                <el-input v-model="openrestyForm.openresty_conf_path" class="lp-mono" :placeholder="t('st.openrestyConfPathPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('st.phpFpmAddr')">
+                <el-input v-model="openrestyForm.php_fpm_addr" class="lp-mono" :placeholder="t('st.phpFpmAddrPlaceholder')" />
+              </el-form-item>
+              <el-form-item :label="t('st.openrestyIpv6')">
+                <el-switch v-model="openrestyForm.openresty_listen_ipv6" />
+              </el-form-item>
+              <el-button type="primary" :loading="savingOpenresty" @click="saveOpenrestySettings">{{ t('st.saveSettings') }}</el-button>
+            </el-form>
+          </div>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
+
+    <!-- ============ Create ============ -->
+    <el-dialog v-model="showCreate" :title="t('si.addSite')" width="640px" :close-on-click-modal="false" append-to-body @opened="focusDomainInput">
+      <div class="kinds">
+        <button
+          v-for="kind in siteKinds"
+          :key="kind.value"
+          type="button"
+          class="kind"
+          :class="{ 'is-active': siteKind === kind.value }"
+          @click="selectKind(kind.value)"
+        >
+          <el-icon :size="20" class="kind__icon"><component :is="kind.icon" /></el-icon>
+          <span class="kind__label">{{ kind.label }}</span>
+          <span class="kind__desc">{{ kind.desc }}</span>
+        </button>
+      </div>
+
+      <el-form :model="createForm" label-position="top" class="create-form">
+        <el-form-item :label="t('si.domain')" required>
           <div class="domain-editor" @click="handleDomainEditorClick" @dblclick="handleDomainEditorDblClick">
             <template v-if="!domainTextMode">
               <el-tag
-                v-for="domain in createForm.domains"
+                v-for="(domain, index) in createForm.domains"
                 :key="domain"
                 closable
                 size="small"
-                :class="[
-                  'domain-tag',
-                  { 'domain-tag-conflict': domainConflictMap[domain] },
-                ]"
+                :type="index === 0 ? 'primary' : 'info'"
+                :class="['domain-tag', { 'domain-tag-conflict': domainConflictMap[domain] }]"
                 @close="removeDomain(domain)"
-              >
-                {{ domain }}
-              </el-tag>
+              >{{ domain }}</el-tag>
               <input
                 ref="domainInputRef"
                 v-model="domainInput"
                 class="domain-input"
-                :placeholder="createForm.domains.length ? '' : t('si.domainInputPlaceholder')"
+                :placeholder="createForm.domains.length ? '' : 'example.com'"
                 @keydown="handleDomainInputKeydown"
                 @blur="commitDomainInput"
                 @paste="handleDomainInputPaste"
@@ -299,65 +229,64 @@
               @blur="applyDomainTextMode"
             />
           </div>
-          <div class="form-tip">{{ t('si.domainInputTip') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('si.rootDir')">
-          <div class="root-dir-row">
-            <el-input v-model="createForm.doc_root" placeholder="/www/wwwroot" />
-            <el-tooltip :content="t('si.chooseDir')" :show-after="250">
-              <el-button circle class="dir-picker-btn" @click="showDirPicker = true">
-                <el-icon><FolderOpened /></el-icon>
-              </el-button>
-            </el-tooltip>
-          </div>
-          <div class="form-tip">{{ t('si.rootDirTip') }}</div>
+          <div class="form-tip">{{ t('si.domainTipNew') }}</div>
         </el-form-item>
 
-        <el-form-item :label="t('si.siteType')">
-          <el-select v-model="createForm.site_type" style="width: 100%">
-            <el-option v-for="option in siteTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
-          </el-select>
-          <div class="form-tip">{{ siteTypeTip }}</div>
+        <el-form-item v-if="siteKind === 'app'" :label="t('si.runtime')">
+          <el-radio-group v-model="createForm.site_type">
+            <el-radio-button v-for="r in appRuntimes" :key="r.value" :value="r.value">{{ r.label }}</el-radio-button>
+          </el-radio-group>
         </el-form-item>
-
-        <!-- App-backed types proxy to a managed application, so pick which one. -->
-        <el-form-item v-if="isAppSiteType" :label="t('si.linkedApp')">
+        <el-form-item v-if="siteKind === 'app'" :label="t('si.linkedApp')" required>
           <el-select v-model="createForm.app_id" style="width: 100%" :placeholder="t('si.selectApp')" clearable>
-            <el-option
-              v-for="app in matchingApps"
-              :key="app.id"
-              :label="`${app.name} — :${app.port}`"
-              :value="app.id"
-            />
+            <el-option v-for="app in matchingApps" :key="app.id" :label="`${app.name} — :${app.port}`" :value="app.id" />
           </el-select>
           <div class="form-tip">
             {{ matchingApps.length ? t('si.linkedAppTip') : t('si.noMatchingApp') }}
+            <el-button v-if="!matchingApps.length" link type="primary" size="small" @click="router.push('/runtime')">{{ t('si.goRuntime') }}</el-button>
           </div>
         </el-form-item>
 
-        <el-form-item v-if="createForm.site_type === 'proxy'" :label="t('si.proxyAddress')">
+        <el-form-item v-if="siteKind === 'proxy'" :label="t('si.proxyAddress')" required>
           <el-input v-model="createForm.proxy_pass" placeholder="http://127.0.0.1:8080" class="lp-mono" />
+          <div class="form-tip">{{ t('si.proxyTip') }}</div>
         </el-form-item>
 
-        <el-form-item :label="t('si.rewriteRules')">
-          <el-input
-            v-model="createForm.rewrite_rules"
-            type="textarea"
-            :rows="3"
-            class="lp-mono"
-            :placeholder="'rewrite ^/(.*)$ /index.php/$1 last;'"
-          />
-          <div class="rewrite-presets">
-            <button
-              v-for="preset in rewritePresets"
-              :key="preset.label"
-              type="button"
-              class="preset-chip"
-              @click="createForm.rewrite_rules = preset.value"
-            >{{ preset.label }}</button>
+        <el-form-item v-if="siteKind === 'static' || siteKind === 'php'" :label="t('si.siteDir')">
+          <div class="root-dir-row">
+            <el-input v-model="createForm.doc_root" class="lp-mono" placeholder="/www/wwwroot/example.com" @input="docRootEdited = true" />
+            <el-button :icon="FolderOpened" @click="showDirPicker = true" />
           </div>
-          <div class="form-tip">{{ t('si.rewriteTip') }}</div>
+          <div class="form-tip">{{ t('si.rootDirTipNew') }}</div>
         </el-form-item>
+
+        <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+          <el-icon><ArrowRight v-if="!showAdvanced" /><ArrowDown v-else /></el-icon>{{ t('si.advanced') }}
+        </button>
+        <template v-if="showAdvanced">
+          <el-form-item :label="t('si.siteName')">
+            <el-input v-model="createForm.name" :placeholder="createForm.domains[0] || t('si.siteNameAuto')" />
+          </el-form-item>
+          <el-form-item v-if="siteKind === 'static' || siteKind === 'php'" :label="t('si.rewriteRules')">
+            <el-input
+              v-model="createForm.rewrite_rules"
+              type="textarea"
+              :rows="3"
+              class="lp-mono"
+              :placeholder="'rewrite ^/(.*)$ /index.php/$1 last;'"
+            />
+            <div class="rewrite-presets">
+              <button
+                v-for="preset in rewritePresets"
+                :key="preset.label"
+                type="button"
+                class="preset-chip"
+                @click="createForm.rewrite_rules = preset.value"
+              >{{ preset.label }}</button>
+            </div>
+            <div class="form-tip">{{ t('si.rewriteTip') }}</div>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="showCreate = false">{{ t('cancel') }}</el-button>
@@ -371,27 +300,14 @@
       width="760px"
       destroy-on-close
       class="dir-picker-dialog"
-      v-drag
-      :modal="false"
-      :close-on-click-modal="false"
+      append-to-body
     >
       <div class="dir-picker-shell">
         <DirPicker :init-path="createForm.doc_root || '/'" @select="handleSelectDir" />
       </div>
     </el-dialog>
 
-    <OperationLogDialog
-      v-model="installLogDialogVisible"
-      :title="t('st.openrestyInstallLog')"
-      :description="openrestyStatus.message || t('st.openrestyInstallStarting')"
-      :status="installLogStatus"
-      :loading="installingOpenresty"
-      :log="installLog"
-      @clear="installLog = ''"
-    />
-  </div>
-
-    <el-dialog v-model="sslVisible" :title="sslTitle" width="520px">
+    <el-dialog v-model="sslVisible" :title="sslTitle" width="520px" append-to-body>
       <el-form label-position="top">
         <el-form-item :label="t('ct.certificate')">
           <el-select v-model="sslForm.cert_id" clearable style="width: 100%" :placeholder="t('ct.noCertBound')">
@@ -404,12 +320,10 @@
           </el-select>
           <div class="form-tip">{{ t('ct.bindHint') }}</div>
         </el-form-item>
-
         <el-form-item v-if="sslForm.cert_id">
           <el-switch v-model="sslForm.force_https" :active-text="t('ct.forceHttps')" />
           <div class="form-tip">{{ t('ct.forceHttpsHint') }}</div>
         </el-form-item>
-
         <el-form-item v-if="sslForm.cert_id">
           <el-switch v-model="sslForm.hsts" :active-text="t('ct.hsts')" />
           <div class="form-tip">{{ t('ct.hstsHint') }}</div>
@@ -420,10 +334,12 @@
         <el-button type="primary" :loading="savingSsl" @click="submitSsl">{{ t('ct.save') }}</el-button>
       </template>
     </el-dialog>
+  </div>
 </template>
 
+
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
 import CertPanel from './CertPanel.vue'
@@ -443,7 +359,8 @@ import {
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, FolderOpened, VideoPlay, VideoPause, Setting, Delete, WarningFilled, Lock,
+  Plus, FolderOpened, Setting, WarningFilled, Lock, Search, Connection, ArrowRight, ArrowDown,
+  Document, Files, Position, Cpu,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -467,6 +384,15 @@ const domainInput = ref('')
 const domainTextMode = ref(false)
 const domainTextBuffer = ref('')
 const domainConflictMap = reactive<Record<string, boolean>>({})
+// First loads done: until then placeholders show, never a false "empty".
+const sitesLoaded = ref(false)
+const statusChecked = ref(false)
+const keyword = ref('')
+const toggling = ref<number | null>(null)
+const showAdvanced = ref(false)
+const docRootEdited = ref(false)
+type SiteKind = 'static' | 'php' | 'proxy' | 'app'
+const siteKind = ref<SiteKind>('static')
 const openrestyStatus = ref<any>({
   supported: true,
   installed: false,
@@ -508,6 +434,70 @@ const siteTypeOptions = computed(() => [
 ])
 
 const APP_SITE_TYPES = ['node', 'python', 'java', 'go', 'binary']
+
+const siteKinds = computed(() => [
+  { value: 'static' as SiteKind, label: t('si.kindStatic'), desc: t('si.kindStaticDesc'), icon: Document },
+  { value: 'php' as SiteKind, label: t('si.kindPhp'), desc: t('si.kindPhpDesc'), icon: Files },
+  { value: 'proxy' as SiteKind, label: t('si.kindProxy'), desc: t('si.kindProxyDesc'), icon: Position },
+  { value: 'app' as SiteKind, label: t('si.kindApp'), desc: t('si.kindAppDesc'), icon: Cpu },
+])
+const appRuntimes = computed(() => siteTypeOptions.value.filter((o) => APP_SITE_TYPES.includes(o.value)))
+
+function selectKind(kind: SiteKind) {
+  siteKind.value = kind
+  createForm.site_type = kind === 'app' ? 'node' : kind
+  createForm.app_id = undefined
+}
+
+function openCreate() {
+  clearCreateDomainState()
+  Object.assign(createForm, {
+    name: '', doc_root: '', site_type: 'static', app_id: undefined, proxy_pass: '', rewrite_rules: '',
+  })
+  siteKind.value = 'static'
+  docRootEdited.value = false
+  showAdvanced.value = false
+  showCreate.value = true
+}
+
+// The directory follows the main domain until edited by hand.
+watch(() => createForm.domains[0], (domain) => {
+  if (docRootEdited.value) return
+  createForm.doc_root = domain ? `/www/wwwroot/${domain.split(':')[0]}` : ''
+})
+
+const filteredSites = computed(() => {
+  const q = keyword.value.trim().toLowerCase()
+  if (!q) return sites.value
+  return sites.value.filter((site: any) =>
+    [site.name, site.domains, site.doc_root].some((v) => String(v || '').toLowerCase().includes(q)),
+  )
+})
+
+function primaryDomain(row: any) {
+  return getDomainList(row.domains)[0] || row.name
+}
+
+function typeLabel(type: string) {
+  return siteTypeOptions.value.find((o) => o.value === type)?.label || type
+}
+
+function typePill(type: string) {
+  if (type === 'php') return 'lp-pill--accent'
+  if (type === 'proxy') return 'lp-pill--warn'
+  if (APP_SITE_TYPES.includes(type)) return 'lp-pill--ok'
+  return ''
+}
+
+async function toggleSite(row: any, on: boolean) {
+  toggling.value = row.id
+  try {
+    if (on) await handleStart(row.id)
+    else await handleStop(row.id)
+  } finally {
+    toggling.value = null
+  }
+}
 const isAppSiteType = computed(() => APP_SITE_TYPES.includes(createForm.site_type))
 
 /** Only offer applications whose runtime matches the chosen site type. */
@@ -814,6 +804,7 @@ function handleDomainTextKeydown(event: KeyboardEvent) {
 }
 function handleSelectDir(path: string) {
   createForm.doc_root = path || '/'
+  docRootEdited.value = true
   showDirPicker.value = false
 }
 
@@ -880,6 +871,7 @@ async function loadOpenRestyStatus(showError = false) {
     if (showError) ElMessage.error(t('api.requestFailed'))
   } finally {
     statusLoading.value = false
+    statusChecked.value = true
   }
 }
 
@@ -939,7 +931,10 @@ async function loadSites() {
       refreshCreateDomainConflicts()
     }
   } catch {}
-  finally { loading.value = false }
+  finally {
+    loading.value = false
+    sitesLoaded.value = true
+  }
 }
 
 async function saveOpenrestySettings() {
@@ -977,9 +972,10 @@ async function doCreate() {
     return
   }
   const payload = {
-    name: createForm.name.trim(),
+    name: createForm.name.trim() || createForm.domains[0] || '',
     domains: [...createForm.domains],
-    doc_root: createForm.doc_root.trim() || '/www/wwwroot',
+    // Empty: the server uses /www/wwwroot/<main domain>.
+    doc_root: createForm.doc_root.trim() || undefined,
     app_id: isAppSiteType.value ? createForm.app_id : undefined,
     proxy_pass: createForm.site_type === 'proxy' ? createForm.proxy_pass.trim() : undefined,
     rewrite_rules: createForm.rewrite_rules.trim() || undefined,
@@ -993,6 +989,14 @@ async function doCreate() {
     ElMessage.warning(t('si.domainRequired'))
     return
   }
+  if (createForm.site_type === 'proxy' && !payload.proxy_pass) {
+    ElMessage.warning(t('si.proxyRequired'))
+    return
+  }
+  if (isAppSiteType.value && !payload.app_id) {
+    ElMessage.warning(t('si.appRequired'))
+    return
+  }
   creating.value = true
   try {
     const res: any = await createSite(payload)
@@ -1000,7 +1004,7 @@ async function doCreate() {
       ElMessage.success(t('si.created'))
       showCreate.value = false
       createForm.name = ''
-      createForm.doc_root = '/www/wwwroot'
+      createForm.doc_root = ''
       createForm.site_type = 'static'
       createForm.app_id = undefined
       createForm.proxy_pass = ''
@@ -1427,5 +1431,93 @@ onMounted(async () => {
     background: var(--lp-danger-bg) !important;
     color: var(--lp-danger) !important;
   }
+}
+</style>
+
+<style scoped lang="scss">
+/* ---------- Redesigned list ---------- */
+.tabs { margin-top: calc(var(--lp-2) * -1); }
+.count {
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-muted-soft);
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-dim);
+  font-weight: 500;
+}
+.search { width: 220px; }
+.head-tools { display: flex; gap: var(--lp-2); }
+
+.guard { display: flex; gap: var(--lp-4); padding: var(--lp-5); align-items: flex-start; }
+.guard__icon {
+  display: grid; place-items: center; flex-shrink: 0;
+  width: 48px; height: 48px; border-radius: var(--lp-r-lg);
+  background: var(--lp-warn-soft); color: var(--lp-warn);
+}
+.guard__title { margin: 0 0 4px; font-size: var(--lp-text-md); }
+.guard__desc { margin: 0 0 var(--lp-4); color: var(--lp-text-dim); font-size: var(--lp-text-sm); line-height: 1.6; }
+.guard__actions { display: flex; gap: var(--lp-2); flex-wrap: wrap; }
+
+.empty { display: flex; flex-direction: column; align-items: center; gap: var(--lp-2); padding: 48px var(--lp-4); text-align: center; }
+.empty__icon { color: var(--lp-text-faint); }
+.empty__title { margin: 0; font-weight: 600; }
+.empty__hint { margin: 0 0 var(--lp-2); font-size: var(--lp-text-sm); max-width: 460px; line-height: 1.6; }
+.empty__actions { display: flex; gap: var(--lp-2); }
+
+.site-cell { display: flex; align-items: center; gap: var(--lp-3); min-width: 0; }
+.site-cell__text { display: flex; flex-direction: column; min-width: 0; }
+.site-cell__name { font-weight: 600; color: var(--lp-text); cursor: pointer; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.site-cell__name:hover { color: var(--lp-accent); }
+.site-cell__sub { font-size: var(--lp-text-xs); color: var(--lp-text-dim); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot--ok { background: var(--lp-ok); box-shadow: 0 0 0 3px var(--lp-ok-soft); }
+.dot--off { background: var(--lp-text-faint); }
+.dir-link { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; color: var(--lp-text-soft); cursor: pointer; font-size: var(--lp-text-xs); }
+.dir-link:hover { color: var(--lp-accent); }
+.ssl-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--lp-r-full);
+  border: 1px solid var(--lp-line); background: transparent;
+  color: var(--lp-text-dim); font: inherit; font-size: var(--lp-text-xs); cursor: pointer;
+  &.is-on { border-color: transparent; background: var(--lp-ok-soft); color: var(--lp-ok); }
+  &:hover { border-color: var(--lp-accent); }
+}
+
+/* ---------- OpenResty tab ---------- */
+.or-status { display: flex; align-items: center; gap: var(--lp-3); margin-bottom: var(--lp-4); }
+.or-meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--lp-3);
+  margin: 0 0 var(--lp-5);
+  dt { font-size: var(--lp-text-xs); color: var(--lp-text-dim); margin-bottom: 2px; }
+  dd { margin: 0; font-size: var(--lp-text-xs); word-break: break-all; }
+}
+.or-form { max-width: 560px; }
+
+/* ---------- Create ---------- */
+.kinds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--lp-2); margin-bottom: var(--lp-4); }
+.kind {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: var(--lp-3); border: 1px solid var(--lp-line); border-radius: var(--lp-r-lg);
+  background: var(--lp-surface); color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  &:hover { border-color: var(--lp-accent); }
+  &.is-active { border-color: var(--lp-accent); box-shadow: 0 0 0 1px var(--lp-accent) inset; background: var(--lp-accent-soft); }
+}
+.kind__icon { color: var(--lp-accent); }
+.kind__label { font-weight: 600; font-size: var(--lp-text-sm); }
+.kind__desc { font-size: 11px; color: var(--lp-text-dim); line-height: 1.4; }
+.create-form :deep(.el-form-item) { margin-bottom: var(--lp-4); }
+.root-dir-row { display: flex; gap: var(--lp-2); width: 100%; .el-input { flex: 1; } }
+.advanced-toggle {
+  display: inline-flex; align-items: center; gap: 4px; margin: 0 0 var(--lp-3);
+  padding: 0; border: 0; background: none; color: var(--lp-text-soft); font: inherit; font-size: var(--lp-text-sm); cursor: pointer;
+  &:hover { color: var(--lp-accent); }
+}
+
+@media (max-width: 720px) {
+  .kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .search { width: 150px; }
+  .guard { flex-direction: column; }
 }
 </style>

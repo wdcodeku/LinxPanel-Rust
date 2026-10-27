@@ -10,6 +10,9 @@ use crate::models::*;
 use crate::services::openresty;
 use crate::AppState;
 
+/// Parent of every site directory created with the default location.
+const SITES_ROOT: &str = "/www/wwwroot";
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/sites", get(list_sites).post(create_site))
@@ -99,10 +102,20 @@ pub(crate) async fn create_site_record(
         return Err("At least one domain is required".to_string());
     }
 
-    let doc_root = doc_root
-        .map(|d| d.trim().to_string())
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| "/www/wwwroot".to_string());
+    // Each site gets its own directory: /www/wwwroot/<primary host>. The bare
+    // parent (the old form default) would make every site share one root.
+    let own_dir = || {
+        let host = domains[0]
+            .split(':')
+            .next()
+            .unwrap_or(&domains[0])
+            .to_string();
+        format!("{}/{}", SITES_ROOT, host)
+    };
+    let doc_root = match doc_root.map(|d| d.trim().trim_end_matches('/').to_string()) {
+        Some(d) if !d.is_empty() && d != SITES_ROOT => d,
+        _ => own_dir(),
+    };
     if let Err(e) = std::fs::create_dir_all(&doc_root) {
         return Err(format!("Failed to create site directory: {}", e));
     }

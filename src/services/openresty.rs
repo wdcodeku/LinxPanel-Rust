@@ -1690,8 +1690,32 @@ fn test_openresty(runtime: &OpenRestyRuntime) -> Result<()> {
     run_openresty(runtime, ["-t"].as_slice())
 }
 
+/// Applies a new configuration. When no master process is running (stopped,
+/// crashed, or not started after a reboot) a reload cannot work, so the
+/// server is started instead.
 fn reload_openresty(runtime: &OpenRestyRuntime) -> Result<()> {
-    run_openresty(runtime, ["-s", "reload"].as_slice())
+    match run_openresty(runtime, ["-s", "reload"].as_slice()) {
+        Ok(()) => Ok(()),
+        Err(err) if not_running(&err.to_string()) => start_openresty(runtime),
+        Err(err) => Err(err),
+    }
+}
+
+/// nginx's ways of saying there is no master process to signal.
+fn not_running(error: &str) -> bool {
+    error.contains("No such process")
+        || error.contains("invalid PID number")
+        || (error.contains("nginx.pid") && error.contains("failed"))
+}
+
+fn start_openresty(runtime: &OpenRestyRuntime) -> Result<()> {
+    // Prefer the service, so the init system keeps supervising it.
+    if super::sysservice::exists("openresty") {
+        return super::sysservice::enable_and_restart("openresty")
+            .map(|_| ())
+            .map_err(|e| anyhow!("Cannot start OpenResty: {}", e));
+    }
+    run_openresty(runtime, [].as_slice()).context("Cannot start OpenResty")
 }
 
 fn run_openresty(runtime: &OpenRestyRuntime, args: &[&str]) -> Result<()> {
@@ -2498,6 +2522,17 @@ mod rewrite_tests {
     #[test]
     fn requires_a_terminating_semicolon() {
         assert!(render_rewrite_rules("rewrite ^/a$ /b last").is_err());
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    #[test]
+    fn recognises_a_stopped_server() {
+        assert!(super::not_running("[alert] 18667#18667: kill(7872, 1) failed (3: No such process)"));
+        assert!(super::not_running("nginx: [error] invalid PID number \"\" in \"/run/openresty.pid\""));
+        assert!(super::not_running("nginx: [error] open() \"/usr/local/openresty/nginx/logs/nginx.pid\" failed (2: No such file or directory)"));
+        assert!(!super::not_running("nginx: [emerg] unknown directive \"foo\""));
     }
 }
 
