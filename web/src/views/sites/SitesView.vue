@@ -176,6 +176,53 @@
             </el-form>
           </div>
         </section>
+
+        <!-- What a visitor gets for a host no site is bound to (e.g. the bare IP). -->
+        <section class="lp-card default-site">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title"><el-icon><Position /></el-icon>{{ t('si.defaultSite') }}</h2>
+          </header>
+          <div class="lp-card-body">
+            <p class="ds-intro">{{ t('si.defaultSiteDesc') }}</p>
+            <div class="ds-modes" role="radiogroup">
+              <button
+                v-for="option in defaultSiteModes"
+                :key="option.value"
+                type="button"
+                role="radio"
+                class="ds-mode"
+                :class="{ 'is-active': defaultSite.mode === option.value }"
+                :aria-checked="defaultSite.mode === option.value"
+                @click="defaultSite.mode = option.value"
+              >
+                <span class="ds-mode__radio"></span>
+                <span class="ds-mode__text">
+                  <span class="ds-mode__label">{{ option.label }}</span>
+                  <span class="ds-mode__desc">{{ option.desc }}</span>
+                </span>
+              </button>
+            </div>
+            <el-collapse-transition>
+              <div v-show="defaultSite.mode === 'page'" class="ds-html">
+                <div class="ds-html__label">{{ t('si.defaultSiteHtml') }}</div>
+                <el-input
+                  v-model="defaultSite.html"
+                  type="textarea"
+                  :rows="6"
+                  class="lp-mono"
+                  :placeholder="t('si.defaultSiteHtmlHint')"
+                />
+              </div>
+            </el-collapse-transition>
+            <el-button
+              type="primary"
+              :loading="savingDefaultSite"
+              :disabled="!openrestyStatus.installed"
+              @click="saveDefaultSite"
+            >{{ t('si.defaultSiteApply') }}</el-button>
+            <span v-if="!openrestyStatus.installed" class="ds-note">{{ t('st.openrestyNeedInstallFirst') }}</span>
+          </div>
+        </section>
       </el-tab-pane>
     </el-tabs>
 
@@ -354,6 +401,7 @@ import {
   saveSettingsApi,
   getOpenRestyStatus,
   quickInstallOpenResty,
+  setDefaultSite,
   getApps,
   getCerts,
   bindSiteSsl,
@@ -848,6 +896,8 @@ async function loadOpenrestySettings() {
       openrestyForm.openresty_conf_path = String(data.openresty_conf_path ?? openrestyForm.openresty_conf_path)
       openrestyForm.php_fpm_addr = String(data.php_fpm_addr ?? openrestyForm.php_fpm_addr)
       openrestyForm.openresty_listen_ipv6 = parseBoolLike(data.openresty_listen_ipv6, openrestyForm.openresty_listen_ipv6)
+      defaultSite.mode = data.openresty_default_site === 'close' ? 'close' : 'page'
+      defaultSite.html = String(data.openresty_default_site_html ?? '')
     }
   } catch {}
 }
@@ -935,6 +985,26 @@ async function loadSites() {
   finally {
     loading.value = false
     sitesLoaded.value = true
+  }
+}
+
+// --- Default site ---
+const defaultSite = reactive({ mode: 'page' as 'page' | 'close', html: '' })
+const savingDefaultSite = ref(false)
+const defaultSiteModes = computed(() => [
+  { value: 'page' as const, label: t('si.defaultSitePage'), desc: t('si.defaultSitePageDesc') },
+  { value: 'close' as const, label: t('si.defaultSiteClose'), desc: t('si.defaultSiteCloseDesc') },
+])
+
+async function saveDefaultSite() {
+  savingDefaultSite.value = true
+  try {
+    const res: any = await setDefaultSite({ mode: defaultSite.mode, html: defaultSite.html })
+    if (res.success) ElMessage.success(t('si.defaultSiteSaved'))
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    savingDefaultSite.value = false
   }
 }
 
@@ -1500,6 +1570,49 @@ usePage(async () => {
   dd { margin: 0; font-size: var(--lp-text-xs); word-break: break-all; }
 }
 .or-form { max-width: 560px; }
+
+.default-site { margin-top: var(--lp-4); }
+.ds-intro { margin-bottom: var(--lp-4); color: var(--lp-text-dim); max-width: 720px; }
+.ds-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--lp-3);
+  max-width: 760px;
+  margin-bottom: var(--lp-4);
+}
+.ds-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lp-3);
+  padding: var(--lp-3) var(--lp-4);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r);
+  background: var(--lp-surface);
+  color: var(--lp-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--lp-fast), background var(--lp-fast);
+
+  &:hover { border-color: var(--lp-line-strong); }
+  &.is-active { border-color: var(--lp-accent); background: var(--lp-accent-soft); }
+}
+.ds-mode__radio {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex: none;
+  border: 1.5px solid var(--lp-line-strong);
+  border-radius: 50%;
+  background: var(--lp-surface);
+}
+.ds-mode.is-active .ds-mode__radio { border: 5px solid var(--lp-accent); }
+.ds-mode__text { display: flex; flex-direction: column; gap: 2px; }
+.ds-mode__label { font-weight: 600; }
+.ds-mode__desc { font-size: var(--lp-text-sm); color: var(--lp-text-dim); line-height: 1.5; }
+.ds-html { max-width: 760px; margin-bottom: var(--lp-4); }
+.ds-html__label { margin-bottom: 6px; font-size: var(--lp-text-sm); color: var(--lp-text-soft); }
+.ds-note { margin-left: var(--lp-3); font-size: var(--lp-text-sm); color: var(--lp-text-dim); }
 
 /* ---------- Create ---------- */
 .kinds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--lp-2); margin-bottom: var(--lp-4); }

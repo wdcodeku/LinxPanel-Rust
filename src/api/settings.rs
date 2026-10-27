@@ -15,6 +15,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/settings/password", post(change_password))
         .route("/settings/openresty/status", get(get_openresty_status))
         .route("/settings/openresty/install", post(quick_install_openresty))
+        .route("/settings/openresty/default-site", post(set_default_site))
 }
 
 /// Keys that live in the settings table but must never reach or be set from the browser.
@@ -27,6 +28,10 @@ const PRIVATE_KEYS: &[&str] = &[
 
 /// Readable here, but only writable through their dedicated, validating endpoints.
 const MANAGED_KEYS: &[&str] = crate::services::panel_access::MANAGED_SETTINGS;
+const OPENRESTY_MANAGED_KEYS: &[&str] = &[
+    openresty::SETTING_DEFAULT_SITE,
+    openresty::SETTING_DEFAULT_SITE_HTML,
+];
 
 fn is_private_key(key: &str) -> bool {
     PRIVATE_KEYS.contains(&key)
@@ -50,10 +55,11 @@ async fn update_settings(
     State(state): State<Arc<AppState>>,
     Json(req): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Json<ApiResponse<()>> {
-    if let Some(key) = req
-        .keys()
-        .find(|key| is_private_key(key) || MANAGED_KEYS.contains(&key.as_str()))
-    {
+    if let Some(key) = req.keys().find(|key| {
+        is_private_key(key)
+            || MANAGED_KEYS.contains(&key.as_str())
+            || OPENRESTY_MANAGED_KEYS.contains(&key.as_str())
+    }) {
         return Json(ApiResponse::err(&format!(
             "Setting '{}' cannot be changed here",
             key
@@ -170,5 +176,29 @@ async fn quick_install_openresty_task(
             ApiResponse::ok(result)
         }
         Err(e) => ApiResponse::err(&format!("OpenResty install failed: {}", e)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct DefaultSiteRequest {
+    mode: String,
+    #[serde(default)]
+    html: String,
+}
+
+/// What a visitor gets for a host no site is bound to (e.g. the bare IP).
+async fn set_default_site(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DefaultSiteRequest>,
+) -> Json<ApiResponse<()>> {
+    let Some(mode) = openresty::DefaultSiteMode::parse(&req.mode) else {
+        return Json(ApiResponse::err("Unknown default site mode"));
+    };
+    if req.html.len() > 256 * 1024 {
+        return Json(ApiResponse::err("The page is too large (256 KB at most)"));
+    }
+    match openresty::set_default_site(state.as_ref(), mode, &req.html).await {
+        Ok(()) => Json(ApiResponse::ok(())),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
     }
 }

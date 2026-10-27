@@ -320,6 +320,16 @@ export default {
 
   // Sites
   si: {
+    defaultSite: 'Default site',
+    defaultSiteDesc: 'What a visitor gets for a domain no site is bound to, or for the bare server IP. HTTPS requests are refused at the handshake, so other sites\' certificates and domains are not exposed.',
+    defaultSitePage: 'Show a "site not found" page',
+    defaultSitePageDesc: 'Answers 404 with a plain page that does not reveal the server software.',
+    defaultSiteClose: 'Close the connection',
+    defaultSiteCloseDesc: 'Sends nothing back (444): scanners learn nothing. For servers reached by domain only.',
+    defaultSiteHtml: 'Custom page HTML (optional)',
+    defaultSiteHtmlHint: 'Leave empty for the built-in page',
+    defaultSiteApply: 'Save and apply',
+    defaultSiteSaved: 'Default site applied',
     pageSub: 'Create and manage websites: static, PHP, reverse proxy and apps, SSL certificates and OpenResty',
     guardDesc: 'Websites are served by OpenResty (an enhanced nginx). Install it to create websites; the install shows a live log and usually takes 1-3 minutes.',
     search: 'Search domain / name / directory',

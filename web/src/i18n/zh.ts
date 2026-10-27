@@ -320,6 +320,16 @@ export default {
 
   // Sites
   si: {
+    defaultSite: '默认站点',
+    defaultSiteDesc: '有人访问未绑定任何网站的域名，或直接访问服务器 IP 时看到的内容。HTTPS 访问会直接拒绝握手，不会暴露其他网站的证书和域名。',
+    defaultSitePage: '显示"站点未找到"页面',
+    defaultSitePageDesc: '返回 404 和一个简洁的提示页，不透露服务器使用的软件。',
+    defaultSiteClose: '直接断开连接',
+    defaultSiteCloseDesc: '不返回任何内容（444），扫描器拿不到任何信息。适合只通过域名访问的服务器。',
+    defaultSiteHtml: '自定义页面 HTML（可选）',
+    defaultSiteHtmlHint: '留空使用内置页面',
+    defaultSiteApply: '保存并应用',
+    defaultSiteSaved: '默认站点已应用',
     pageSub: '创建和管理网站：静态、PHP、反向代理和应用，SSL 证书与 OpenResty',
     guardDesc: '网站由 OpenResty（增强版 nginx）提供服务，安装后即可创建网站。安装过程会实时显示日志，通常 1-3 分钟。',
     search: '搜索域名 / 名称 / 目录',

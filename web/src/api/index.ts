@@ -266,6 +266,8 @@ export const changeUsernameApi = (data: { username: string; password: string }) 
 export const changePasswordApi = (data: { username: string; old_password: string; new_password: string }) =>
   request.post('/settings/password', data)
 export const getOpenRestyStatus = () => request.get('/settings/openresty/status')
+export const setDefaultSite = (data: { mode: 'page' | 'close'; html: string }) =>
+  request.post('/settings/openresty/default-site', data)
 export const quickInstallOpenResty = () =>
   runTask(t('task.install', { name: 'OpenResty' }), () => request.post('/settings/openresty/install', {}))
 
