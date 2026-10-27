@@ -205,7 +205,13 @@ fn probe_version(binary: &str, args: &[&str]) -> Option<(String, String)> {
     } else {
         output.stdout
     };
-    let first_line = text.lines().next().unwrap_or("").trim().to_string();
+    // The JVM announces JAVA_TOOL_OPTIONS / _JAVA_OPTIONS before its version.
+    let first_line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("Picked up "))
+        .unwrap_or("")
+        .to_string();
     let path = shell::run(if cfg!(windows) { "where" } else { "which" }, &[binary])
         .ok()
         .and_then(|out| out.stdout.lines().next().map(|s| s.trim().to_string()))

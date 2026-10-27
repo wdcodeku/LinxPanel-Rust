@@ -7,138 +7,145 @@
       </div>
       <div class="lp-page-actions">
         <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">{{ t('refresh') }}</el-button>
-        <el-button v-if="tab === 'apps'" type="primary" size="small" :icon="Plus" @click="openCreate">
-          {{ t('rt.newApp') }}
-        </el-button>
       </div>
     </div>
 
-    <el-tabs v-model="tab">
-      <!-- ============ Runtimes ============ -->
-      <el-tab-pane :label="t('rt.environments')" name="runtimes">
-        <div class="rt-grid">
-          <article v-for="item in runtimes" :key="item.kind" class="rt-card" :class="{ 'rt-card--on': item.installed }">
-            <div class="rt-card__head">
-              <span class="rt-logo" :data-kind="item.kind">{{ logoText(item.kind) }}</span>
-              <div class="rt-title">
-                <span class="rt-name">{{ item.display_name }}</span>
-                <span class="lp-pill" :class="item.installed ? 'lp-pill--ok' : ''">
-                  <span class="lp-pill__dot"></span>
-                  {{ item.installed ? item.version || t('rt.installed') : t('rt.notInstalled') }}
-                </span>
+    <!-- One tab per language: its environment, then its applications. -->
+    <div class="langs" role="tablist">
+      <button
+        v-for="lang in languages"
+        :key="lang.key"
+        type="button"
+        role="tab"
+        class="lang"
+        :class="{ 'is-active': lang.key === active }"
+        :aria-selected="lang.key === active"
+        @click="selectLanguage(lang.key)"
+      >
+        <span class="rt-logo" :data-kind="lang.key">{{ logoText(lang.key) }}</span>
+        <span class="lang__text">
+          <span class="lang__name">{{ lang.label }}</span>
+          <span class="lang__sub">
+            <span class="dot" :class="lang.runtime?.installed ? 'dot--ok' : ''"></span>
+            {{ lang.runtime?.installed ? (lang.runtime.version || t('rt.installed')) : loaded ? t('rt.notInstalled') : '…' }}
+          </span>
+        </span>
+        <span v-if="lang.apps.length" class="lang__count" :class="{ 'is-running': lang.running > 0 }">
+          {{ lang.running }}/{{ lang.apps.length }}
+        </span>
+      </button>
+    </div>
+
+    <template v-if="current">
+      <!-- Environment -->
+      <section v-if="!loaded" class="lp-card env">
+        <el-skeleton animated :rows="2" />
+      </section>
+      <section v-else class="lp-card env" :class="{ 'env--off': !current.runtime?.installed }">
+        <div class="env__main">
+          <span class="rt-logo rt-logo--lg" :data-kind="current.key">{{ logoText(current.key) }}</span>
+          <div class="env__text">
+            <div class="env__title">
+              {{ current.runtime?.display_name || current.label }}
+              <span class="lp-pill" :class="current.runtime?.installed ? 'lp-pill--ok' : ''">
+                <span class="lp-pill__dot"></span>{{ current.runtime?.installed ? current.runtime.version || t('rt.installed') : t('rt.notInstalled') }}
+              </span>
+            </div>
+            <p class="env__desc">{{ t(`rt.langDesc.${current.key}`) }}</p>
+            <div v-if="current.runtime?.installed && current.runtime.path" class="env__path lp-mono">{{ current.runtime.path }}</div>
+            <p v-if="current.runtime?.message" class="env__msg">{{ current.runtime.message }}</p>
+          </div>
+          <div class="env__actions">
+            <el-button
+              v-if="!current.runtime?.installed"
+              type="primary"
+              :disabled="!current.runtime?.installable"
+              :loading="installing === current.key"
+              @click="current.runtime && install(current.runtime)"
+            >{{ t('rt.installName', { name: current.label }) }}</el-button>
+            <el-button
+              v-else-if="current.key === 'php'"
+              :loading="installing === current.key"
+              @click="current.runtime && install(current.runtime, true)"
+            >{{ t('rt.repair') }}</el-button>
+          </div>
+        </div>
+        <ul v-if="current.runtime?.components.length" class="env__components">
+          <li v-for="component in current.runtime.components" :key="component.name" class="comp" :class="{ 'is-on': component.installed }">
+            <span class="comp__dot"></span>
+            <span class="comp__name">{{ component.name }}</span>
+            <span class="comp__ver lp-num">{{ component.installed ? component.version || t('rt.installed') : t('rt.notInstalled') }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Applications of this language -->
+      <section v-if="loaded" class="lp-card">
+        <header class="lp-card-head">
+          <h2 class="lp-card-title">
+            {{ t('rt.appsOf', { name: current.label }) }}
+            <span class="count">{{ current.apps.length }}</span>
+          </h2>
+          <el-button type="primary" size="small" :icon="Plus" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
+        </header>
+        <div v-if="!current.apps.length" class="empty">
+          <span class="rt-logo rt-logo--lg" :data-kind="current.key">{{ logoText(current.key) }}</span>
+          <p class="empty__title">{{ t('rt.noAppsOf', { name: current.label }) }}</p>
+          <p class="empty__hint">{{ t(`rt.appHint.${current.key}`) }}</p>
+          <el-button type="primary" :icon="Plus" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
+        </div>
+        <el-table v-else :data="current.apps" size="small">
+          <el-table-column :label="t('rt.appName')" min-width="190">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span class="app-name">{{ row.name }}</span>
+                <span class="lp-dim lp-truncate lp-mono">{{ row.work_dir }}</span>
               </div>
-            </div>
-
-            <div v-if="item.installed && item.path" class="rt-path lp-mono lp-truncate" :title="item.path">
-              {{ item.path }}
-            </div>
-
-            <ul v-if="item.components.length" class="rt-components">
-              <li v-for="component in item.components" :key="component.name" class="rt-component">
-                <span class="rt-component__dot" :class="{ 'is-on': component.installed }"></span>
-                <span class="rt-component__name">{{ component.name }}</span>
-                <span class="rt-component__ver lp-num">{{ component.installed ? component.version : '—' }}</span>
-              </li>
-            </ul>
-
-            <div class="rt-card__foot">
-              <span v-if="item.message" class="rt-msg lp-truncate" :title="item.message">{{ item.message }}</span>
-              <span v-else-if="item.installed" class="rt-msg">{{ t('rt.readyForApps') }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('rt.entry')" min-width="170">
+            <template #default="{ row }">
+              <code class="lp-mono lp-truncate entry">{{ row.entry }} {{ row.args }}</code>
+              <span v-if="current.key === 'go'" class="lp-dim kind-note">{{ runtimeLabel(row.runtime) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('rt.port')" width="80">
+            <template #default="{ row }"><span class="lp-num">{{ row.port || '—' }}</span></template>
+          </el-table-column>
+          <el-table-column :label="t('rt.state')" width="150">
+            <template #default="{ row }">
+              <span class="lp-pill" :class="row.running ? 'lp-pill--ok' : row.last_error ? 'lp-pill--danger' : ''">
+                <span class="lp-pill__dot"></span>{{ row.running ? t('rt.running') : t('rt.stopped') }}
+              </span>
+              <span v-if="row.running && row.pid" class="lp-dim pid">pid {{ row.pid }}</span>
+              <div v-if="row.restarts" class="lp-dim restarts">{{ t('rt.restarts', { n: row.restarts }) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('rt.uptimeCol')" width="110">
+            <template #default="{ row }"><span class="lp-num lp-dim">{{ row.running ? uptimeOf(row) : '—' }}</span></template>
+          </el-table-column>
+          <el-table-column :label="t('proc.actions')" width="270" align="right">
+            <template #default="{ row }">
+              <el-button v-if="!row.running" link type="primary" size="small" :loading="busy === row.id" @click="action(row, 'start')">{{ t('rt.start') }}</el-button>
+              <template v-else>
+                <el-button link size="small" :loading="busy === row.id" @click="action(row, 'restart')">{{ t('rt.restart') }}</el-button>
+                <el-button link size="small" :loading="busy === row.id" @click="action(row, 'stop')">{{ t('rt.stop') }}</el-button>
+              </template>
               <el-button
-                v-if="!item.installed"
-                type="primary"
+                v-if="['python', 'node', 'php'].includes(row.runtime)"
+                link
                 size="small"
-                plain
-                :disabled="!item.installable"
-                :loading="installing === item.kind"
-                @click="install(item)"
-              >{{ t('rt.install') }}</el-button>
-              <el-button
-                v-else-if="item.kind === 'php'"
-                size="small"
-                :loading="installing === item.kind"
-                @click="install(item, true)"
-              >{{ t('rt.repair') }}</el-button>
-            </div>
-          </article>
-        </div>
-      </el-tab-pane>
-
-      <!-- ============ Applications ============ -->
-      <el-tab-pane :label="t('rt.applications')" name="apps">
-        <div class="lp-card">
-          <el-table :data="apps" v-loading="loading" size="small" :empty-text="t('rt.noApps')">
-            <el-table-column :label="t('rt.appName')" min-width="170">
-              <template #default="{ row }">
-                <div class="cell-stack">
-                  <span class="app-name">{{ row.name }}</span>
-                  <span class="lp-dim lp-truncate lp-mono">{{ row.work_dir }}</span>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('rt.runtime')" width="110">
-              <template #default="{ row }">
-                <span class="lp-pill lp-pill--accent">{{ runtimeLabel(row.runtime) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('rt.entry')" min-width="150">
-              <template #default="{ row }">
-                <code class="lp-mono lp-truncate entry">{{ row.entry }} {{ row.args }}</code>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('rt.port')" width="80">
-              <template #default="{ row }">
-                <span class="lp-num">{{ row.port || '—' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('rt.state')" width="150">
-              <template #default="{ row }">
-                <span class="lp-pill" :class="row.running ? 'lp-pill--ok' : ''">
-                  <span class="lp-pill__dot"></span>{{ row.running ? t('rt.running') : t('rt.stopped') }}
-                </span>
-                <span v-if="row.running && row.pid" class="lp-dim pid">pid {{ row.pid }}</span>
-                <div v-if="row.restarts" class="lp-dim restarts">{{ t('rt.restarts', { n: row.restarts }) }}</div>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('rt.uptimeCol')" width="110">
-              <template #default="{ row }">
-                <span class="lp-num lp-dim">{{ row.running ? uptimeOf(row) : '—' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('proc.actions')" width="250" align="right">
-              <template #default="{ row }">
-                <el-button
-                  v-if="!row.running"
-                  link
-                  type="primary"
-                  size="small"
-                  :loading="busy === row.id"
-                  @click="action(row, 'start')"
-                >{{ t('rt.start') }}</el-button>
-                <template v-else>
-                  <el-button link size="small" :loading="busy === row.id" @click="action(row, 'restart')">
-                    {{ t('rt.restart') }}
-                  </el-button>
-                  <el-button link size="small" :loading="busy === row.id" @click="action(row, 'stop')">
-                    {{ t('rt.stop') }}
-                  </el-button>
-                </template>
-                <el-button
-                  v-if="['python', 'node', 'php'].includes(row.runtime)"
-                  link
-                  size="small"
-                  :loading="busy === `deps-${row.id}`"
-                  @click="installDeps(row)"
-                >{{ t('rt.installDeps') }}</el-button>
-                <el-button link size="small" @click="openLogs(row)">{{ t('rt.logs') }}</el-button>
-                <el-button link size="small" @click="openEdit(row)">{{ t('cron.edit') }}</el-button>
-                <el-button link type="danger" size="small" @click="remove(row)">{{ t('delete') }}</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+                :loading="busy === `deps-${row.id}`"
+                @click="installDeps(row)"
+              >{{ t('rt.installDeps') }}</el-button>
+              <el-button link size="small" @click="openLogs(row)">{{ t('rt.logs') }}</el-button>
+              <el-button link size="small" @click="openEdit(row)">{{ t('cron.edit') }}</el-button>
+              <el-button link type="danger" size="small" @click="remove(row)">{{ t('delete') }}</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+    </template>
 
     <!-- App editor -->
     <el-dialog v-model="formVisible" :title="editing ? t('rt.editApp') : t('rt.newApp')" width="620px" top="6vh">
@@ -149,7 +156,7 @@
           </el-form-item>
           <el-form-item :label="t('rt.runtime')" prop="runtime" class="form-row__item form-row__item--narrow">
             <el-select v-model="form.runtime" style="width: 100%">
-              <el-option v-for="kind in appRuntimes" :key="kind.value" :label="kind.label" :value="kind.value" />
+              <el-option v-for="kind in formRuntimes" :key="kind.value" :label="kind.label" :value="kind.value" />
             </el-select>
           </el-form-item>
         </div>
@@ -208,23 +215,16 @@
       </template>
     </el-dialog>
 
-    <OperationLogDialog
-      v-model="installLogVisible"
-      :title="installLogTitle"
-      :log="installLog"
-      :status="installStatus"
-      :loading="installing !== ''"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import OperationLogDialog from '@/components/OperationLogDialog.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
   installAppDeps, installRuntime, updateApp,
@@ -263,7 +263,42 @@ type AppRow = {
 
 const { t } = useI18n()
 
-const tab = ref('runtimes')
+type LangKey = 'php' | 'node' | 'python' | 'java' | 'go'
+const LANG_RUNTIMES: Record<LangKey, string[]> = {
+  php: ['php'],
+  node: ['node'],
+  python: ['python'],
+  java: ['java'],
+  // Compiled Go programs and any other binary run the same way.
+  go: ['go', 'binary'],
+}
+const LANG_KEY = 'lp.runtime.lang'
+const route = useRoute()
+const router = useRouter()
+const loaded = ref(false)
+const active = ref<LangKey>(initialLanguage())
+
+function initialLanguage(): LangKey {
+  const fromUrl = String(route.query.lang || '')
+  if (fromUrl in LANG_RUNTIMES) return fromUrl as LangKey
+  try {
+    const saved = localStorage.getItem(LANG_KEY) || ''
+    if (saved in LANG_RUNTIMES) return saved as LangKey
+  } catch {
+    // Storage blocked: start on PHP.
+  }
+  return 'php'
+}
+
+function selectLanguage(key: LangKey) {
+  active.value = key
+  try {
+    localStorage.setItem(LANG_KEY, key)
+  } catch {
+    // Not remembered; harmless.
+  }
+  if (route.query.lang !== key) router.replace({ query: { ...route.query, lang: key } })
+}
 const runtimes = ref<RuntimeStatus[]>([])
 const apps = ref<AppRow[]>([])
 const loading = ref(false)
@@ -287,6 +322,25 @@ const appRuntimes = computed(() => [
   { value: 'php', label: 'PHP (CLI)' },
 ])
 
+const languages = computed(() =>
+  (Object.keys(LANG_RUNTIMES) as LangKey[]).map((key) => {
+    const list = apps.value.filter((app) => LANG_RUNTIMES[key].includes(app.runtime))
+    return {
+      key,
+      label: { php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go' }[key],
+      runtime: runtimes.value.find((r) => r.kind === key),
+      apps: list,
+      running: list.filter((app) => app.running).length,
+    }
+  }),
+)
+const current = computed(() => languages.value.find((lang) => lang.key === active.value))
+const formRuntimes = computed(() => {
+  const own = LANG_RUNTIMES[active.value]
+  // Editing keeps the app's own kind selectable.
+  return appRuntimes.value.filter((kind) => own.includes(kind.value) || kind.value === form.runtime)
+})
+
 function runtimeLabel(kind: string) {
   return appRuntimes.value.find((item) => item.value === kind)?.label || kind
 }
@@ -306,6 +360,22 @@ async function loadAll() {
     const [runtimeRes, appRes]: any[] = await Promise.all([getRuntimes(), getApps()])
     if (runtimeRes.success) runtimes.value = runtimeRes.data || []
     if (appRes.success) apps.value = appRes.data || []
+    // First visit without a saved choice: open a language that is set up.
+    if (!loaded.value && !route.query.lang) {
+      let saved = ''
+      try {
+        saved = localStorage.getItem(LANG_KEY) || ''
+      } catch {
+        // Ignore.
+      }
+      if (!saved) {
+        const ready = (Object.keys(LANG_RUNTIMES) as LangKey[]).find((key) =>
+          apps.value.some((app) => LANG_RUNTIMES[key].includes(app.runtime)),
+        ) || runtimes.value.find((r) => r.installed && r.kind in LANG_RUNTIMES)?.kind
+        if (ready) active.value = ready as LangKey
+      }
+    }
+    loaded.value = true
   } catch {
     // Interceptor reports it.
   } finally {
@@ -323,12 +393,7 @@ async function refreshApps() {
   }
 }
 
-// --- Runtime install ---
-const installLogVisible = ref(false)
-const installLog = ref('')
-const installLogTitle = ref('')
-const installStatus = ref<'idle' | 'running' | 'success' | 'error'>('idle')
-
+// --- Runtime install (the task window shows the live log) ---
 async function install(item: RuntimeStatus, repair = false) {
   try {
     await ElMessageBox.confirm(
@@ -341,25 +406,12 @@ async function install(item: RuntimeStatus, repair = false) {
   } catch {
     return
   }
-
   installing.value = item.kind
-  installLogTitle.value = `${item.display_name} — ${t('rt.install')}`
-  installLog.value = t('rt.installRunning')
-  installStatus.value = 'running'
   try {
-    const res: any = await installRuntime(item.kind)
-    if (res.success) {
-      installLog.value = res.data?.log || ''
-      installStatus.value = res.data?.status?.installed && !/failed/i.test(res.data?.log || '') ? 'success' : 'error'
-      if (res.data?.changed) ElMessage.success(t('rt.installed'))
-      await loadAll()
-    } else {
-      installLog.value = res.message || ''
-      installStatus.value = 'error'
-    }
-  } catch (err: any) {
-    installLog.value = err?.message || ''
-    installStatus.value = 'error'
+    await installRuntime(item.kind)
+    await loadAll()
+  } catch {
+    // Interceptor reports it.
   } finally {
     installing.value = ''
   }
@@ -390,7 +442,7 @@ const entryHint = computed(() =>
   ({ python: t('rt.entryHintPython'), node: t('rt.entryHintNode') } as Record<string, string>)[form.runtime] || '',
 )
 
-// --- Project dependencies ---
+// --- Project dependencies (the task window shows the live log) ---
 async function installDeps(row: AppRow) {
   try {
     await ElMessageBox.confirm(t('rt.confirmDeps', { name: row.name }), t('rt.installDeps'), { type: 'info' })
@@ -398,15 +450,10 @@ async function installDeps(row: AppRow) {
     return
   }
   busy.value = `deps-${row.id}`
-  installLogTitle.value = `${row.name} — ${t('rt.installDeps')}`
-  installLog.value = t('rt.installRunning')
-  installStatus.value = 'running'
   try {
-    const res: any = await installAppDeps(row.id, true)
-    installLog.value = res.data?.log || res.message || ''
-    installStatus.value = res.success && res.data?.success ? 'success' : 'error'
+    await installAppDeps(row.id, true)
   } catch {
-    installStatus.value = 'error'
+    // Interceptor reports it.
   } finally {
     busy.value = null
   }
@@ -430,16 +477,19 @@ const rules = computed<FormRules>(() => ({
   entry: [{ required: true, message: t('rt.entryRequired'), trigger: 'blur' }],
 }))
 
+const DEFAULT_PORTS: Record<string, number> = { node: 3000, python: 8000, java: 8080, go: 8080, binary: 8080, php: 0 }
+
 function openCreate() {
   editing.value = null
+  const runtime = LANG_RUNTIMES[active.value][0]
   Object.assign(form, {
     name: '',
-    runtime: 'node',
+    runtime,
     work_dir: '',
     entry: '',
     args: '',
     env: '',
-    port: 3000,
+    port: DEFAULT_PORTS[runtime] ?? 3000,
     autostart: true,
   })
   formVisible.value = true
@@ -587,12 +637,6 @@ async function clearLogs() {
   }
 }
 
-watch(tab, (value) => {
-  // Only poll while the app table is actually on screen.
-  if (value === 'apps') startAppPolling()
-  else stopAppPolling()
-})
-
 function startAppPolling() {
   stopAppPolling()
   pollTimer = window.setInterval(() => {
@@ -607,7 +651,10 @@ function stopAppPolling() {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  void loadAll()
+  startAppPolling()
+})
 const { active: pageActive } = usePage(loadAll)
 onUnmounted(() => {
   stopAppPolling()
@@ -616,29 +663,124 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
-/* ---------- Runtime cards ---------- */
-.rt-grid {
+/* ---------- Language tabs ---------- */
+.langs {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--lp-4);
-}
-
-.rt-card {
-  display: flex;
-  flex-direction: column;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--lp-3);
-  padding: var(--lp-4);
-  background: var(--lp-surface);
+  margin-bottom: var(--lp-4);
+}
+.lang {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--lp-3);
+  min-width: 0;
+  padding: var(--lp-3);
   border: 1px solid var(--lp-line);
   border-radius: var(--lp-r-lg);
-  box-shadow: var(--lp-shadow-sm);
-  transition: border-color var(--lp-fast), box-shadow var(--lp-fast);
+  background: var(--lp-surface);
+  color: var(--lp-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--lp-fast), box-shadow var(--lp-fast), background var(--lp-fast);
 
-  &:hover { box-shadow: var(--lp-shadow); }
-  &--on { border-color: color-mix(in srgb, var(--lp-ok) 35%, var(--lp-line)); }
+  &:hover { border-color: var(--lp-line-strong); box-shadow: var(--lp-shadow-sm); }
+  &.is-active { border-color: var(--lp-accent); background: var(--lp-accent-soft); box-shadow: 0 0 0 1px var(--lp-accent) inset; }
+}
+.lang__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lang__name { font-weight: 600; }
+.lang__sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--lp-line-strong); }
+.dot--ok { background: var(--lp-ok); }
+.lang__count {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-surface-sunken);
+  font-size: var(--lp-text-xs);
+  font-weight: 600;
+  color: var(--lp-text-dim);
+  font-variant-numeric: tabular-nums;
+  &.is-running { background: var(--lp-ok-soft); color: var(--lp-ok); }
 }
 
-.rt-card__head { display: flex; align-items: center; gap: var(--lp-3); }
+/* ---------- Environment ---------- */
+.env { padding: var(--lp-5); margin-bottom: var(--lp-4); }
+.env__main { display: flex; align-items: flex-start; gap: var(--lp-4); }
+.env__text { flex: 1; min-width: 0; }
+.env__title { display: flex; align-items: center; flex-wrap: wrap; gap: var(--lp-2); font-size: var(--lp-text-lg); font-weight: 650; }
+.env__desc { margin: 4px 0 0; color: var(--lp-text-dim); line-height: 1.6; }
+.env__path {
+  display: inline-block;
+  margin-top: var(--lp-2);
+  padding: 4px 8px;
+  border-radius: var(--lp-r-sm);
+  background: var(--lp-surface-sunken);
+  color: var(--lp-text-soft);
+  font-size: var(--lp-text-xs);
+}
+.env__msg { margin: var(--lp-2) 0 0; font-size: var(--lp-text-sm); color: var(--lp-warn); }
+.env__actions { flex: none; }
+.env__components {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--lp-2);
+  margin: var(--lp-4) 0 0;
+  padding: var(--lp-4) 0 0;
+  border-top: 1px solid var(--lp-line-soft);
+  list-style: none;
+}
+.comp {
+  display: flex;
+  align-items: center;
+  gap: var(--lp-2);
+  padding: 8px 10px;
+  border-radius: var(--lp-r-sm);
+  background: var(--lp-surface-sunken);
+  font-size: var(--lp-text-sm);
+}
+.comp__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--lp-line-strong); }
+.comp.is-on .comp__dot { background: var(--lp-ok); }
+.comp__name { font-weight: 500; }
+.comp__ver { margin-left: auto; color: var(--lp-text-dim); font-size: var(--lp-text-xs); }
+.count {
+  padding: 0 7px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-surface-sunken);
+  font-size: var(--lp-text-xs);
+  color: var(--lp-text-dim);
+}
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--lp-2);
+  padding: var(--lp-8) var(--lp-4);
+  text-align: center;
+}
+.empty__title { margin: var(--lp-2) 0 0; font-weight: 600; }
+.empty__hint { max-width: 520px; margin: 0 0 var(--lp-3); color: var(--lp-text-dim); line-height: 1.6; }
+.kind-note { display: block; font-size: var(--lp-text-xs); }
+.rt-logo--lg { width: 46px; height: 46px; font-size: 15px; }
+
+@media (max-width: 1100px) {
+  .langs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .langs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .env__main { flex-direction: column; }
+}
 
 .rt-logo {
   display: grid;
@@ -659,47 +801,6 @@ onUnmounted(() => {
   &[data-kind='java'] { background: rgba(215, 99, 60, 0.16); color: #d7633c; }
   &[data-kind='go'] { background: rgba(0, 173, 216, 0.16); color: #00add8; }
 }
-
-.rt-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rt-name { font-size: var(--lp-text-md); font-weight: 600; color: var(--lp-text); }
-
-.rt-path {
-  padding: 6px 8px;
-  border-radius: var(--lp-r-sm);
-  background: var(--lp-surface-sunken);
-  color: var(--lp-text-dim);
-  font-size: var(--lp-text-xs);
-}
-
-.rt-components { display: flex; flex-direction: column; gap: 5px; }
-.rt-component {
-  display: flex;
-  align-items: center;
-  gap: var(--lp-2);
-  font-size: var(--lp-text-sm);
-}
-.rt-component__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--lp-line-strong);
-  flex: none;
-  &.is-on { background: var(--lp-ok); }
-}
-.rt-component__name { color: var(--lp-text-soft); }
-.rt-component__ver { margin-left: auto; color: var(--lp-text-dim); font-size: var(--lp-text-xs); }
-
-.rt-card__foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--lp-2);
-  margin-top: auto;
-  padding-top: var(--lp-3);
-  border-top: 1px solid var(--lp-line-soft);
-  min-height: 42px;
-}
-.rt-msg { font-size: var(--lp-text-xs); color: var(--lp-text-dim); min-width: 0; }
 
 /* ---------- App table ---------- */
 .cell-stack { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
