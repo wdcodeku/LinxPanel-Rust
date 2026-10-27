@@ -16,5 +16,6 @@ pub mod server;
 pub mod servicectl;
 pub mod shell;
 pub mod sysservice;
+pub mod tasks;
 pub mod totp;
 pub mod updater;

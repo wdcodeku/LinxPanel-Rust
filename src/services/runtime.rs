@@ -576,7 +576,8 @@ pub fn install_packages(packages: &[&str], log: &mut String) -> bool {
                     log.push_str(result.stderr.trim_end());
                 }
                 log.push('\n');
-                if !result.ok() {
+                        if !result.ok() {
+                    super::tasks::note(&format!("[LinxPanel] {} failed", program));
                     return false;
                 }
             }

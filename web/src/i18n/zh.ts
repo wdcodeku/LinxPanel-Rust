@@ -636,6 +636,21 @@ export default {
     confirmDeleteRule: '确定要删除端口 {port} 的规则吗？',
   },
 
+  task: {
+    install: '安装 {name}',
+    installDeps: '安装依赖',
+    installNftables: '安装 nftables',
+    deploy: '部署 {name}',
+    waiting: '正在启动…',
+    background: '后台运行',
+    close: '关闭',
+    backgroundHint: '可以关闭此窗口或离开页面，任务会在服务器上继续执行。',
+    runningCount: '{n} 个任务运行中',
+    doneOk: '已完成',
+    doneFailed: '失败，点击查看日志',
+    failedSeeLog: '失败，请查看日志',
+    status: { running: '运行中', success: '成功', failed: '失败' },
+  },
   upd: {
     tab: '面板更新',
     title: '版本',

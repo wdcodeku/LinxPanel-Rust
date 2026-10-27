@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::database::{self, Engine, MysqlAdmin};
+use crate::services::tasks;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -80,33 +81,39 @@ struct LogResult {
     log: String,
 }
 
+/// Starts the install as a background task (its log streams to the browser).
 async fn install(
     State(state): State<Arc<AppState>>,
     Path(engine): Path<String>,
-) -> Json<ApiResponse<LogResult>> {
+) -> Json<ApiResponse<tasks::Started>> {
     let engine = match Engine::parse(&engine) {
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    let (log, created_admin) =
-        match tokio::task::spawn_blocking(move || database::install(engine)).await {
-            Ok(result) => result,
-            Err(err) => return Json(ApiResponse::err(&err.to_string())),
-        };
+    let title = format!("Install {}", engine.as_str());
+    let task_state = state.clone();
+    Json(ApiResponse::ok(state.tasks.start(
+        "db-install",
+        &title,
+        install_task(task_state, engine),
+    )))
+}
+
+async fn install_task(state: Arc<AppState>, engine: Engine) -> ApiResponse<LogResult> {
+    let (log, created_admin) = match tasks::blocking(move || database::install(engine)).await {
+        Ok(result) => result,
+        Err(err) => return ApiResponse::err(&err.to_string()),
+    };
     if let Some(admin) = created_admin {
         if let Err(err) = database::save_mysql_admin(&state.db, &admin).await {
-            return Json(ApiResponse::err(&format!(
-                "Cannot save MySQL login: {}",
-                err
-            )));
+            return ApiResponse::err(&format!("Cannot save MySQL login: {}", err));
         }
     }
     let admin = database::load_mysql_admin(&state.db).await;
-    let success =
-        tokio::task::spawn_blocking(move || database::status(engine, admin.as_ref()).running)
-            .await
-            .unwrap_or(false);
-    Json(ApiResponse::ok(LogResult { success, log }))
+    let success = tasks::blocking(move || database::status(engine, admin.as_ref()).running)
+        .await
+        .unwrap_or(false);
+    ApiResponse::ok(LogResult { success, log })
 }
 
 async fn restart(Path(engine): Path<String>) -> Json<ApiResponse<()>> {

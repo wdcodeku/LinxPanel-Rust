@@ -55,6 +55,15 @@
         </div>
 
         <div class="topbar__right">
+          <button
+            v-if="taskStore.running.length"
+            type="button"
+            class="update-chip task-chip"
+            @click="taskStore.show(taskStore.running[0].id)"
+          >
+            <el-icon :size="13" class="spin"><Loading /></el-icon>
+            <span class="update-chip__text">{{ t('task.runningCount', { n: taskStore.running.length }) }}</span>
+          </button>
           <router-link v-if="updateTag" to="/settings?tab=update" class="update-chip" :title="t('upd.available')">
             <el-icon :size="13"><Upload /></el-icon>
             <span class="update-chip__text">{{ t('upd.badge', { tag: updateTag }) }}</span>
@@ -92,10 +101,14 @@
         </div>
       </header>
 
+      <TaskCenter />
       <main class="shell__content">
-        <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" />
+        <!-- The old page stays until the new one is ready, then swaps with a
+             short fade-in: no blank frame between pages (out-in left the
+             content area empty while the next page's code loaded). -->
+        <router-view v-slot="{ Component, route: viewRoute }">
+          <transition name="page">
+            <component :is="Component" :key="viewRoute.path" />
           </transition>
         </router-view>
       </main>
@@ -147,11 +160,15 @@ import { useRealtimeStore } from '@/stores/realtime'
 import { useI18n } from '@/i18n'
 import type { Locale } from '@/i18n'
 import { changePasswordApi, getUpdateStatus } from '@/api'
+import { prefetchViews } from '@/router'
+import TaskCenter from '@/components/TaskCenter.vue'
+import { useTaskStore } from '@/stores/tasks'
 import { formatDuration } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const taskStore = useTaskStore()
 const realtime = useRealtimeStore()
 const { t, locale, setLocale } = useI18n()
 
@@ -213,6 +230,7 @@ async function refreshUpdateNotice() {
 }
 let updateTimer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
+  prefetchViews()
   refreshUpdateNotice()
   updateTimer = setInterval(refreshUpdateNotice, 30 * 60 * 1000)
 })
@@ -426,6 +444,11 @@ onUnmounted(() => realtime.unsubscribe())
   border-top: 1px solid var(--lp-line-soft);
 }
 .shell--collapsed .sidebar__foot { justify-content: center; }
+/* Page switch: the leaving page goes at once, the new one eases in. */
+.page-leave-active { display: none; }
+.page-enter-active { transition: opacity 160ms ease-out, transform 160ms ease-out; }
+.page-enter-from { opacity: 0.4; transform: translateY(4px); }
+
 .update-chip {
   display: inline-flex;
   align-items: center;
@@ -441,6 +464,9 @@ onUnmounted(() => realtime.unsubscribe())
   white-space: nowrap;
 }
 .update-chip:hover { filter: brightness(0.96); }
+.task-chip { border: 0; cursor: pointer; font-family: inherit; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 640px) {
   .update-chip__text { display: none; }
 }

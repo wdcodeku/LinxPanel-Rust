@@ -894,7 +894,6 @@ async function handleQuickInstallOpenResty() {
     return
   }
 
-  installLogDialogVisible.value = true
   installLogStatus.value = 'running'
   installLog.value = `[${new Date().toLocaleString()}] ${t('st.openrestyInstallStarting')}\n`
 

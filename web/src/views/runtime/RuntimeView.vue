@@ -345,7 +345,6 @@ async function install(item: RuntimeStatus, repair = false) {
   installLogTitle.value = `${item.display_name} — ${t('rt.install')}`
   installLog.value = t('rt.installRunning')
   installStatus.value = 'running'
-  installLogVisible.value = true
   try {
     const res: any = await installRuntime(item.kind)
     if (res.success) {
@@ -401,7 +400,6 @@ async function installDeps(row: AppRow) {
   installLogTitle.value = `${row.name} — ${t('rt.installDeps')}`
   installLog.value = t('rt.installRunning')
   installStatus.value = 'running'
-  installLogVisible.value = true
   try {
     const res: any = await installAppDeps(row.id, true)
     installLog.value = res.data?.log || res.message || ''

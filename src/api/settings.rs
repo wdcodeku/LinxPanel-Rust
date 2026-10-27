@@ -1,5 +1,6 @@
 use crate::models::*;
 use crate::services::openresty;
+use crate::services::tasks;
 use crate::AppState;
 use axum::{
     extract::State,
@@ -145,23 +146,29 @@ async fn get_openresty_status(
     }
 }
 
+/// Starts the install as a background task (its log streams to the browser).
 async fn quick_install_openresty(
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<openresty::OpenRestyInstallResult>> {
+) -> Json<ApiResponse<tasks::Started>> {
+    let task_state = state.clone();
+    Json(ApiResponse::ok(state.tasks.start(
+        "openresty-install",
+        "Install OpenResty",
+        quick_install_openresty_task(task_state),
+    )))
+}
+
+async fn quick_install_openresty_task(
+    state: Arc<AppState>,
+) -> ApiResponse<openresty::OpenRestyInstallResult> {
     match openresty::quick_install(state.as_ref()).await {
         Ok(mut result) => {
             match openresty::apply_defense(state.as_ref()).await {
                 Ok(message) => result.log.push_str(&format!("[LinxPanel] {}\n", message)),
-                Err(err) => result.log.push_str(&format!(
-                    "[LinxPanel] Defense settings not applied: {}\n",
-                    err
-                )),
+                Err(err) => result.log.push_str(&format!("[LinxPanel] Defense settings not applied: {}\n", err)),
             }
-            Json(ApiResponse::ok(result))
+            ApiResponse::ok(result)
         }
-        Err(e) => Json(ApiResponse::err(&format!(
-            "OpenResty install failed: {}",
-            e
-        ))),
+        Err(e) => ApiResponse::err(&format!("OpenResty install failed: {}", e)),
     }
 }

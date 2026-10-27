@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::models::{ApiResponse, CreateSiteRequest};
-use crate::services::{appstore, database, openresty, php};
+use crate::services::{appstore, database, openresty, php, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -98,10 +98,22 @@ fn fail(log: String) -> Json<ApiResponse<DeployResult>> {
     }))
 }
 
+/// Starts the deployment as a background task (its log streams to the browser).
 async fn deploy(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeployRequest>,
-) -> Json<ApiResponse<DeployResult>> {
+) -> Json<ApiResponse<tasks::Started>> {
+    let Some(app) = appstore::find(&req.app) else {
+        return Json(ApiResponse::err("Unknown app"));
+    };
+    let title = format!("Deploy {}", app.name);
+    let task_state = state.clone();
+    Json(ApiResponse::ok(state.tasks.start("app-deploy", &title, async move {
+        deploy_task(task_state, req).await.0
+    })))
+}
+
+async fn deploy_task(state: Arc<AppState>, req: DeployRequest) -> Json<ApiResponse<DeployResult>> {
     let Some(app) = appstore::find(&req.app) else {
         return Json(ApiResponse::err("Unknown app"));
     };
@@ -168,7 +180,7 @@ async fn deploy(
         )));
     }
     // FPM must run and its socket must be reachable by nginx before the site goes live.
-    let pool = match tokio::task::spawn_blocking(php::prepare).await {
+    let pool = match tasks::blocking(php::prepare).await {
         Ok(Ok((pool, text))) => {
             log.push_str(&text);
             pool
@@ -222,7 +234,7 @@ async fn deploy(
             created_db.clone(),
             pool.user.clone(),
         );
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tasks::blocking(move || {
             let mut step_log = String::new();
             let outcome = (|| {
                 std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;

@@ -437,6 +437,7 @@ fn pg_databases() -> Result<Vec<String>, String> {
 /// Returns the install log and, for MySQL, the new admin credentials.
 pub fn install(engine: Engine) -> (String, Option<MysqlAdmin>) {
     let mut log = format!("[LinxPanel] Installing {}\n", engine.display_name());
+    super::tasks::note(&log);
     let manager = runtime::package_manager();
     let packages = engine.packages(manager);
     if packages.is_empty() {
@@ -488,10 +489,9 @@ pub fn install(engine: Engine) -> (String, Option<MysqlAdmin>) {
             }
         }
     }
-    log.push_str(&format!(
-        "\n[LinxPanel] {} is ready\n",
-        engine.display_name()
-    ));
+    let ready = format!("\n[LinxPanel] {} is ready\n", engine.display_name());
+    super::tasks::note(&ready);
+    log.push_str(&ready);
     (log, admin)
 }
 

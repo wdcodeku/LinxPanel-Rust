@@ -210,7 +210,7 @@ async function submit() {
   if (!domains.length) return
   deploying.value = true
   Object.assign(logDialog, {
-    visible: true,
+    visible: false,
     title: t('as.deployTitle', { name: target.value.name }),
     description: '',
     log: t('as.deploying'),

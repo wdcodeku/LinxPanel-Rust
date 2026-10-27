@@ -65,12 +65,13 @@ const API_MESSAGE_MAP: Record<string, string> = {
   'An update is already running': 'upd.alreadyRunning',
   'Already up to date': 'upd.alreadyLatest',
   'Update started': 'upd.started',
+  'Failed - see the log': 'task.failedSeeLog',
   'Update time must be HH:MM': 'upd.timeFormat',
   'Enter an http(s):// address': 'upd.urlFormat',
   'This panel was not installed by the installer; update it with `Lp update` or by reinstalling': 'upd.notInstalled',
 }
 
-function localizeApiMessage(message: unknown): string {
+export function localizeApiMessage(message: unknown): string {
   if (typeof message !== 'string' || !message.trim()) return t('api.requestFailed')
   const text = message.trim()
   const messageKey = API_MESSAGE_MAP[text]

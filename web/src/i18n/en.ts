@@ -636,6 +636,21 @@ export default {
     confirmDeleteRule: 'Delete the rule for port {port}?',
   },
 
+  task: {
+    install: 'Install {name}',
+    installDeps: 'Install dependencies',
+    installNftables: 'Install nftables',
+    deploy: 'Deploy {name}',
+    waiting: 'Starting…',
+    background: 'Run in background',
+    close: 'Close',
+    backgroundHint: 'You can close this window or leave the page; the task keeps running on the server.',
+    runningCount: '{n} task(s) running',
+    doneOk: 'Finished successfully',
+    doneFailed: 'Failed - click to see the log',
+    failedSeeLog: 'Failed - see the log',
+    status: { running: 'Running', success: 'Succeeded', failed: 'Failed' },
+  },
   upd: {
     tab: 'Panel update',
     title: 'Version',

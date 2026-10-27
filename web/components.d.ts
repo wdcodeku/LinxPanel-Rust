@@ -54,6 +54,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StatTile: typeof import('./src/components/StatTile.vue')['default']
+    TaskCenter: typeof import('./src/components/TaskCenter.vue')['default']
     TerminalPane: typeof import('./src/components/TerminalPane.vue')['default']
   }
   export interface GlobalDirectives {

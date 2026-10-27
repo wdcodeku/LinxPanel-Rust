@@ -1,4 +1,13 @@
 import request from '@/utils/request'
+import { runTask } from '@/utils/tasks'
+import { t } from '@/i18n'
+
+const PRODUCT_NAMES: Record<string, string> = {
+  mysql: 'MySQL / MariaDB', postgresql: 'PostgreSQL', redis: 'Redis',
+  php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go',
+  wordpress: 'WordPress', typecho: 'Typecho', adminer: 'Adminer',
+}
+const productName = (key: string) => PRODUCT_NAMES[key] || key
 
 // Auth
 export const login = (data: { username: string; password: string; code?: string }) =>
@@ -87,7 +96,8 @@ export const getDefenseEvents = (limit = 200) => request.get('/defense/events', 
 export const banDefenseIp = (data: { ip: string; minutes?: number; reason?: string }) =>
   request.post('/defense/ban', data)
 export const unbanDefenseIp = (ip: string) => request.post('/defense/unban', { ip })
-export const installNftables = () => request.post('/defense/install-nft', {}, { timeout: 600000 })
+export const installNftables = () =>
+  runTask(t('task.installNftables'), () => request.post('/defense/install-nft', {}))
 export const setKernelHardening = (enabled: boolean) => request.post('/defense/sysctl', { enabled })
 
 // Panel updates
@@ -117,7 +127,7 @@ export const getListeningPorts = () => request.get('/network/ports')
 // Runtimes & managed applications
 export const getRuntimes = () => request.get('/runtimes')
 export const installRuntime = (kind: string) =>
-  request.post('/runtimes/install', { kind }, { timeout: 20 * 60 * 1000 })
+  runTask(t('task.install', { name: productName(kind) }), () => request.post('/runtimes/install', { kind }))
 
 export type AppPayload = {
   name: string
@@ -182,8 +192,10 @@ export const removeDomain = (siteId: number, id: number) => request.delete(`/sit
 // Databases
 const LONG = { timeout: 20 * 60 * 1000 }
 export const getDbEngines = () => request.get('/databases/engines')
-export const installDbEngine = (engine: string) =>
-  request.post(`/databases/engines/${engine}/install`, {}, LONG)
+export const installDbEngine = (engine: string, version?: string) =>
+  runTask(t('task.install', { name: productName(engine) }), () =>
+    request.post(`/databases/engines/${engine}/install`, version ? { version } : {}),
+  )
 export const restartDbEngine = (engine: string) => request.post(`/databases/engines/${engine}/restart`)
 export const setMysqlAdmin = (data: { user: string; password: string }) =>
   request.post('/databases/engines/mysql/admin', data)
@@ -208,7 +220,7 @@ export const deleteDatabaseBackup = (engine: string, name: string, file: string)
 
 /** pip / npm / composer install in the app's directory; `build` also runs the npm build script. */
 export const installAppDeps = (id: number, build = false) =>
-  request.post(`/apps/${id}/install-deps`, { build }, { timeout: 30 * 60 * 1000 })
+  runTask(t('task.installDeps'), () => request.post(`/apps/${id}/install-deps`, { build }))
 
 // Backups
 export const listSiteBackups = (id: number) => request.get(`/sites/${id}/backups`)
@@ -223,7 +235,7 @@ export const getAppCatalog = () => request.get('/appstore/apps')
 export const getInstalledApps = () => request.get('/appstore/installed')
 export const deployApp = (data: {
   app: string; domains: string[]; doc_root?: string; db_name?: string; source_url?: string; locale?: string
-}) => request.post('/appstore/deploy', data, { timeout: 20 * 60 * 1000 })
+}) => runTask(t('task.deploy', { name: productName(data.app) }), () => request.post('/appstore/deploy', data), { closeOnSuccess: true })
 
 // Settings
 export const getSettings = () => request.get('/settings')
@@ -249,7 +261,7 @@ export const changePasswordApi = (data: { username: string; old_password: string
   request.post('/settings/password', data)
 export const getOpenRestyStatus = () => request.get('/settings/openresty/status')
 export const quickInstallOpenResty = () =>
-  request.post('/settings/openresty/install', {}, { timeout: 20 * 60 * 1000 })
+  runTask(t('task.install', { name: 'OpenResty' }), () => request.post('/settings/openresty/install', {}))
 
 // Files
 export const listFiles = (path: string) => request.get('/files/list', { params: { path } })

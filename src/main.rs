@@ -42,6 +42,8 @@ pub struct AppState {
     pub connections: Arc<services::server::Tracker>,
     /// Latest release lookup, shared by the API and the update scheduler.
     pub updates: services::updater::Checker,
+    /// Long operations running in the background, with live logs.
+    pub tasks: Arc<services::tasks::Tasks>,
 }
 
 impl AppState {
@@ -268,6 +270,7 @@ async fn main() -> anyhow::Result<()> {
         defense: services::defense::Engine::new(&data_dir),
         connections: tracker.clone(),
         updates: services::updater::Checker::new(),
+        tasks: Arc::new(services::tasks::Tasks::default()),
     });
 
     // Keep ACME certificates fresh without operator intervention.

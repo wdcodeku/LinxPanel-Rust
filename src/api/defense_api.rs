@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::defense::{self, BanRecord, DefenseConfig, Event, SysctlStatus};
-use crate::services::{ipban, openresty};
+use crate::services::{ipban, openresty, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -207,8 +207,13 @@ async fn events(
     ))
 }
 
-async fn install_nft() -> Json<ApiResponse<String>> {
-    let result = tokio::task::spawn_blocking(|| {
+/// Installs nftables as a background task (its log streams to the browser).
+async fn install_nft(State(state): State<Arc<AppState>>) -> Json<ApiResponse<tasks::Started>> {
+    Json(ApiResponse::ok(state.tasks.start("nft-install", "Install nftables", install_nft_task())))
+}
+
+async fn install_nft_task() -> ApiResponse<String> {
+    let result = tasks::blocking(|| {
         let mut log = String::new();
         if !ipban::available()
             && !crate::services::runtime::install_packages(&["nftables"], &mut log)
@@ -221,9 +226,9 @@ async fn install_nft() -> Json<ApiResponse<String>> {
     })
     .await;
     match result {
-        Ok(Ok(log)) => Json(ApiResponse::ok(log)),
-        Ok(Err(err)) => Json(ApiResponse::err(&err)),
-        Err(err) => Json(ApiResponse::err(&err.to_string())),
+        Ok(Ok(log)) => ApiResponse::ok(log),
+        Ok(Err(err)) => ApiResponse::err(&err),
+        Err(err) => ApiResponse::err(&err.to_string()),
     }
 }
 

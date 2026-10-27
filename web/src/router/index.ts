@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -114,5 +115,34 @@ router.beforeEach((to, _from, next) => {
 
   next()
 })
+
+/**
+ * Downloads every page's code once the browser is idle, so switching pages
+ * never waits on the network (on a distant server that wait showed as a
+ * blank flash between pages).
+ */
+export function prefetchViews() {
+  const loaders: Array<() => Promise<unknown>> = []
+  const collect = (records: readonly RouteRecordRaw[]) => {
+    for (const record of records) {
+      if (typeof record.component === 'function') loaders.push(record.component as () => Promise<unknown>)
+      if (record.children) collect(record.children)
+    }
+  }
+  collect(router.options.routes)
+  const run = async () => {
+    // One at a time: never compete with what the user is doing.
+    for (const load of loaders) {
+      try {
+        await load()
+      } catch {
+        // A failed prefetch just means that page loads on demand.
+      }
+    }
+  }
+  const idle = (window as any).requestIdleCallback as ((cb: () => void, opts?: { timeout: number }) => void) | undefined
+  if (idle) idle(run, { timeout: 3000 })
+  else setTimeout(run, 1500)
+}
 
 export default router

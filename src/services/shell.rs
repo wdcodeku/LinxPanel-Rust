@@ -88,10 +88,16 @@ pub fn run_command(
         });
     }
 
+    // Inside a background task, show the command and stream its output live.
+    let task = super::tasks::current();
+    if let Some(task) = &task {
+        task.append(&format!("$ {}\n", describe(&command)));
+    }
+
     // Drain both pipes while waiting: a child that fills the ~64KB pipe buffer
     // (package installs, ACME clients) would otherwise block until the timeout.
-    let stdout_reader = drain_pipe(child.stdout.take());
-    let stderr_reader = drain_pipe(child.stderr.take());
+    let stdout_reader = drain_pipe(child.stdout.take(), task.clone());
+    let stderr_reader = drain_pipe(child.stderr.take(), task);
 
     // portable wait-with-timeout: poll try_wait rather than pull in an extra crate.
     let deadline = std::time::Instant::now() + timeout;
@@ -122,14 +128,55 @@ pub fn run_command(
 
 fn drain_pipe<R: std::io::Read + Send + 'static>(
     pipe: Option<R>,
+    task: Option<std::sync::Arc<super::tasks::Task>>,
 ) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut buffer = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buffer);
+        let Some(mut pipe) = pipe else {
+            return buffer;
+        };
+        let mut chunk = [0u8; 8192];
+        // Bytes of an incomplete UTF-8 sequence carried to the next read.
+        let mut pending = 0usize;
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buffer.extend_from_slice(&chunk[..n]);
+                    if let Some(task) = &task {
+                        let fresh = &buffer[buffer.len() - n - pending..];
+                        let valid = match std::str::from_utf8(fresh) {
+                            Ok(_) => fresh.len(),
+                            Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                            Err(_) => fresh.len(),
+                        };
+                        task.append(&String::from_utf8_lossy(&fresh[..valid]));
+                        pending = fresh.len() - valid;
+                    }
+                }
+            }
         }
         buffer
     })
+}
+
+/// "program arg ..." for a task log, with anything that looks secret masked.
+fn describe(command: &Command) -> String {
+    let mut parts = vec![command.get_program().to_string_lossy().into_owned()];
+    for arg in command.get_args() {
+        let arg = arg.to_string_lossy();
+        let lower = arg.to_ascii_lowercase();
+        let secret = ["password", "passwd", "secret", "token", "identified by"]
+            .iter()
+            .any(|word| lower.contains(word));
+        parts.push(if secret { "***".into() } else { arg.into_owned() });
+    }
+    let line = parts.join(" ");
+    if line.len() > 400 {
+        format!("{}…", &line[..line.char_indices().nth(400).map(|(i, _)| i).unwrap_or(line.len())])
+    } else {
+        line
+    }
 }
 
 /// Runs a command, elevating with sudo when the panel is not already root.

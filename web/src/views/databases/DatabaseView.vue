@@ -333,19 +333,12 @@ function selectEngine(kind: EngineInfo['engine']) {
 
 async function install(kind: string) {
   busy.value = `install-${kind}`
-  Object.assign(logDialog, {
-    visible: true,
-    title: t('dbm.installing', { name: engines.value.find((e) => e.engine === kind)?.display_name || kind }),
-    log: t('dbm.installWait'),
-    status: 'running',
-  })
   try {
-    const res: any = await installDbEngine(kind)
-    logDialog.log = res.data?.log || res.message || ''
-    logDialog.status = res.success && res.data?.success ? 'success' : 'error'
+    // The task window shows the live log and the outcome.
+    await installDbEngine(kind)
     await loadAll()
   } catch {
-    logDialog.status = 'error'
+    // Interceptor reports it.
   } finally {
     busy.value = ''
   }

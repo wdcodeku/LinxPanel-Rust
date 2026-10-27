@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::appproc::{self, AppView, SaveAppRequest};
+use crate::services::tasks;
 use crate::services::runtime::{self, RuntimeInstallRequest, RuntimeInstallResult, RuntimeStatus};
 use crate::AppState;
 
@@ -36,13 +37,24 @@ async fn list_runtimes() -> Json<ApiResponse<Vec<RuntimeStatus>>> {
     }
 }
 
+/// Starts the install as a background task (its log streams to the browser).
 async fn install_runtime(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<RuntimeInstallRequest>,
-) -> Json<ApiResponse<RuntimeInstallResult>> {
-    match tokio::task::spawn_blocking(move || runtime::install(&body.kind)).await {
-        Ok(Ok(result)) => Json(ApiResponse::ok(result)),
-        Ok(Err(err)) => Json(ApiResponse::err(&err)),
-        Err(_) => Json(ApiResponse::err("Runtime install task failed")),
+) -> Json<ApiResponse<tasks::Started>> {
+    let title = format!("Install {}", body.kind);
+    Json(ApiResponse::ok(state.tasks.start(
+        "runtime-install",
+        &title,
+        install_runtime_task(body),
+    )))
+}
+
+async fn install_runtime_task(body: RuntimeInstallRequest) -> ApiResponse<RuntimeInstallResult> {
+    match tasks::blocking(move || runtime::install(&body.kind)).await {
+        Ok(Ok(result)) => ApiResponse::ok(result),
+        Ok(Err(err)) => ApiResponse::err(&err),
+        Err(_) => ApiResponse::err("Runtime install task failed"),
     }
 }
 
@@ -160,22 +172,23 @@ async fn install_deps(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     body: Option<Json<InstallDepsRequest>>,
-) -> Json<ApiResponse<InstallDepsResult>> {
+) -> Json<ApiResponse<tasks::Started>> {
     let record = match appproc::get(&state.db, id).await {
         Ok(record) => record,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
     let build = body.map(|Json(b)| b.build).unwrap_or(false);
-    let result =
-        tokio::task::spawn_blocking(move || appproc::install_dependencies(&record, build)).await;
-    match result {
-        Ok(Ok(log)) => Json(ApiResponse::ok(InstallDepsResult { success: true, log })),
-        Ok(Err(log)) => Json(ApiResponse::ok(InstallDepsResult {
-            success: false,
-            log,
-        })),
-        Err(err) => Json(ApiResponse::err(&err.to_string())),
-    }
+    let title = format!("Install dependencies: {}", record.name);
+    Json(ApiResponse::ok(state.tasks.start("app-deps", &title, async move {
+        match tasks::blocking(move || appproc::install_dependencies(&record, build)).await {
+            Ok(Ok(log)) => ApiResponse::ok(InstallDepsResult { success: true, log }),
+            Ok(Err(log)) => ApiResponse::ok(InstallDepsResult {
+                success: false,
+                log,
+            }),
+            Err(err) => ApiResponse::err(&err.to_string()),
+        }
+    })))
 }
 
 #[derive(Debug, Deserialize)]
