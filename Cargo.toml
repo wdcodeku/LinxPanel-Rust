@@ -1,6 +1,6 @@
 [package]
 name = "linxpanel"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "LinxPanel - Modern Linux Server Management Panel"
 license = "Apache-2.0"
