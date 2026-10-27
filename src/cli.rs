@@ -5,9 +5,113 @@
 //! its next start, which `Lp` triggers.
 
 use anyhow::{anyhow, bail, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::db;
 use crate::services::{defense, ipban, panel_access};
+
+/// The panel's language, shared by the web UI, `Lp` and these commands.
+pub const SETTING_LANGUAGE: &str = "panel_language";
+
+static ZH: AtomicBool = AtomicBool::new(false);
+
+pub fn is_zh() -> bool {
+    ZH.load(Ordering::Relaxed)
+}
+
+/// `tr!("中文 {}", "English {}", args...)`: the message in the panel's language.
+macro_rules! tr {
+    ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
+        if crate::cli::is_zh() { format!($zh $(, $arg)*) } else { format!($en $(, $arg)*) }
+    };
+}
+
+/// "zh" or "en" from any spelling (zh-CN, chinese, en_US, ...).
+pub fn normalize_language(value: &str) -> Option<&'static str> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.starts_with("zh") || value == "cn" || value == "chinese" || value == "中文" {
+        Some("zh")
+    } else if value.starts_with("en") || value == "english" {
+        Some("en")
+    } else {
+        None
+    }
+}
+
+/// LINXPANEL_LANG (what `Lp` passes) wins; otherwise the panel's setting.
+async fn load_language(command: &str) {
+    if let Some(lang) = std::env::var("LINXPANEL_LANG")
+        .ok()
+        .as_deref()
+        .and_then(normalize_language)
+    {
+        ZH.store(lang == "zh", Ordering::Relaxed);
+        return;
+    }
+    // `info` and `version` are read by scripts: no database work for them.
+    if matches!(command, "info" | "version" | "--version" | "-V") {
+        return;
+    }
+    if let Ok((pool, _)) = crate::open_database().await {
+        let saved = db::get_setting(&pool, SETTING_LANGUAGE)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        pool.close().await;
+        ZH.store(normalize_language(&saved) == Some("zh"), Ordering::Relaxed);
+    }
+}
+
+pub fn error_prefix() -> &'static str {
+    if is_zh() {
+        "错误："
+    } else {
+        "Error: "
+    }
+}
+
+fn usage() -> &'static str {
+    if is_zh() {
+        USAGE_ZH
+    } else {
+        USAGE
+    }
+}
+
+pub const USAGE_ZH: &str = "\
+用法：linxpanel [命令]
+
+命令：
+  （无）                       运行面板服务
+  reset-password [--user 用户名] [--password-stdin]
+                               设置用户密码（默认为面板账号）并让其所有会话失效；
+                               带 --password-stdin 时从标准输入读取，否则随机生成并显示
+  entrance [show|off|random|set 路径]
+                               查看或修改安全入口
+  ssl [status|on|off] [--san 名称]... [--regenerate]
+                               查看或修改面板 HTTPS（未在面板中选择证书时使用自签名证书）
+  port [show|端口|default]     查看或修改面板端口（default：使用 PORT 环境变量）
+  allow-ip [show|off|IP,CIDR...]
+                               查看、设置或清除授权访问 IP
+  domain [show|off|域名]       查看、设置或清除绑定域名
+  mfa [status|off] [--user 用户名]
+                               查看或关闭两步验证（默认为面板账号）
+  security                     查看全部面板访问设置
+  lang [show|zh|en]            查看或切换面板和命令行的语言
+  ban <IP> [分钟]              在内核中丢弃某地址的全部流量（0 为永久；默认按防御设置）
+  unban <IP|all>               解除封禁（all：全部解除，例如误封了自己）
+  bans                         列出被封禁的地址
+  defense [status|on|off]      查看或开关自动封禁
+  harden [status|on|off]       内核网络加固（SYN Cookie、连接队列、防伪造），写入 /etc/sysctl.d
+  backup site <ID> [--keep N]  打包网站目录（计划备份使用）
+  backup db <引擎> <库名> [--keep N]
+                               导出数据库（mysql | postgresql）
+  info                         以 key=value 格式输出访问设置
+  version, --version, -V       显示版本
+  help, --help, -h             显示本帮助
+
+环境变量：PORT（默认 7200）、BIND（默认 0.0.0.0）、DATABASE_URL、JWT_SECRET、RUST_LOG、LINXPANEL_LANG";
 
 pub const USAGE: &str = "\
 Usage: linxpanel [COMMAND]
@@ -32,6 +136,7 @@ Commands:
                                Show or turn off two-factor login (default:
                                the panel's account)
   security                     Show all panel access settings
+  lang [show|zh|en]            Show or switch the language of the panel and CLI
   ban <IP> [MINUTES]           Drop all traffic from an address in the kernel
                                (0 = permanent; default: the defense setting)
   unban <IP|all>               Lift a ban (all: every ban, e.g. after a lockout)
@@ -46,7 +151,7 @@ Commands:
   version, --version, -V       Print the version
   help, --help, -h             Print this help
 
-Environment: PORT (default 7200), BIND (default 0.0.0.0), DATABASE_URL, JWT_SECRET, RUST_LOG";
+Environment: PORT (default 7200), BIND (default 0.0.0.0), DATABASE_URL, JWT_SECRET, RUST_LOG, LINXPANEL_LANG";
 
 /// Runs a subcommand, or returns Ok(false) when the server should start instead.
 pub async fn run(args: &[String]) -> Result<bool> {
@@ -54,9 +159,11 @@ pub async fn run(args: &[String]) -> Result<bool> {
         return Ok(false);
     };
     let rest = &args[1..];
+    load_language(command).await;
     match command.as_str() {
         "version" | "--version" | "-V" => println!("linxpanel {}", env!("CARGO_PKG_VERSION")),
-        "help" | "--help" | "-h" => println!("{}", USAGE),
+        "help" | "--help" | "-h" => println!("{}", usage()),
+        "lang" | "language" => lang(rest).await?,
         "reset-password" => reset_password(rest).await?,
         "entrance" => entrance(rest).await?,
         "ssl" => ssl(rest).await?,
@@ -72,7 +179,12 @@ pub async fn run(args: &[String]) -> Result<bool> {
         "harden" => harden(rest)?,
         "backup" => backup(rest).await?,
         "info" => info().await?,
-        other => bail!("Unknown command: {}\n\n{}", other, USAGE),
+        other => bail!(tr!(
+            "未知命令：{}\n\n{}",
+            "Unknown command: {}\n\n{}",
+            other,
+            usage()
+        )),
     }
     Ok(true)
 }
@@ -88,12 +200,19 @@ async fn reset_password(args: &[String]) -> Result<()> {
             "--user" | "-u" => {
                 username = Some(
                     iter.next()
-                        .ok_or_else(|| anyhow!("--user requires a value"))?
+                        .ok_or_else(|| {
+                            anyhow!(tr!("--user 需要一个值", "--user requires a value"))
+                        })?
                         .clone(),
                 );
             }
             "--password-stdin" => from_stdin = true,
-            other => bail!("Unknown argument: {}\n\n{}", other, USAGE),
+            other => bail!(tr!(
+                "未知参数：{}\n\n{}",
+                "Unknown argument: {}\n\n{}",
+                other,
+                usage()
+            )),
         }
     }
 
@@ -113,16 +232,22 @@ async fn reset_password(args: &[String]) -> Result<()> {
         None => db::primary_username(&pool).await?,
     };
     if username.trim().is_empty() {
-        bail!("Username must not be empty");
+        bail!(tr!("用户名不能为空", "Username must not be empty"));
     }
     db::set_user_password(&pool, &username, &password).await?;
     pool.close().await;
 
-    println!("Username: {}", username);
+    println!("{}", tr!("用户名：{}", "Username: {}", username));
     if !from_stdin {
-        println!("Password: {}", password);
+        println!("{}", tr!("密码：  {}", "Password: {}", password));
     }
-    println!("Password updated. All existing sessions of this user were signed out.");
+    println!(
+        "{}",
+        tr!(
+            "密码已更新，该用户之前的所有登录会话已失效。",
+            "Password updated. All existing sessions of this user were signed out."
+        )
+    );
     Ok(())
 }
 
@@ -134,14 +259,22 @@ async fn entrance(args: &[String]) -> Result<()> {
         "off" | "disable" => Some(None),
         "random" | "new" => Some(Some(panel_access::random_entrance())),
         "set" => {
-            let value = args
-                .get(1)
-                .ok_or_else(|| anyhow!("entrance set requires a path"))?;
+            let value = args.get(1).ok_or_else(|| {
+                anyhow!(tr!(
+                    "entrance set 需要一个路径",
+                    "entrance set requires a path"
+                ))
+            })?;
             Some(Some(normalize_or_fail(value)?))
         }
         // `linxpanel entrance /path` as a shorthand for `set`.
         value if value.starts_with('/') => Some(Some(normalize_or_fail(value)?)),
-        other => bail!("Unknown entrance action: {}\n\n{}", other, USAGE),
+        other => bail!(tr!(
+            "未知的入口操作：{}\n\n{}",
+            "Unknown entrance action: {}\n\n{}",
+            other,
+            usage()
+        )),
     };
     if let Some(entrance) = &changed {
         panel_access::save_entrance(&pool, entrance.as_deref()).await?;
@@ -150,11 +283,11 @@ async fn entrance(args: &[String]) -> Result<()> {
     pool.close().await;
 
     match current {
-        Some(entrance) => println!("Entrance: {}", entrance),
-        None => println!("Entrance: disabled"),
+        Some(entrance) => println!("{}", tr!("安全入口：{}", "Entrance: {}", entrance)),
+        None => println!("{}", tr!("安全入口：未启用", "Entrance: disabled")),
     }
     if changed.is_some() {
-        println!("Restart the panel to apply: Lp restart");
+        println!("{}", restart_hint());
     }
     Ok(())
 }
@@ -162,7 +295,12 @@ async fn entrance(args: &[String]) -> Result<()> {
 fn normalize_or_fail(value: &str) -> Result<String> {
     panel_access::normalize_entrance(value)
         .map_err(|e| anyhow!(e))?
-        .ok_or_else(|| anyhow!("Entrance must not be empty; use `entrance off` to disable it"))
+        .ok_or_else(|| {
+            anyhow!(tr!(
+                "安全入口不能为空；要关闭请使用 `entrance off`",
+                "Entrance must not be empty; use `entrance off` to disable it"
+            ))
+        })
 }
 
 async fn ssl(args: &[String]) -> Result<()> {
@@ -175,11 +313,16 @@ async fn ssl(args: &[String]) -> Result<()> {
         match arg.as_str() {
             "--san" => names.push(
                 iter.next()
-                    .ok_or_else(|| anyhow!("--san requires a value"))?
+                    .ok_or_else(|| anyhow!(tr!("--san 需要一个值", "--san requires a value")))?
                     .clone(),
             ),
             "--regenerate" => regenerate = true,
-            other => bail!("Unknown argument: {}\n\n{}", other, USAGE),
+            other => bail!(tr!(
+                "未知参数：{}\n\n{}",
+                "Unknown argument: {}\n\n{}",
+                other,
+                usage()
+            )),
         }
     }
 
@@ -192,8 +335,12 @@ async fn ssl(args: &[String]) -> Result<()> {
             if self_signed && (missing || regenerate || !names.is_empty()) {
                 panel_access::generate_self_signed(&data_dir, &names)?;
                 println!(
-                    "Generated a self-signed certificate: {}",
-                    cert_path.display()
+                    "{}",
+                    tr!(
+                        "已生成自签名证书：{}",
+                        "Generated a self-signed certificate: {}",
+                        cert_path.display()
+                    )
                 );
             }
             panel_access::load_tls_config(&cert_path, &key_path)?;
@@ -202,27 +349,91 @@ async fn ssl(args: &[String]) -> Result<()> {
         "off" | "disable" => {
             db::set_setting(&pool, panel_access::SETTING_PANEL_SSL, "off").await?;
         }
-        other => bail!("Unknown ssl action: {}\n\n{}", other, USAGE),
+        other => bail!(tr!(
+            "未知的 ssl 操作：{}\n\n{}",
+            "Unknown ssl action: {}\n\n{}",
+            other,
+            usage()
+        )),
     }
 
     let enabled = panel_access::ssl_enabled(&pool).await;
     let (cert_path, _, self_signed) = panel_access::ssl_paths(&pool, &data_dir).await;
     pool.close().await;
-    println!("HTTPS: {}", if enabled { "on" } else { "off" });
+    println!("HTTPS: {}", on_off(enabled));
     if enabled {
         println!(
-            "Certificate: {}{}",
-            cert_path.display(),
-            if self_signed { " (self-signed)" } else { "" }
+            "{}",
+            tr!(
+                "证书：{}{}",
+                "Certificate: {}{}",
+                cert_path.display(),
+                if self_signed {
+                    tr!("（自签名）", " (self-signed)")
+                } else {
+                    String::new()
+                }
+            )
         );
     }
     if action != "status" {
-        println!("Restart the panel to apply: Lp restart");
+        println!("{}", restart_hint());
     }
     Ok(())
 }
 
-const RESTART_HINT: &str = "Restart the panel to apply: Lp restart";
+fn restart_hint() -> String {
+    tr!(
+        "重启面板后生效：Lp restart",
+        "Restart the panel to apply: Lp restart"
+    )
+}
+
+fn on_off(on: bool) -> String {
+    match (on, is_zh()) {
+        (true, true) => "开启".into(),
+        (false, true) => "关闭".into(),
+        (true, false) => "on".into(),
+        (false, false) => "off".into(),
+    }
+}
+
+/// `lang [show|zh|en]`: one language for the web UI, `Lp` and these commands.
+async fn lang(args: &[String]) -> Result<()> {
+    let (pool, _) = crate::open_database().await?;
+    match action(args, "show") {
+        "show" | "status" => {}
+        value => {
+            let lang = normalize_language(value).ok_or_else(|| {
+                anyhow!(tr!(
+                    "不支持的语言：{}（可选 zh、en）",
+                    "Unsupported language: {} (use zh or en)",
+                    value
+                ))
+            })?;
+            db::set_setting(&pool, SETTING_LANGUAGE, lang).await?;
+            ZH.store(lang == "zh", Ordering::Relaxed);
+        }
+    }
+    let saved = db::get_setting(&pool, SETTING_LANGUAGE)
+        .await?
+        .unwrap_or_default();
+    pool.close().await;
+    let lang = normalize_language(&saved).unwrap_or("en");
+    println!(
+        "{}",
+        tr!(
+            "语言：{}（面板和命令行一致）",
+            "Language: {} (shared by the panel and the CLI)",
+            if lang == "zh" {
+                "中文 (zh)"
+            } else {
+                "English (en)"
+            }
+        )
+    );
+    Ok(())
+}
 
 /// The first argument as the action, with `default` when absent.
 fn action<'a>(args: &'a [String], default: &'a str) -> &'a str {
@@ -235,24 +446,35 @@ async fn port(args: &[String]) -> Result<()> {
         "show" | "status" => {}
         "default" | "reset" => {
             db::set_setting(&pool, panel_access::SETTING_LISTEN_PORT, "").await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
         value => {
             let port = value
                 .parse::<i64>()
-                .map_err(|_| anyhow!("Not a port number: {}", value))
+                .map_err(|_| anyhow!(tr!("不是有效的端口号：{}", "Not a port number: {}", value)))
                 .and_then(|p| panel_access::validate_port(p).map_err(|e| anyhow!(e)))?;
             if std::net::TcpListener::bind(("0.0.0.0", port)).is_err() {
                 println!(
-                    "Note: port {} is in use right now (fine if the panel itself uses it)",
-                    port
+                    "{}",
+                    tr!(
+                        "提示：端口 {} 当前已被占用（如果是面板自己在用则没有问题）",
+                        "Note: port {} is in use right now (fine if the panel itself uses it)",
+                        port
+                    )
                 );
             }
             db::set_setting(&pool, panel_access::SETTING_LISTEN_PORT, &port.to_string()).await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
     }
-    println!("Port: {}", panel_access::effective_port(&pool).await);
+    println!(
+        "{}",
+        tr!(
+            "端口：{}",
+            "Port: {}",
+            panel_access::effective_port(&pool).await
+        )
+    );
     pool.close().await;
     Ok(())
 }
@@ -263,23 +485,27 @@ async fn allow_ip(args: &[String]) -> Result<()> {
         "show" | "status" => {}
         "off" | "clear" => {
             db::set_setting(&pool, panel_access::SETTING_ALLOWED_IPS, "").await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
         _ => {
             let list = panel_access::parse_ip_list(&args.join(",")).map_err(|e| anyhow!(e))?;
             let value = panel_access::format_ip_list(&list);
             db::set_setting(&pool, panel_access::SETTING_ALLOWED_IPS, &value).await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
     }
     let policy = panel_access::AccessPolicy::load(&pool).await;
     pool.close().await;
     if policy.allowed_ips.is_empty() {
-        println!("Allowed IPs: any");
+        println!("{}", tr!("授权 IP：不限", "Allowed IPs: any"));
     } else {
         println!(
-            "Allowed IPs: {}",
-            panel_access::format_ip_list(&policy.allowed_ips)
+            "{}",
+            tr!(
+                "授权 IP：{}",
+                "Allowed IPs: {}",
+                panel_access::format_ip_list(&policy.allowed_ips)
+            )
         );
     }
     Ok(())
@@ -291,22 +517,22 @@ async fn domain(args: &[String]) -> Result<()> {
         "show" | "status" => {}
         "off" | "clear" => {
             db::set_setting(&pool, panel_access::SETTING_BIND_DOMAIN, "").await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
         value => {
             let domain = panel_access::normalize_domain(value)
                 .map_err(|e| anyhow!(e))?
                 .unwrap_or_default();
             db::set_setting(&pool, panel_access::SETTING_BIND_DOMAIN, &domain).await?;
-            println!("{}", RESTART_HINT);
+            println!("{}", restart_hint());
         }
     }
     let policy = panel_access::AccessPolicy::load(&pool).await;
     pool.close().await;
-    println!(
-        "Bound domain: {}",
-        policy.domain.as_deref().unwrap_or("none")
-    );
+    match policy.domain.as_deref() {
+        Some(domain) => println!("{}", tr!("绑定域名：{}", "Bound domain: {}", domain)),
+        None => println!("{}", tr!("绑定域名：未绑定", "Bound domain: none")),
+    }
     Ok(())
 }
 
@@ -318,11 +544,18 @@ async fn mfa(args: &[String]) -> Result<()> {
             "--user" | "-u" => {
                 username = Some(
                     iter.next()
-                        .ok_or_else(|| anyhow!("--user requires a value"))?
+                        .ok_or_else(|| {
+                            anyhow!(tr!("--user 需要一个值", "--user requires a value"))
+                        })?
                         .clone(),
                 );
             }
-            other => bail!("Unknown argument: {}\n\n{}", other, USAGE),
+            other => bail!(tr!(
+                "未知参数：{}\n\n{}",
+                "Unknown argument: {}\n\n{}",
+                other,
+                usage()
+            )),
         }
     }
     let (pool, _) = crate::open_database().await?;
@@ -334,11 +567,23 @@ async fn mfa(args: &[String]) -> Result<()> {
         "status" | "show" => {}
         "off" | "disable" => {
             if !db::disable_totp(&pool, &username).await? {
-                bail!("No such user: {}", username);
+                bail!(tr!("没有这个用户：{}", "No such user: {}", username));
             }
-            println!("Two-factor login turned off for {}", username);
+            println!(
+                "{}",
+                tr!(
+                    "已关闭 {} 的两步验证",
+                    "Two-factor login turned off for {}",
+                    username
+                )
+            );
         }
-        other => bail!("Unknown mfa action: {}\n\n{}", other, USAGE),
+        other => bail!(tr!(
+            "未知的 mfa 操作：{}\n\n{}",
+            "Unknown mfa action: {}\n\n{}",
+            other,
+            usage()
+        )),
     }
     let enabled: Option<(Option<String>,)> =
         sqlx::query_as("SELECT totp_secret FROM users WHERE username = ?")
@@ -350,9 +595,13 @@ async fn mfa(args: &[String]) -> Result<()> {
         .and_then(|(secret,)| secret)
         .is_some_and(|s| !s.is_empty());
     println!(
-        "Two-factor login for {}: {}",
-        username,
-        if on { "on" } else { "off" }
+        "{}",
+        tr!(
+            "{} 的两步验证：{}",
+            "Two-factor login for {}: {}",
+            username,
+            on_off(on)
+        )
     );
     Ok(())
 }
@@ -366,11 +615,11 @@ async fn backup(args: &[String]) -> Result<()> {
         if arg == "--keep" {
             let value = iter
                 .next()
-                .ok_or_else(|| anyhow!("--keep requires a number"))?;
+                .ok_or_else(|| anyhow!(tr!("--keep 需要一个数字", "--keep requires a number")))?;
             keep = Some(
                 value
                     .parse::<usize>()
-                    .map_err(|_| anyhow!("Invalid --keep: {}", value))?,
+                    .map_err(|_| anyhow!(tr!("无效的 --keep：{}", "Invalid --keep: {}", value)))?,
             );
         } else {
             positional.push(arg.as_str());
@@ -381,12 +630,12 @@ async fn backup(args: &[String]) -> Result<()> {
         ["site", id] => {
             let id: i64 = id
                 .parse()
-                .map_err(|_| anyhow!("Site id must be a number"))?;
+                .map_err(|_| anyhow!(tr!("网站 ID 必须是数字", "Site id must be a number")))?;
             let site = sqlx::query_as::<_, crate::models::Site>("SELECT * FROM sites WHERE id = ?")
                 .bind(id)
                 .fetch_optional(&pool)
                 .await?
-                .ok_or_else(|| anyhow!("No site with id {}", id))?;
+                .ok_or_else(|| anyhow!(tr!("没有 ID 为 {} 的网站", "No site with id {}", id)))?;
             crate::services::backup::backup_site(
                 &data_dir,
                 site.id,
@@ -403,7 +652,10 @@ async fn backup(args: &[String]) -> Result<()> {
             database::backup(&data_dir, engine, name, admin.as_ref(), keep)
                 .map_err(|e| anyhow!(e))?
         }
-        _ => bail!("Usage: backup site <ID> | backup db <ENGINE> <NAME> [--keep N]"),
+        _ => bail!(tr!(
+            "用法：backup site <ID> | backup db <引擎> <库名> [--keep N]",
+            "Usage: backup site <ID> | backup db <ENGINE> <NAME> [--keep N]"
+        )),
     };
     pool.close().await;
     println!("{}", path.display());
@@ -411,17 +663,24 @@ async fn backup(args: &[String]) -> Result<()> {
 }
 
 fn parse_ip(raw: Option<&String>) -> Result<std::net::IpAddr> {
-    let raw = raw.ok_or_else(|| anyhow!("An IP address is required"))?;
+    let raw = raw.ok_or_else(|| anyhow!(tr!("需要提供 IP 地址", "An IP address is required")))?;
     raw.trim()
         .parse::<std::net::IpAddr>()
         .map(|ip| ip.to_canonical())
-        .map_err(|_| anyhow!("Not an IP address: {}", raw))
+        .map_err(|_| anyhow!(tr!("不是有效的 IP 地址：{}", "Not an IP address: {}", raw)))
 }
 
 async fn ban(args: &[String]) -> Result<()> {
     let ip = parse_ip(args.first())?;
     if let Some(why) = defense::never_ban(&ip) {
-        bail!("Cannot ban {}: {}", ip, why);
+        let why = match why {
+            "loopback or special address" => {
+                tr!("本机回环或特殊地址", "loopback or special address")
+            }
+            "this server's own address" => tr!("这是服务器自己的地址", "this server's own address"),
+            other => other.to_string(),
+        };
+        bail!(tr!("不能封禁 {}：{}", "Cannot ban {}: {}", ip, why));
     }
     let (pool, _) = crate::open_database().await?;
     let minutes = match args.get(1) {
@@ -429,7 +688,12 @@ async fn ban(args: &[String]) -> Result<()> {
             .parse::<u64>()
             .ok()
             .filter(|m| *m <= 525_600)
-            .ok_or_else(|| anyhow!("MINUTES must be 0-525600"))?,
+            .ok_or_else(|| {
+                anyhow!(tr!(
+                    "分钟数必须在 0-525600 之间",
+                    "MINUTES must be 0-525600"
+                ))
+            })?,
         None => defense::load_config(&pool).await.ban_minutes,
     };
     let result = defense::ban(
@@ -443,8 +707,11 @@ async fn ban(args: &[String]) -> Result<()> {
     pool.close().await;
     result.map_err(|e| anyhow!(e))?;
     match minutes {
-        0 => println!("Banned {} permanently", ip),
-        m => println!("Banned {} for {} minutes", ip, m),
+        0 => println!("{}", tr!("已永久封禁 {}", "Banned {} permanently", ip)),
+        m => println!(
+            "{}",
+            tr!("已封禁 {}，{} 分钟", "Banned {} for {} minutes", ip, m)
+        ),
     }
     Ok(())
 }
@@ -481,7 +748,14 @@ async fn unban(args: &[String]) -> Result<()> {
     if let Some(err) = failed {
         bail!(err);
     }
-    println!("Unbanned {} address(es)", targets.len());
+    println!(
+        "{}",
+        tr!(
+            "已解除 {} 个地址的封禁",
+            "Unbanned {} address(es)",
+            targets.len()
+        )
+    );
     Ok(())
 }
 
@@ -490,13 +764,16 @@ async fn bans() -> Result<()> {
     let records = defense::list_bans(&pool).await;
     pool.close().await;
     if records.is_empty() {
-        println!("No banned addresses");
+        println!("{}", tr!("没有被封禁的地址", "No banned addresses"));
     }
     let now = chrono::Utc::now().timestamp();
     for record in records {
         let left = match record.expires_at {
-            0 => "permanent".to_string(),
-            at => format!("{}m left", ((at - now).max(0) as u64).div_ceil(60)),
+            0 => tr!("永久", "permanent"),
+            at => {
+                let minutes = ((at - now).max(0) as u64).div_ceil(60);
+                tr!("剩余 {} 分钟", "{}m left", minutes)
+            }
         };
         println!(
             "{:<40} {:<10} {:<8} {}",
@@ -513,29 +790,30 @@ async fn defense_cmd(args: &[String]) -> Result<()> {
         "status" | "show" => {}
         "on" | "enable" => config.enabled = true,
         "off" | "disable" => config.enabled = false,
-        other => bail!("Unknown defense action: {}", other),
+        other => bail!(tr!(
+            "未知的 defense 操作：{}",
+            "Unknown defense action: {}",
+            other
+        )),
     }
     defense::save_config(&pool, &config).await?;
     pool.close().await;
     println!(
-        "Automatic banning: {} (ban {} min; web {} req/{}s, ssh {} failures/{}s, panel {} denials/{}s)",
-        if config.enabled { "on" } else { "off" },
-        config.ban_minutes,
-        config.web_max_requests,
-        config.web_window,
-        config.ssh_max_failures,
-        config.ssh_window,
-        config.panel_max_denied,
-        config.panel_window
+        "{}",
+        tr!(
+            "自动封禁：{}（封禁 {} 分钟；网站 {} 次请求/{} 秒，SSH {} 次失败/{} 秒，面板 {} 次拒绝/{} 秒）",
+            "Automatic banning: {} (ban {} min; web {} req/{}s, ssh {} failures/{}s, panel {} denials/{}s)",
+            on_off(config.enabled),
+            config.ban_minutes,
+            config.web_max_requests,
+            config.web_window,
+            config.ssh_max_failures,
+            config.ssh_window,
+            config.panel_max_denied,
+            config.panel_window
+        )
     );
-    println!(
-        "nftables: {}",
-        if ipban::available() {
-            "installed"
-        } else {
-            "not installed"
-        }
-    );
+    println!("nftables: {}", installed_text(ipban::available()));
     Ok(())
 }
 
@@ -548,24 +826,37 @@ fn harden(args: &[String]) -> Result<()> {
         }
         "off" | "disable" => {
             defense::remove_sysctl().map_err(|e| anyhow!(e))?;
-            println!("Profile removed; kernel defaults return after a reboot");
+            println!(
+                "{}",
+                tr!(
+                    "加固配置已删除；重启后恢复内核默认值",
+                    "Profile removed; kernel defaults return after a reboot"
+                )
+            );
         }
-        other => bail!("Unknown harden action: {}", other),
+        other => bail!(tr!(
+            "未知的 harden 操作：{}",
+            "Unknown harden action: {}",
+            other
+        )),
     }
     let status = defense::sysctl_status();
     println!(
-        "Profile {}: {}; SYN cookies {}; somaxconn {}",
-        defense::SYSCTL_PATH,
-        if status.applied {
-            "installed"
-        } else {
-            "not installed"
-        },
-        if status.syncookies { "on" } else { "off" },
-        status.somaxconn
+        "{}",
+        tr!(
+            "加固配置 {}：{}；SYN Cookie {}；somaxconn {}",
+            "Profile {}: {}; SYN cookies {}; somaxconn {}",
+            defense::SYSCTL_PATH,
+            installed_text(status.applied),
+            on_off(status.syncookies),
+            status.somaxconn
+        )
     );
     if status.applied && !status.syncookies {
-        bail!("The profile is installed but the kernel did not accept it");
+        bail!(tr!(
+            "加固配置已安装，但内核没有接受",
+            "The profile is installed but the kernel did not accept it"
+        ));
     }
     Ok(())
 }
@@ -581,44 +872,71 @@ async fn security() -> Result<()> {
         sqlx::query_as("SELECT username, totp_secret FROM users ORDER BY id")
             .fetch_all(&pool)
             .await?;
-    println!(
-        "Port:            {}",
-        panel_access::effective_port(&pool).await
-    );
+    let port = panel_access::effective_port(&pool).await;
     pool.close().await;
 
+    let label = |zh: &str, en: &str| {
+        if is_zh() {
+            pad_display(zh, 12)
+        } else {
+            format!("{:<17}", en)
+        }
+    };
+    println!("{}{}", label("端口：", "Port:"), port);
     println!(
-        "Entrance:        {}",
-        policy.entrance.as_deref().unwrap_or("disabled")
+        "{}{}",
+        label("安全入口：", "Entrance:"),
+        policy
+            .entrance
+            .clone()
+            .unwrap_or_else(|| tr!("未启用", "disabled"))
     );
     println!(
-        "HTTPS:           {}{}",
-        if ssl { "on" } else { "off" },
+        "{}{}{}",
+        label("HTTPS：", "HTTPS:"),
+        on_off(ssl),
         match (ssl, ssl_ok, self_signed) {
-            (true, false, _) => " (certificate cannot be loaded; serving HTTP)",
-            (true, true, true) => " (self-signed)",
-            _ => "",
+            (true, false, _) => tr!(
+                "（证书无法加载，当前使用 HTTP）",
+                " (certificate cannot be loaded; serving HTTP)"
+            ),
+            (true, true, true) => tr!("（自签名）", " (self-signed)"),
+            _ => String::new(),
         }
     );
     println!(
-        "Allowed IPs:     {}",
+        "{}{}",
+        label("授权 IP：", "Allowed IPs:"),
         if policy.allowed_ips.is_empty() {
-            "any".to_string()
+            tr!("不限", "any")
         } else {
             panel_access::format_ip_list(&policy.allowed_ips)
         }
     );
     println!(
-        "Bound domain:    {}",
-        policy.domain.as_deref().unwrap_or("none")
+        "{}{}",
+        label("绑定域名：", "Bound domain:"),
+        policy
+            .domain
+            .clone()
+            .unwrap_or_else(|| tr!("未绑定", "none"))
     );
-    println!("Denied visitors: {}", policy.deny.as_str());
+    let deny = match policy.deny.as_str() {
+        "hint" => tr!("提示页（hint）", "hint"),
+        code => code.to_string(),
+    };
+    println!("{}{}", label("拒绝访问：", "Denied visitors:"), deny);
     for (username, secret) in users {
         let on = secret.is_some_and(|s| !s.is_empty());
         println!(
-            "User:            {} (two-factor {})",
-            username,
-            if on { "on" } else { "off" }
+            "{}{}",
+            label("用户：", "User:"),
+            tr!(
+                "{}（两步验证 {}）",
+                "{} (two-factor {})",
+                username,
+                on_off(on)
+            )
         );
     }
     Ok(())
@@ -636,6 +954,12 @@ async fn info() -> Result<()> {
     // Only the saved value: empty means the PORT environment variable decides.
     let listen_port = panel_access::load_listen_port(&pool).await;
     let admin_user = db::primary_username(&pool).await?;
+    let language = db::get_setting(&pool, SETTING_LANGUAGE)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| normalize_language(&value))
+        .unwrap_or_default();
     pool.close().await;
     println!("version={}", env!("CARGO_PKG_VERSION"));
     println!("scheme={}", scheme);
@@ -646,5 +970,23 @@ async fn info() -> Result<()> {
     );
     println!("domain={}", policy.domain.unwrap_or_default());
     println!("admin_user={}", admin_user);
+    println!("language={}", language);
     Ok(())
+}
+
+fn installed_text(installed: bool) -> String {
+    if installed {
+        tr!("已安装", "installed")
+    } else {
+        tr!("未安装", "not installed")
+    }
+}
+
+/// Pads to a terminal width, counting CJK characters as two columns.
+fn pad_display(text: &str, width: usize) -> String {
+    let used: usize = text
+        .chars()
+        .map(|c| if (c as u32) >= 0x1100 { 2 } else { 1 })
+        .sum();
+    format!("{}{}", text, " ".repeat(width.saturating_sub(used)))
 }

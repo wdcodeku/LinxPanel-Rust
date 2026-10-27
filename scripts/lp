@@ -22,13 +22,178 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Output follows the panel's language (switch with `Lp lang zh|en`); set by
+# detect_lang before any command runs.
+LP_LANG="en"
+
+# Messages: printf templates by key, in the current language.
+msg() {
+  local key="$1"
+  if [[ "${LP_LANG}" == "zh" ]]; then
+    case "${key}" in
+      need_root) echo "此操作需要 root 权限（未找到 sudo）。" ;;
+      already_running) echo "LinxPanel 已在运行（PID：%s）。" ;;
+      started) echo "LinxPanel 已启动（PID：%s）。" ;;
+      start_failed) echo "LinxPanel 启动失败，请查看日志：%s" ;;
+      not_running) echo "LinxPanel 未运行。" ;;
+      stopped) echo "LinxPanel 已停止。" ;;
+      running) echo "LinxPanel 正在运行（PID：%s）。" ;;
+      url) echo "访问地址：%s" ;;
+      no_journal) echo "systemd/journalctl 不可用，改为查看日志文件。" ;;
+      unknown_log) echo "未知的日志类型：%s" ;;
+      usage_logs) echo "用法：Lp logs [out|err|all|service]" ;;
+      bad_update_mode) echo "不支持的更新方式：%s" ;;
+      usage_update) echo "用法：Lp update [binary|build]" ;;
+      need_curl) echo "更新需要 curl，请先安装。" ;;
+      download_failed) echo "下载安装脚本失败：%s" ;;
+      opened_ufw) echo "已在 ufw 中放行 %s/tcp。" ;;
+      opened_firewalld) echo "已在 firewalld 中放行 %s/tcp。" ;;
+      restarted) echo "LinxPanel 已重启。访问地址：%s" ;;
+      resetting) echo "正在重置用户 '%s' 的密码..." ;;
+      uninstall_what) echo "将删除 LinxPanel 的服务、程序和 Lp 命令。" ;;
+      uninstall_purge) echo "--purge：%s 中的面板数据库、证书和日志也会一并删除。" ;;
+      uninstall_keep) echo "%s/data 中的数据会保留（加 --purge 可一并删除）。" ;;
+      confirm_yes) echo "输入 yes 继续：" ;;
+      aborted) echo "已取消。" ;;
+      uninstalled) echo "LinxPanel 已卸载。" ;;
+      info_command) echo "命令：    Lp" ;;
+      info_service) echo "服务名：  %s" ;;
+      info_mode) echo "运行方式：%s" ;;
+      info_root) echo "安装目录：%s" ;;
+      info_binary) echo "程序：    %s" ;;
+      info_logs) echo "日志：    %s | %s" ;;
+      info_version) echo "版本：    %s" ;;
+      info_port) echo "端口：    %s" ;;
+      info_url) echo "访问地址：%s" ;;
+      info_running) echo "状态：    运行中（PID：%s）" ;;
+      info_stopped) echo "状态：    已停止" ;;
+      security_url) echo "访问地址：  %s" ;;
+      no_binary) echo "未找到 LinxPanel 程序：%s" ;;
+      no_binary_tip) echo "提示：设置 LINXPANEL_INSTALL_ROOT，或执行：Lp update binary" ;;
+      svc_enabled) echo "已设置开机自启。" ;;
+      svc_disabled) echo "已取消开机自启。" ;;
+      no_systemd) echo "systemd 不可用，跳过。" ;;
+      unknown_cmd) echo "未知命令：%s" ;;
+      *) echo "${key}" ;;
+    esac
+  else
+    case "${key}" in
+      need_root) echo "This action requires root privileges (sudo not found)." ;;
+      already_running) echo "LinxPanel already running (PID: %s)." ;;
+      started) echo "LinxPanel started (PID: %s)." ;;
+      start_failed) echo "Failed to start LinxPanel. Check logs: %s" ;;
+      not_running) echo "LinxPanel is not running." ;;
+      stopped) echo "LinxPanel stopped." ;;
+      running) echo "LinxPanel is running (PID: %s)." ;;
+      url) echo "URL: %s" ;;
+      no_journal) echo "systemd/journalctl not available; using file logs." ;;
+      unknown_log) echo "Unknown log type: %s" ;;
+      usage_logs) echo "Usage: Lp logs [out|err|all|service]" ;;
+      bad_update_mode) echo "Unsupported update mode: %s" ;;
+      usage_update) echo "Usage: Lp update [binary|build]" ;;
+      need_curl) echo "curl is required for update command." ;;
+      download_failed) echo "Failed to download installer: %s" ;;
+      opened_ufw) echo "Opened %s/tcp in ufw." ;;
+      opened_firewalld) echo "Opened %s/tcp in firewalld." ;;
+      restarted) echo "LinxPanel restarted. URL: %s" ;;
+      resetting) echo "Resetting password for '%s'..." ;;
+      uninstall_what) echo "This removes the LinxPanel service, binary and Lp command." ;;
+      uninstall_purge) echo "--purge: the panel database, certificates and logs in %s are deleted too." ;;
+      uninstall_keep) echo "Data in %s/data is kept (use --purge to delete it)." ;;
+      confirm_yes) echo "Type 'yes' to continue: " ;;
+      aborted) echo "Aborted." ;;
+      uninstalled) echo "LinxPanel uninstalled." ;;
+      info_command) echo "Command: Lp" ;;
+      info_service) echo "Service: %s" ;;
+      info_mode) echo "Mode: %s" ;;
+      info_root) echo "Install root: %s" ;;
+      info_binary) echo "Binary: %s" ;;
+      info_logs) echo "Logs: %s | %s" ;;
+      info_version) echo "Version: %s" ;;
+      info_port) echo "Port: %s" ;;
+      info_url) echo "URL: %s" ;;
+      info_running) echo "Status: running (PID: %s)" ;;
+      info_stopped) echo "Status: stopped" ;;
+      security_url) echo "URL:             %s" ;;
+      no_binary) echo "LinxPanel binary not found: %s" ;;
+      no_binary_tip) echo "Tip: set LINXPANEL_INSTALL_ROOT or run: Lp update binary" ;;
+      svc_enabled) echo "systemd service enabled." ;;
+      svc_disabled) echo "systemd service disabled." ;;
+      no_systemd) echo "systemd not available, skip." ;;
+      unknown_cmd) echo "Unknown command: %s" ;;
+      *) echo "${key}" ;;
+    esac
+  fi
+}
+
+# say KEY [ARGS...]: one translated line on stdout; say_err: on stderr.
+say() {
+  local template
+  template="$(msg "$1")"
+  shift
+  # shellcheck disable=SC2059 # templates come from msg(), not user input
+  printf "${template}\n" "$@"
+}
+
+say_err() {
+  say "$@" >&2
+}
+
+normalize_lang() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    zh* | cn | chinese | 中文) echo "zh" ;;
+    en*) echo "en" ;;
+    *) echo "" ;;
+  esac
+}
+
+# The panel's language: LINXPANEL_LANG, else the panel setting (what the web
+# UI uses), else the installer's choice, else the system locale.
+detect_lang() {
+  local value=""
+  value="$(normalize_lang "${LINXPANEL_LANG:-}")"
+  if [[ -z "${value}" && -x "${BIN_PATH}" ]]; then
+    value="$(normalize_lang "$(panel_info language)")"
+  fi
+  if [[ -z "${value}" && -r "${INSTALL_ROOT}/install.conf" ]]; then
+    value="$(normalize_lang "$(sed -n -E 's/^LANGUAGE=(.*)$/\1/p' "${INSTALL_ROOT}/install.conf" | head -n1)")"
+  fi
+  if [[ -z "${value}" ]]; then
+    value="$(normalize_lang "${LC_ALL:-${LANG:-}}")"
+  fi
+  LP_LANG="${value:-en}"
+}
+
+# Keeps the installer's saved language in step, so upgrades speak it too.
+save_install_lang() {
+  local conf="${INSTALL_ROOT}/install.conf"
+  if [[ -f "${conf}" ]] && grep -q '^LANGUAGE=' "${conf}"; then
+    run_sudo sed -i -E "s/^LANGUAGE=.*/LANGUAGE=$1/" "${conf}"
+  elif [[ -d "${INSTALL_ROOT}" ]]; then
+    printf 'LANGUAGE=%s\n' "$1" | run_sudo tee -a "${conf}" >/dev/null
+  fi
+}
+
+lang_cmd() {
+  local value="${1:-show}"
+  case "${value}" in
+    show | status) ;;
+    *)
+      panel_cli lang "${value}" >/dev/null
+      LP_LANG="$(normalize_lang "${value}")"
+      save_install_lang "${LP_LANG}"
+      ;;
+  esac
+  panel_cli lang show
+}
+
 run_sudo() {
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@"
   elif has_cmd sudo; then
     sudo "$@"
   else
-    echo "This action requires root privileges (sudo not found)." >&2
+    say_err need_root
     exit 1
   fi
 }
@@ -180,7 +345,7 @@ detect_ip() {
 
 start_no_systemd() {
   if is_running; then
-    echo "LinxPanel already running (PID: $(running_pids | tr '\n' ' '))."
+    say already_running "$(running_pids | tr '\n' ' ')"
     return
   fi
   mkdir -p "${INSTALL_ROOT}/data" "${LOG_DIR}"
@@ -193,9 +358,9 @@ start_no_systemd() {
   echo $! > "${PID_FILE}" || true
   sleep 1
   if is_running; then
-    echo "LinxPanel started (PID: $(running_pids | tr '\n' ' '))."
+    say started "$(running_pids | tr '\n' ' ')"
   else
-    echo "Failed to start LinxPanel. Check logs: ${LOG_ERR}" >&2
+    say_err start_failed "${LOG_ERR}"
     exit 1
   fi
 }
@@ -204,7 +369,7 @@ stop_no_systemd() {
   local pids=""
   pids="$(running_pids)"
   if [[ -z "${pids}" ]]; then
-    echo "LinxPanel is not running."
+    say not_running
     rm -f "${PID_FILE}" || true
     return
   fi
@@ -215,7 +380,7 @@ stop_no_systemd() {
     echo "${pids}" | xargs -r kill -KILL || true
   fi
   rm -f "${PID_FILE}" || true
-  echo "LinxPanel stopped."
+  say stopped
 }
 
 status_cmd() {
@@ -224,10 +389,10 @@ status_cmd() {
     return
   fi
   if is_running; then
-    echo "LinxPanel is running (PID: $(running_pids | tr '\n' ' '))."
-    echo "URL: $(panel_url)"
+    say running "$(running_pids | tr '\n' ' ')"
+    say url "$(panel_url)"
   else
-    echo "LinxPanel is not running."
+    say not_running
   fi
 }
 
@@ -246,13 +411,13 @@ logs_cmd() {
       if systemd_available && has_cmd journalctl; then
         run_sudo journalctl -u "${SERVICE_NAME}" -f -n 100
       else
-        echo "systemd/journalctl not available; using file logs."
+        say no_journal
         tail -f "${LOG_OUT}" "${LOG_ERR}"
       fi
       ;;
     *)
-      echo "Unknown log type: ${kind}" >&2
-      echo "Usage: Lp logs [out|err|all|service]" >&2
+      say_err unknown_log "${kind}"
+      say_err usage_logs
       exit 1
       ;;
   esac
@@ -263,25 +428,26 @@ update_cmd() {
   case "${mode}" in
     binary|build) ;;
     *)
-      echo "Unsupported update mode: ${mode}" >&2
-      echo "Usage: Lp update [binary|build]" >&2
+      say_err bad_update_mode "${mode}"
+      say_err usage_update
       exit 1
       ;;
   esac
   if ! has_cmd curl; then
-    echo "curl is required for update command." >&2
+    say_err need_curl
     exit 1
   fi
   local script=""
   if ! script="$(curl -fsSL --retry 3 --connect-timeout 10 "${GITHUB_PROXY}${INSTALL_SCRIPT_URL}")" \
     || [[ -z "${script}" ]]; then
-    echo "Failed to download installer: ${INSTALL_SCRIPT_URL}" >&2
+    say_err download_failed "${INSTALL_SCRIPT_URL}"
     exit 1
   fi
   env \
     LINXPANEL_INSTALL_ROOT="${INSTALL_ROOT}" \
     LINXPANEL_PORT="$(current_port)" \
     LINXPANEL_INSTALL_MODE="${mode}" \
+    LINXPANEL_LANG="${LP_LANG}" \
     bash -c "${script}"
 }
 
@@ -291,6 +457,7 @@ panel_cli() {
     DATABASE_URL="$(current_database_url)" \
     PORT="$(service_port)" \
     RUST_LOG=error \
+    LINXPANEL_LANG="${LP_LANG}" \
     "${BIN_PATH}" "$@"
 }
 
@@ -326,11 +493,11 @@ panel_url() {
 open_firewall_port() {
   local port="$1"
   if has_cmd ufw && run_sudo ufw status 2>/dev/null | grep -q "Status: active"; then
-    run_sudo ufw allow "${port}/tcp" >/dev/null 2>&1 && echo "Opened ${port}/tcp in ufw."
+    run_sudo ufw allow "${port}/tcp" >/dev/null 2>&1 && say opened_ufw "${port}"
   elif has_cmd firewall-cmd && run_sudo firewall-cmd --state >/dev/null 2>&1; then
     run_sudo firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 \
       && run_sudo firewall-cmd --reload >/dev/null 2>&1 \
-      && echo "Opened ${port}/tcp in firewalld."
+      && say opened_firewalld "${port}"
   fi
 }
 
@@ -339,7 +506,7 @@ access_cmd() {
   local command="$1"
   shift
   local action="${1:-show}"
-  panel_cli "${command}" "$@" | grep -v "^Restart the panel"
+  panel_cli "${command}" "$@" | grep -v -e "^Restart the panel" -e "^重启面板后生效"
   fix_data_owner
   case "${action}" in
     show | status) return ;;
@@ -360,12 +527,12 @@ apply_restart() {
   else
     return
   fi
-  echo "LinxPanel restarted. URL: $(panel_url)"
+  say restarted "$(panel_url)"
 }
 
 entrance_cmd() {
   local action="${1:-show}"
-  panel_cli entrance "$@" | grep -v "^Restart the panel"
+  panel_cli entrance "$@" | grep -v -e "^Restart the panel" -e "^重启面板后生效"
   fix_data_owner
   if [[ "${action}" != "show" && "${action}" != "status" ]]; then
     apply_restart
@@ -374,7 +541,7 @@ entrance_cmd() {
 
 ssl_cmd() {
   local action="${1:-status}"
-  panel_cli ssl "$@" | grep -v "^Restart the panel"
+  panel_cli ssl "$@" | grep -v -e "^Restart the panel" -e "^重启面板后生效"
   fix_data_owner
   if [[ "${action}" != "status" ]]; then
     apply_restart
@@ -385,23 +552,23 @@ reset_password_cmd() {
   local user="${1:-}"
   [[ -z "${user}" ]] && user="$(panel_info admin_user)"
   user="${user:-admin}"
-  echo "Resetting password for '${user}'..."
+  say resetting "${user}"
   panel_cli reset-password --user "${user}"
   fix_data_owner
 }
 
 uninstall_cmd() {
   local purge="${1:-}"
-  echo "This removes the LinxPanel service, binary and Lp command."
+  say uninstall_what
   if [[ "${purge}" == "--purge" ]]; then
-    echo "--purge: the panel database, certificates and logs in ${INSTALL_ROOT} are deleted too."
+    say uninstall_purge "${INSTALL_ROOT}"
   else
-    echo "Data in ${INSTALL_ROOT}/data is kept (use --purge to delete it)."
+    say uninstall_keep "${INSTALL_ROOT}"
   fi
   local answer=""
-  read -r -p "Type 'yes' to continue: " answer || true
+  read -r -p "$(msg confirm_yes)" answer || true
   if [[ "${answer}" != "yes" ]]; then
-    echo "Aborted."
+    say aborted
     exit 1
   fi
   if systemd_available; then
@@ -426,7 +593,7 @@ uninstall_cmd() {
     run_sudo rm -rf "${INSTALL_ROOT}/bin" "${INSTALL_ROOT}/backup"
   fi
   run_sudo rm -f /usr/local/bin/Lp /usr/local/bin/lp
-  echo "LinxPanel uninstalled."
+  say uninstalled
 }
 
 info_cmd() {
@@ -434,19 +601,19 @@ info_cmd() {
   if systemd_available; then
     mode="systemd"
   fi
-  echo "Command: Lp"
-  echo "Service: ${SERVICE_NAME}"
-  echo "Mode: ${mode}"
-  echo "Install root: ${INSTALL_ROOT}"
-  echo "Binary: ${BIN_PATH}"
-  echo "Logs: ${LOG_OUT} | ${LOG_ERR}"
-  echo "Version: $(version_text)"
-  echo "Port: $(current_port)"
-  echo "URL: $(panel_url)"
+  say info_command
+  say info_service "${SERVICE_NAME}"
+  say info_mode "${mode}"
+  say info_root "${INSTALL_ROOT}"
+  say info_binary "${BIN_PATH}"
+  say info_logs "${LOG_OUT}" "${LOG_ERR}"
+  say info_version "$(version_text)"
+  say info_port "$(current_port)"
+  say info_url "$(panel_url)"
   if is_running; then
-    echo "Status: running (PID: $(running_pids | tr '\n' ' '))"
+    say info_running "$(running_pids | tr '\n' ' ')"
   else
-    echo "Status: stopped"
+    say info_stopped
   fi
 }
 
@@ -459,6 +626,42 @@ version_text() {
 }
 
 print_help() {
+  if [[ "${LP_LANG}" == "zh" ]]; then
+    cat <<'EOF'
+Lp - LinxPanel 命令行工具
+
+用法：
+  Lp status                 查看服务状态
+  Lp start                  启动面板
+  Lp stop                   停止面板
+  Lp restart                重启面板
+  Lp logs [out|err|all|service]
+                            查看日志
+  Lp info                   查看运行信息
+  Lp update [binary|build]  升级/重装面板（数据保留）
+  Lp reset-password [用户]  重置为随机密码（默认为面板账号）
+  Lp entrance [show|off|random|/路径]
+                            查看或修改安全入口
+  Lp ssl [status|on|off]    查看或修改面板 HTTPS（默认自签名证书）
+  Lp port [端口|default]    查看或修改面板端口
+  Lp allow-ip [off|IP ...]  查看、设置或清除授权访问 IP/网段
+  Lp domain [off|域名]      查看、设置或清除绑定域名
+  Lp mfa [off] [用户]       查看或关闭两步验证
+  Lp security               查看全部面板安全设置
+  Lp lang [zh|en]           查看或切换语言（面板和命令行一起切换）
+  Lp bans                   列出被主动防御封禁的地址
+  Lp ban IP [分钟]          封禁某个地址的全部流量（0 为永久）
+  Lp unban IP|all           解除封禁（all：全部解除，例如误封了自己）
+  Lp defense [on|off]       查看或开关自动封禁
+  Lp harden [on|off]        内核网络加固（SYN Cookie 等）
+  Lp version                查看已安装版本
+  Lp enable                 设置开机自启
+  Lp disable                取消开机自启
+  Lp uninstall [--purge]    卸载面板（--purge 同时删除数据）
+  Lp help                   显示本帮助
+EOF
+    return
+  fi
   cat <<'EOF'
 Lp - LinxPanel CLI
 
@@ -480,6 +683,7 @@ Usage:
   Lp domain [off|DOMAIN]    Show, set or clear the bound domain
   Lp mfa [off] [user]       Show or turn off two-factor login
   Lp security               Show all panel security settings
+  Lp lang [zh|en]           Show or switch the language (panel and CLI together)
   Lp bans                   List addresses banned by active defense
   Lp ban IP [MINUTES]       Drop all traffic from an address (0 = permanent)
   Lp unban IP|all           Lift a ban (all: e.g. after locking yourself out)
@@ -494,19 +698,20 @@ EOF
 }
 
 sync_paths_from_service
+detect_lang
 
 cmd="${1:-help}"
 
 require_binary=0
 case "${cmd}" in
-  start|restart|logs|info|reset-password|version|entrance|ssl|port|allow-ip|domain|mfa|security|ban|unban|bans|defense|harden)
+  start|restart|logs|info|reset-password|version|entrance|ssl|port|allow-ip|domain|mfa|security|lang|ban|unban|bans|defense|harden)
     require_binary=1
     ;;
 esac
 
 if [[ "${require_binary}" == "1" && ! -x "${BIN_PATH}" ]]; then
-  echo "LinxPanel binary not found: ${BIN_PATH}" >&2
-  echo "Tip: set LINXPANEL_INSTALL_ROOT or run: Lp update binary" >&2
+  say_err no_binary "${BIN_PATH}"
+  say_err no_binary_tip
   exit 1
 fi
 
@@ -522,7 +727,7 @@ case "${cmd}" in
   stop)
     if systemd_available; then
       run_sudo systemctl stop "${SERVICE_NAME}"
-      echo "LinxPanel stopped."
+      say stopped
     else
       stop_no_systemd
     fi
@@ -566,7 +771,10 @@ case "${cmd}" in
     ;;
   security)
     panel_cli security
-    echo "URL:             $(panel_url)"
+    say security_url "$(panel_url)"
+    ;;
+  lang | language)
+    lang_cmd "${2:-show}"
     ;;
   entrance)
     shift
@@ -588,24 +796,24 @@ case "${cmd}" in
   enable)
     if systemd_available; then
       run_sudo systemctl enable "${SERVICE_NAME}"
-      echo "systemd service enabled."
+      say svc_enabled
     else
-      echo "systemd not available, skip."
+      say no_systemd
     fi
     ;;
   disable)
     if systemd_available; then
       run_sudo systemctl disable "${SERVICE_NAME}"
-      echo "systemd service disabled."
+      say svc_disabled
     else
-      echo "systemd not available, skip."
+      say no_systemd
     fi
     ;;
   help|-h|--help)
     print_help
     ;;
   *)
-    echo "Unknown command: ${cmd}" >&2
+    say_err unknown_cmd "${cmd}"
     print_help
     exit 1
     ;;

@@ -228,8 +228,13 @@ async fn main() -> anyhow::Result<()> {
     std::env::set_var("DEBIAN_FRONTEND", "noninteractive");
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if cli::run(&args).await? {
-        return Ok(());
+    match cli::run(&args).await {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(err) => {
+            eprintln!("{}{:#}", cli::error_prefix(), err);
+            std::process::exit(1);
+        }
     }
 
     tracing_subscriber::registry()

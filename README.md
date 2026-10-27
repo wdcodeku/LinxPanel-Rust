@@ -55,6 +55,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/wdcodeku/LinxPanel-Rust/
 - `Lp port [端口|default]`、`Lp allow-ip [off|IP ...]`、`Lp domain [off|域名]`：修改面板端口、授权 IP、绑定域名（自动重启面板）
 - `Lp mfa [off]`：查看或关闭两步验证
 - `Lp security`：查看全部面板安全设置
+- `Lp lang [zh|en]`：查看或切换语言（面板界面和命令行一起切换；在面板里切换语言后，命令行也会跟着变）
 - `Lp bans`、`Lp ban IP [分钟]`、`Lp unban IP|all`：查看 / 封禁 / 解封地址（立即生效；误封自己时用 `Lp unban all`）
 - `Lp defense [on|off]`：查看或开关自动封禁；`Lp harden [on|off]`：内核网络加固
 - `Lp version`：查看版本
@@ -348,6 +349,7 @@ Optional environment variables:
 - `Lp port [PORT|default]`, `Lp allow-ip [off|IP ...]`, `Lp domain [off|DOMAIN]`: change the panel port, allowed IPs, bound domain (restarts the panel)
 - `Lp mfa [off]`: show or turn off two-factor login
 - `Lp security`: show every panel security setting
+- `Lp lang [zh|en]`: show or switch the language (the web UI and the CLI switch together; switching in the panel switches the CLI too)
 - `Lp bans`, `Lp ban IP [MINUTES]`, `Lp unban IP|all`: list / ban / lift bans (immediate; `Lp unban all` if you locked yourself out)
 - `Lp defense [on|off]`: show or switch automatic banning; `Lp harden [on|off]`: kernel network hardening
 - `Lp version`: show the installed version

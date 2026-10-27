@@ -88,10 +88,24 @@ saved_setting() {
   sed -n -E "s/^$1=([A-Za-z0-9_-]*)$/\1/p" "${INSTALL_CONF}" | head -n1
 }
 
-# Upgrades never ask: they take the saved choice, else a sensible default.
+# The language the installed panel is set to (shared by its UI and `Lp`);
+# empty for panels older than that setting. Runs before sudo is set up, so
+# it simply comes back empty where the data is not readable.
+installed_panel_language() {
+  local bin="${INSTALL_ROOT}/bin/linxpanel" timeout_cmd=()
+  [[ -x "${bin}" ]] || return 0
+  command -v timeout >/dev/null 2>&1 && timeout_cmd=(timeout 5)
+  env DATABASE_URL="sqlite:${INSTALL_ROOT}/data/linxpanel.db?mode=rwc" RUST_LOG=error \
+    ${timeout_cmd[@]+"${timeout_cmd[@]}"} "${bin}" info 2>/dev/null \
+    | sed -n -E 's/^language=(zh|en)$/\1/p' | head -n1 || true
+}
+
+# Upgrades never ask: they take the panel's language, else the saved choice,
+# else a sensible default.
 select_language() {
   if [[ -z "${LANGUAGE}" && "${IS_UPGRADE}" == "1" ]]; then
-    LANGUAGE="$(saved_setting LANGUAGE)"
+    LANGUAGE="$(installed_panel_language)"
+    [[ -z "${LANGUAGE}" ]] && LANGUAGE="$(saved_setting LANGUAGE)"
     if [[ -z "${LANGUAGE}" ]]; then
       case "${LC_ALL:-${LANG:-}}" in zh*) LANGUAGE="zh" ;; *) LANGUAGE="en" ;; esac
     fi
@@ -1296,6 +1310,10 @@ PUBLIC_IP="$(detect_public_ip)"
 INTERNAL_IP="$(detect_internal_ip)"
 configure_access
 sync_port_with_panel
+# A new panel starts in the language chosen here (web UI and `Lp` alike).
+if [[ "${IS_UPGRADE}" == "0" ]]; then
+  panel_cli lang "${LANGUAGE}" >/dev/null 2>&1 || true
+fi
 
 ${SUDO} chown -R "${RUN_USER}:${RUN_GROUP}" "${INSTALL_ROOT}"
 ${SUDO} chmod 700 "${INSTALL_ROOT}/data"

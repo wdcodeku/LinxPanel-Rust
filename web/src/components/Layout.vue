@@ -189,7 +189,7 @@ import { useUserStore } from '@/stores/user'
 import { useRealtimeStore } from '@/stores/realtime'
 import { useI18n } from '@/i18n'
 import type { Locale } from '@/i18n'
-import { changePasswordApi, getUpdateStatus } from '@/api'
+import { changePasswordApi, getSettings, getUpdateStatus, saveSettingsApi } from '@/api'
 import { prefetchViews } from '@/router'
 import TaskCenter from '@/components/TaskCenter.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
@@ -327,9 +327,28 @@ function toggleTheme() {
   userStore.setTheme(userStore.theme === 'dark' ? 'default' : 'dark')
 }
 
+// One language for the panel: saved on the server so `Lp` (and the
+// installer) speak it too, and so `Lp lang` switches this UI as well.
 function toggleLang() {
-  setLocale(locale.value === 'zh' ? 'en' : ('zh' as Locale))
+  const next: Locale = locale.value === 'zh' ? 'en' : 'zh'
+  setLocale(next)
+  saveSettingsApi({ panel_language: next }).catch(() => {})
 }
+
+async function syncLanguage() {
+  try {
+    const res: any = await getSettings()
+    const saved = res?.data?.panel_language
+    if (saved === 'zh' || saved === 'en') {
+      if (saved !== locale.value) setLocale(saved)
+    } else {
+      await saveSettingsApi({ panel_language: locale.value })
+    }
+  } catch {
+    // Offline or an older server: the browser's choice stays.
+  }
+}
+onMounted(syncLanguage)
 
 function handleLogout() {
   realtime.reset()
