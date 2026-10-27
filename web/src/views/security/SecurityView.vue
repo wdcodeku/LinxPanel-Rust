@@ -154,6 +154,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { Connection, Lock, Plus, Refresh, Search } from '@element-plus/icons-vue'
@@ -352,6 +353,7 @@ async function removeRule(row: FirewallRule) {
 }
 
 onMounted(loadAll)
+usePage(loadAll)
 </script>
 
 <style scoped lang="scss">

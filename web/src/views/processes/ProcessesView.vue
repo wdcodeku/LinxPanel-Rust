@@ -126,6 +126,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { getProcesses, signalProcess } from '@/api'
@@ -217,7 +218,7 @@ function restartTimer() {
   if (autoRefresh.value > 0) {
     timer = window.setInterval(() => {
       // Skip refreshes while a dialog is open so the row under the cursor stays put.
-      if (!detailVisible.value && !killVisible.value && !document.hidden) void fetchRows()
+      if (pageActive.value && !detailVisible.value && !killVisible.value && !document.hidden) void fetchRows()
     }, autoRefresh.value)
   }
 }
@@ -277,6 +278,7 @@ onMounted(() => {
   void fetchRows()
   restartTimer()
 })
+const { active: pageActive } = usePage(fetchRows)
 
 onUnmounted(() => {
   if (timer !== null) window.clearInterval(timer)

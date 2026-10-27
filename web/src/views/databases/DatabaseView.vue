@@ -379,6 +379,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheckFilled, CircleCloseFilled, Coin, Connection, CopyDocument, EditPen, Hide, InfoFilled,
@@ -889,6 +890,7 @@ async function removeBackup(row: any) {
 }
 
 onMounted(loadAll)
+usePage(loadAll)
 </script>
 
 <style scoped lang="scss">

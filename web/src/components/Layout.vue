@@ -6,34 +6,52 @@
     <aside class="sidebar">
       <div class="sidebar__brand">
         <svg class="sidebar__mark" viewBox="0 0 32 32" aria-hidden="true">
-          <rect width="32" height="32" rx="8" fill="var(--lp-accent)" />
+          <defs>
+            <linearGradient id="lp-mark" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="var(--lp-accent-400)" />
+              <stop offset="1" stop-color="var(--lp-accent-600)" />
+            </linearGradient>
+          </defs>
+          <rect width="32" height="32" rx="9" fill="url(#lp-mark)" />
           <path d="M9 8v14h8" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" />
           <circle cx="22" cy="11" r="2.6" fill="#fff" />
         </svg>
-        <span v-show="!collapsed" class="sidebar__name">LinxPanel</span>
+        <span class="sidebar__name">LinxPanel</span>
       </div>
 
       <nav class="sidebar__nav">
         <template v-for="group in navGroups" :key="group.key">
-          <div v-show="!collapsed" class="sidebar__group">{{ t(group.titleKey) }}</div>
-          <button
+          <div class="sidebar__group">{{ t(group.titleKey) }}</div>
+          <el-tooltip
             v-for="item in group.items"
             :key="item.path"
-            type="button"
-            class="nav-item"
-            :class="{ 'nav-item--active': isActive(item) }"
-            :title="collapsed ? t(item.titleKey) : undefined"
-            @click="go(item.path)"
+            :content="t(item.titleKey)"
+            placement="right"
+            :disabled="!collapsed"
+            :show-after="200"
           >
-            <el-icon :size="17"><component :is="item.icon" /></el-icon>
-            <span v-show="!collapsed" class="nav-item__label">{{ t(item.titleKey) }}</span>
-          </button>
+            <a
+              :href="item.path"
+              class="nav-item"
+              :class="{ 'nav-item--active': isActive(item) }"
+              @click.prevent="go(item.path)"
+            >
+              <el-icon :size="18" class="nav-item__icon"><component :is="item.icon" /></el-icon>
+              <span class="nav-item__label">{{ t(item.titleKey) }}</span>
+            </a>
+          </el-tooltip>
         </template>
       </nav>
 
       <div class="sidebar__foot">
-        <span v-show="!collapsed" class="sidebar__version">v{{ panelVersion }}</span>
-        <button type="button" class="icon-btn" :title="t('nav.collapse')" @click="collapsed = !collapsed">
+        <div class="host-card" :title="`${host.hostname} · ${host.os}`">
+          <span class="host-card__icon"><el-icon :size="16"><Monitor /></el-icon></span>
+          <span class="host-card__text">
+            <span class="host-card__name lp-truncate">{{ host.hostname || '—' }}</span>
+            <span class="host-card__meta lp-truncate">{{ host.os }} · v{{ panelVersion }}</span>
+          </span>
+        </div>
+        <button type="button" class="icon-btn sidebar__collapse" :title="t('nav.collapse')" @click="collapsed = !collapsed">
           <el-icon :size="16"><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
         </button>
       </div>
@@ -45,34 +63,44 @@
           <el-icon :size="18"><Expand /></el-icon>
         </button>
 
-        <div class="topbar__host">
-          <span class="host-chip host-chip--name">
-            <el-icon :size="13"><Monitor /></el-icon>
-            {{ host.hostname || '—' }}
-          </span>
-          <span class="host-chip">{{ host.os }}</span>
-          <span class="host-chip host-chip--hide-sm">{{ t('nav.uptime') }} {{ host.uptime }}</span>
-        </div>
+        <nav class="crumbs" aria-label="breadcrumb">
+          <span v-if="crumbs.group" class="crumbs__group">{{ crumbs.group }}</span>
+          <el-icon v-if="crumbs.group" :size="12" class="crumbs__sep"><ArrowRight /></el-icon>
+          <router-link v-if="crumbs.child" :to="crumbs.parentPath" class="crumbs__link">{{ crumbs.title }}</router-link>
+          <span v-else class="crumbs__current">{{ crumbs.title }}</span>
+          <template v-if="crumbs.child">
+            <el-icon :size="12" class="crumbs__sep"><ArrowRight /></el-icon>
+            <span class="crumbs__current">{{ crumbs.child }}</span>
+          </template>
+        </nav>
+
+        <button type="button" class="search-btn" @click="paletteOpen = true">
+          <el-icon :size="15"><Search /></el-icon>
+          <span class="search-btn__text">{{ t('nav.search') }}</span>
+          <kbd class="search-btn__kbd">{{ isMac ? '⌘' : 'Ctrl' }} K</kbd>
+        </button>
 
         <div class="topbar__right">
           <button
             v-if="taskStore.running.length"
             type="button"
-            class="update-chip task-chip"
+            class="chip chip--accent"
             @click="taskStore.show(taskStore.running[0].id)"
           >
             <el-icon :size="13" class="spin"><Loading /></el-icon>
-            <span class="update-chip__text">{{ t('task.runningCount', { n: taskStore.running.length }) }}</span>
+            <span class="chip__text">{{ t('task.runningCount', { n: taskStore.running.length }) }}</span>
           </button>
-          <router-link v-if="updateTag" to="/settings?tab=update" class="update-chip" :title="t('upd.available')">
+          <router-link v-if="updateTag" to="/settings?tab=update" class="chip chip--accent" :title="t('upd.available')">
             <el-icon :size="13"><Upload /></el-icon>
-            <span class="update-chip__text">{{ t('upd.badge', { tag: updateTag }) }}</span>
+            <span class="chip__text">{{ t('upd.badge', { tag: updateTag }) }}</span>
           </router-link>
           <!-- Connection state is the one thing that must never be silently wrong. -->
           <span class="live" :class="`live--${realtime.state}`" :title="liveTitle">
             <span class="live__dot"></span>
             <span class="live__text">{{ liveLabel }}</span>
           </span>
+
+          <span class="topbar__divider"></span>
 
           <button type="button" class="icon-btn" :title="t('language')" @click="toggleLang">
             <span class="icon-btn__text">{{ locale === 'zh' ? 'EN' : '中' }}</span>
@@ -81,11 +109,11 @@
             <el-icon :size="16"><Sunny v-if="userStore.theme === 'dark'" /><Moon v-else /></el-icon>
           </button>
 
-          <el-dropdown trigger="click">
+          <el-dropdown trigger="click" placement="bottom-end">
             <button type="button" class="user-btn">
               <span class="user-btn__avatar">{{ initials }}</span>
               <span class="user-btn__name">{{ userStore.username }}</span>
-              <el-icon :size="12"><ArrowDown /></el-icon>
+              <el-icon :size="12" class="user-btn__caret"><ArrowDown /></el-icon>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -102,17 +130,19 @@
       </header>
 
       <TaskCenter />
-      <main class="shell__content">
-        <!-- The old page stays until the new one is ready, then swaps with a
-             short fade-in: no blank frame between pages (out-in left the
-             content area empty while the next page's code loaded). -->
+      <main ref="contentRef" class="shell__content">
+        <!-- Visited pages stay alive: switching back shows them at once, as
+             they were, and they refresh quietly behind that (see usePage).
+             The swap itself is immediate - no fade from a faded frame. -->
         <router-view v-slot="{ Component, route: viewRoute }">
-          <transition name="page">
+          <keep-alive :exclude="['SiteDetail']" :max="12">
             <component :is="Component" :key="viewRoute.path" />
-          </transition>
+          </keep-alive>
         </router-view>
       </main>
     </div>
+
+    <CommandPalette v-model="paletteOpen" />
 
     <el-dialog
       v-model="showChangePassword"
@@ -153,7 +183,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import {
-  ArrowDown, Expand, Fold, Lock, Monitor, Moon, Sunny, SwitchButton,
+  ArrowDown, ArrowRight, Expand, Fold, Lock, Monitor, Moon, Search, Sunny, SwitchButton,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useRealtimeStore } from '@/stores/realtime'
@@ -162,6 +192,9 @@ import type { Locale } from '@/i18n'
 import { changePasswordApi, getUpdateStatus } from '@/api'
 import { prefetchViews } from '@/router'
 import TaskCenter from '@/components/TaskCenter.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
+import { findNav, navGroups } from '@/components/nav'
+import type { NavItem } from '@/components/nav'
 import { useTaskStore } from '@/stores/tasks'
 import { formatDuration } from '@/utils/format'
 
@@ -183,37 +216,6 @@ watch(collapsed, (value) => {
     // Private mode / blocked storage: collapsing still works for this session.
   }
 })
-
-const navGroups = [
-  {
-    key: 'monitor',
-    titleKey: 'nav.groupMonitor',
-    items: [
-      { path: '/dashboard', titleKey: 'dashboard', icon: 'Odometer' },
-      { path: '/processes', titleKey: 'nav.processes', icon: 'Histogram' },
-      { path: '/services', titleKey: 'nav.services', icon: 'SetUp' },
-    ],
-  },
-  {
-    key: 'server',
-    titleKey: 'nav.groupServer',
-    items: [
-      { path: '/sites', titleKey: 'sites', icon: 'Connection', match: '/sites' },
-      { path: '/appstore', titleKey: 'nav.appstore', icon: 'Shop' },
-      { path: '/databases', titleKey: 'nav.databases', icon: 'Coin' },
-      { path: '/runtime', titleKey: 'nav.runtime', icon: 'Box' },
-      { path: '/files', titleKey: 'fileManager', icon: 'FolderOpened' },
-      { path: '/terminal', titleKey: 'terminal', icon: 'Monitor' },
-      { path: '/cron', titleKey: 'nav.cron', icon: 'AlarmClock' },
-      { path: '/security', titleKey: 'nav.security', icon: 'Lock' },
-    ],
-  },
-  {
-    key: 'system',
-    titleKey: 'nav.groupSystem',
-    items: [{ path: '/settings', titleKey: 'settings', icon: 'Setting' }],
-  },
-]
 
 const panelVersion = computed(() => realtime.staticInfo?.panel_version || '0.1.0')
 
@@ -257,15 +259,69 @@ const liveTitle = computed(() =>
 
 const initials = computed(() => (userStore.username || '?').slice(0, 1).toUpperCase())
 
-function isActive(item: { path: string; match?: string }) {
-  if (item.match) return route.path === item.match || route.path.startsWith(`${item.match}/`)
-  return route.path === item.path
+// The highlight moves on click, before the next page has rendered: the
+// sidebar answers at once even when that page is still loading.
+const pendingPath = ref('')
+watch(() => route.path, () => {
+  pendingPath.value = ''
+})
+
+function isActive(item: NavItem) {
+  const path = pendingPath.value || route.path
+  if (item.match) return path === item.match || path.startsWith(`${item.match}/`)
+  return path === item.path
 }
 
 function go(path: string) {
   mobileNavOpen.value = false
-  if (route.path !== path) router.push(path)
+  if (route.path === path) return
+  pendingPath.value = path
+  router.push(path).finally(() => {
+    pendingPath.value = ''
+  })
 }
+
+const crumbs = computed(() => {
+  const found = findNav(route.path)
+  const title = found ? t(found.item.titleKey) : ''
+  const child = found && found.item.path !== route.path ? t('nav.siteDetail') : ''
+  return {
+    group: found ? t(found.group.titleKey) : '',
+    title,
+    child,
+    parentPath: found?.item.path || '/',
+  }
+})
+
+// --- Quick search (Ctrl/Cmd + K, or "/" outside text fields) ---
+const paletteOpen = ref(false)
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+function onShortcut(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null
+  const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+  if ((event.key === 'k' || event.key === 'K') && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault()
+    paletteOpen.value = !paletteOpen.value
+  } else if (event.key === '/' && !typing && !paletteOpen.value) {
+    event.preventDefault()
+    paletteOpen.value = true
+  }
+}
+onMounted(() => window.addEventListener('keydown', onShortcut))
+onUnmounted(() => window.removeEventListener('keydown', onShortcut))
+
+// Each page keeps its own scroll position; a page seen for the first time
+// starts at the top.
+const contentRef = ref<HTMLElement>()
+const scrollByPath = new Map<string, number>()
+const removeScrollGuard = router.beforeEach((_to, from) => {
+  if (contentRef.value) scrollByPath.set(from.path, contentRef.value.scrollTop)
+})
+onUnmounted(removeScrollGuard)
+watch(() => route.path, async (path) => {
+  await nextTick()
+  if (contentRef.value) contentRef.value.scrollTop = scrollByPath.get(path) || 0
+})
 
 function toggleTheme() {
   userStore.setTheme(userStore.theme === 'dark' ? 'default' : 'dark')
@@ -347,6 +403,7 @@ onUnmounted(() => realtime.unsubscribe())
 .shell {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--lp-canvas);
 }
@@ -356,7 +413,7 @@ onUnmounted(() => realtime.unsubscribe())
   position: fixed;
   inset: 0;
   z-index: 19;
-  background: rgba(16, 24, 40, 0.45);
+  background: var(--lp-scrim);
 }
 
 /* ---------- Sidebar ---------- */
@@ -369,23 +426,23 @@ onUnmounted(() => realtime.unsubscribe())
   border-right: 1px solid var(--lp-line);
   transition: width var(--lp-base);
   z-index: 20;
+  overflow: hidden;
 }
 .shell--collapsed .sidebar { width: var(--lp-sidebar-w-collapsed); }
 
 .sidebar__brand {
   display: flex;
   align-items: center;
-  gap: var(--lp-2);
+  gap: 10px;
   height: var(--lp-header-h);
-  padding: 0 var(--lp-4);
+  padding: 0 18px;
   flex: none;
-  border-bottom: 1px solid var(--lp-line-soft);
 }
-.sidebar__mark { width: 26px; height: 26px; flex: none; }
+.sidebar__mark { width: 28px; height: 28px; flex: none; }
 .sidebar__name {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--lp-text);
   white-space: nowrap;
 }
@@ -393,84 +450,109 @@ onUnmounted(() => realtime.unsubscribe())
 .sidebar__nav {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--lp-3) var(--lp-2);
+  padding: var(--lp-1) var(--lp-3) var(--lp-3);
 }
 
 .sidebar__group {
-  padding: var(--lp-3) var(--lp-2) var(--lp-1);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  height: 30px;
+  padding: 12px 10px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   color: var(--lp-text-faint);
+  white-space: nowrap;
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--lp-3);
-  width: 100%;
-  padding: 8px 10px;
+  gap: 12px;
+  height: 38px;
+  padding: 0 11px;
   margin-bottom: 2px;
-  border: 0;
-  border-radius: var(--lp-r-sm);
-  background: transparent;
+  border-radius: var(--lp-r);
   color: var(--lp-nav-text);
-  font-family: inherit;
-  font-size: var(--lp-text-base);
+  font-size: var(--lp-text-md);
   font-weight: 500;
-  text-align: left;
-  cursor: pointer;
+  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
   transition: background var(--lp-fast), color var(--lp-fast);
 
   &:hover { background: var(--lp-surface-hover); color: var(--lp-text); }
-  &--active {
+  &:focus-visible { outline-offset: -2px; }
+
+  &--active,
+  &--active:hover {
     background: var(--lp-nav-active-bg);
     color: var(--lp-nav-text-active);
     font-weight: 600;
   }
+  &--active::before {
+    content: '';
+    position: absolute;
+    left: -12px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--lp-accent);
+  }
 }
-.shell--collapsed .nav-item { justify-content: center; padding: 9px 0; }
+.nav-item__icon { flex: none; }
+.nav-item__label { overflow: hidden; text-overflow: ellipsis; }
 
 .sidebar__foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--lp-2);
-  padding: var(--lp-2) var(--lp-3);
+  padding: var(--lp-3);
   flex: none;
   border-top: 1px solid var(--lp-line-soft);
 }
-.shell--collapsed .sidebar__foot { justify-content: center; }
-/* Page switch: the leaving page goes at once, the new one eases in. */
-.page-leave-active { display: none; }
-.page-enter-active { transition: opacity 160ms ease-out, transform 160ms ease-out; }
-.page-enter-from { opacity: 0.4; transform: translateY(4px); }
 
-.update-chip {
-  display: inline-flex;
+.host-card {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: var(--lp-r-full);
-  background: var(--lp-accent-soft);
-  color: var(--lp-accent);
-  font-size: var(--lp-text-xs);
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
 }
-.update-chip:hover { filter: brightness(0.96); }
-.task-chip { border: 0; cursor: pointer; font-family: inherit; }
-.spin { animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 640px) {
-  .update-chip__text { display: none; }
+.host-card__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--lp-r);
+  background: var(--lp-surface-sunken);
+  color: var(--lp-text-soft);
 }
-.sidebar__version { font-size: var(--lp-text-xs); color: var(--lp-text-faint); }
+.host-card__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.host-card__name { font-size: var(--lp-text-base); font-weight: 600; color: var(--lp-text); }
+.host-card__meta { font-size: var(--lp-text-xs); color: var(--lp-text-dim); }
+
+/* Collapsed: icons only, centred. */
+.shell--collapsed {
+  .sidebar__brand { padding: 0; justify-content: center; }
+  .sidebar__name,
+  .nav-item__label,
+  .host-card { display: none; }
+  .sidebar__group {
+    height: 17px;
+    padding: 0;
+    margin: 8px 10px;
+    font-size: 0;
+    border-top: 1px solid var(--lp-line-soft);
+  }
+  .sidebar__group:first-child { height: 0; margin-top: 0; border: 0; }
+  .nav-item { justify-content: center; padding: 0; }
+  .nav-item--active::before { left: -12px; }
+  .sidebar__foot { justify-content: center; }
+}
 
 /* ---------- Top bar ---------- */
 .shell__main {
@@ -486,72 +568,119 @@ onUnmounted(() => realtime.unsubscribe())
   gap: var(--lp-3);
   height: var(--lp-header-h);
   flex: none;
-  padding: 0 var(--lp-4);
+  padding: 0 var(--lp-5);
   background: var(--lp-surface);
   border-bottom: 1px solid var(--lp-line);
 }
 
-.topbar__menu { display: none; }
 
-.topbar__host {
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--lp-text-md);
+  white-space: nowrap;
+}
+.crumbs__group { color: var(--lp-text-dim); }
+.crumbs__sep { color: var(--lp-text-faint); flex: none; }
+.crumbs__link { color: var(--lp-text-dim); text-decoration: none; }
+.crumbs__link:hover { color: var(--lp-accent); }
+.crumbs__current { font-weight: 600; color: var(--lp-text); overflow: hidden; text-overflow: ellipsis; }
+
+.search-btn {
   display: flex;
   align-items: center;
   gap: var(--lp-2);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.host-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: var(--lp-r-full);
+  width: 260px;
+  height: 34px;
+  margin-left: var(--lp-6);
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-r);
   background: var(--lp-surface-sunken);
-  font-size: var(--lp-text-xs);
-  color: var(--lp-text-soft);
-  white-space: nowrap;
+  color: var(--lp-text-dim);
+  font: inherit;
+  font-size: var(--lp-text-base);
+  cursor: pointer;
+  transition: border-color var(--lp-fast), background var(--lp-fast);
 
-  &--name { font-weight: 600; color: var(--lp-text); }
+  &:hover { border-color: var(--lp-line-strong); background: var(--lp-surface); }
+}
+.search-btn__text { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-btn__kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--lp-line);
+  border-radius: 5px;
+  background: var(--lp-surface);
+  font-family: var(--lp-font);
+  font-size: 11px;
+  color: var(--lp-text-dim);
+  white-space: nowrap;
 }
 
 .topbar__right {
   display: flex;
   align-items: center;
-  gap: var(--lp-2);
+  gap: 6px;
   margin-left: auto;
 }
+.topbar__divider { width: 1px; height: 20px; margin: 0 4px; background: var(--lp-line); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--lp-r-full);
+  font: inherit;
+  font-size: var(--lp-text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &--accent { background: var(--lp-accent-soft); color: var(--lp-accent); }
+  &:hover { filter: brightness(0.97); }
+}
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .live {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px;
+  height: 28px;
+  padding: 0 11px;
   border-radius: var(--lp-r-full);
-  font-size: var(--lp-text-xs);
+  font-size: var(--lp-text-sm);
   font-weight: 600;
   background: var(--lp-muted-soft);
   color: var(--lp-muted);
 }
-.live__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live__dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .live--open { background: var(--lp-ok-soft); color: var(--lp-ok); }
 .live--open .live__dot { animation: live-pulse 2s ease-in-out infinite; }
 .live--connecting { background: var(--lp-warn-soft); color: var(--lp-warn); }
 .live--closed { background: var(--lp-danger-soft); color: var(--lp-danger); }
 
 @keyframes live-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.82); }
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  60% { box-shadow: 0 0 0 4px transparent; }
 }
 
 .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
+  flex: none;
   border: 0;
-  border-radius: var(--lp-r-sm);
+  border-radius: var(--lp-r);
   background: transparent;
   color: var(--lp-text-soft);
   cursor: pointer;
@@ -559,19 +688,20 @@ onUnmounted(() => realtime.unsubscribe())
 
   &:hover { background: var(--lp-surface-hover); color: var(--lp-text); }
 }
-.icon-btn__text { font-size: 11px; font-weight: 700; }
+.icon-btn__text { font-size: 12px; font-weight: 700; }
 
 .user-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  height: 30px;
+  gap: 8px;
+  height: 36px;
   padding: 0 8px 0 4px;
+  margin-left: 2px;
   border: 0;
   border-radius: var(--lp-r-full);
   background: transparent;
   color: var(--lp-text);
-  font-family: inherit;
+  font: inherit;
   font-size: var(--lp-text-base);
   cursor: pointer;
   transition: background var(--lp-fast);
@@ -581,40 +711,73 @@ onUnmounted(() => realtime.unsubscribe())
 .user-btn__avatar {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: var(--lp-accent);
+  background: linear-gradient(135deg, var(--lp-accent-400), var(--lp-accent-600));
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
-[data-theme='dark'] .user-btn__avatar { color: var(--lp-text-invert); }
-.user-btn__name { font-weight: 500; }
+.user-btn__name { font-weight: 600; }
+.user-btn__caret { color: var(--lp-text-dim); }
 
 .shell__content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* The scrollbar's space is always reserved: pages of different heights
+     must not shift sideways when switching between them. */
+  scrollbar-gutter: stable;
 }
 
+/* After .icon-btn, which would otherwise show it on desktop. */
+.topbar__menu { display: none; }
+
 /* ---------- Responsive ---------- */
+@media (max-width: 1100px) {
+  .search-btn { width: 200px; margin-left: var(--lp-3); }
+}
+
 @media (max-width: 900px) {
-  .host-chip--hide-sm { display: none; }
+  .search-btn { width: 34px; padding: 0; justify-content: center; margin-left: auto; }
+  .search-btn__text,
+  .search-btn__kbd { display: none; }
+  .topbar__right { margin-left: 0; }
+  .crumbs__group,
+  .crumbs__group + .crumbs__sep { display: none; }
 }
 
 @media (max-width: 768px) {
+  .topbar { padding: 0 var(--lp-3); gap: var(--lp-2); }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
+    width: 248px;
     transform: translateX(-100%);
+    transition: transform var(--lp-base);
     box-shadow: var(--lp-shadow-lg);
   }
+  .shell--collapsed .sidebar { width: 248px; }
+  .shell--collapsed {
+    .sidebar__brand { padding: 0 18px; justify-content: flex-start; }
+    .sidebar__name,
+    .nav-item__label { display: inline; }
+    .host-card { display: flex; }
+    .sidebar__group { height: 30px; padding: 12px 10px 0; margin: 0; font-size: 11px; border: 0; }
+    .nav-item { justify-content: flex-start; padding: 0 11px; }
+  }
+  .sidebar__collapse { display: none; }
   .shell--nav-open .sidebar { transform: translateX(0); }
   .shell--nav-open .shell__scrim { display: block; }
   .topbar__menu { display: inline-flex; }
-  .user-btn__name { display: none; }
+  .topbar__divider,
+  .user-btn__name,
+  .user-btn__caret,
+  .chip__text,
   .live__text { display: none; }
-  .live { padding: 3px 7px; }
+  .chip,
+  .live { padding: 0 9px; }
 }
 </style>

@@ -64,6 +64,7 @@
 
 <script setup lang="ts">
 import { nextTick, reactive, ref, watch } from 'vue'
+import { usePage } from '@/utils/page'
 import { Plus } from '@element-plus/icons-vue'
 import TerminalPane from '@/components/TerminalPane.vue'
 import { useI18n } from '@/i18n'
@@ -94,6 +95,8 @@ function add() {
   sessions.push(session)
   activate(session.id)
 }
+
+usePage(() => activate(activeId.value))
 
 function activate(id: number) {
   activeId.value = id

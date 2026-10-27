@@ -8,8 +8,11 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
   plugins: [
     vue(),
-    AutoImport({ resolvers: [ElementPlusResolver()] }),
-    Components({ resolvers: [ElementPlusResolver()] }),
+    // Element Plus' full stylesheet is loaded once in main.ts, before ours.
+    // Per-component style imports would load later with each page's code and
+    // silently override the theme (and restyle the page as it appears).
+    AutoImport({ resolvers: [ElementPlusResolver({ importStyle: false })] }),
+    Components({ resolvers: [ElementPlusResolver({ importStyle: false })] }),
   ],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },

@@ -78,12 +78,12 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 
 /* Page scaffolding shared by every view. */
 .lp-page {
-  padding: var(--lp-5);
-  max-width: 1560px;
+  padding: var(--lp-6);
+  max-width: 1640px;
   margin: 0 auto;
 }
 @media (max-width: 768px) {
-  .lp-page { padding: var(--lp-3); }
+  .lp-page { padding: var(--lp-4) var(--lp-3); }
 }
 
 .lp-page-head {
@@ -216,7 +216,10 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   --el-fill-color-lighter: var(--lp-surface-sunken);
   --el-fill-color-blank: var(--lp-surface);
 
-  --el-mask-color: rgba(16, 24, 40, 0.45);
+  /* --el-mask-color is the v-loading veil (not a dialog backdrop): a light
+     wash of the surface, never a grey sheet over the page. */
+  --el-mask-color: color-mix(in srgb, var(--lp-surface) 72%, transparent);
+  --el-overlay-color-lighter: var(--lp-scrim);
   --el-box-shadow: var(--lp-shadow);
   --el-box-shadow-light: var(--lp-shadow-sm);
   --el-box-shadow-lighter: var(--lp-shadow-sm);
@@ -225,7 +228,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 }
 
 [data-theme='dark'] {
-  --el-mask-color: rgba(0, 0, 0, 0.65);
+  --el-mask-color: color-mix(in srgb, var(--lp-surface) 72%, transparent);
 }
 
 /* --- Component nudges that variables alone cannot express --- */
@@ -254,12 +257,18 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 }
 .el-table th.el-table__cell {
   font-weight: 600;
-  font-size: var(--lp-text-xs);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: var(--lp-text-sm);
 }
-.el-table .el-table__cell { padding: 7px 0; }
+.el-table .el-table__cell { padding: 9px 0; }
+.el-table .el-table__row:last-child > .el-table__cell { border-bottom: 0; }
 .el-table__empty-text { color: var(--lp-text-faint); }
+/* A table that is still waiting for its first rows must not say "no data":
+   the empty text shows only once the table has been empty for a moment. A
+   list that is really empty keeps its text through later refreshes. */
+.el-table__empty-text {
+  opacity: 0;
+  animation: lp-reveal 160ms ease-out 300ms forwards;
+}
 
 .el-input__wrapper,
 .el-select__wrapper,
@@ -349,4 +358,12 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 }
 .el-descriptions__label { color: var(--lp-text-dim); font-weight: 500; }
 .el-descriptions__cell { border-color: var(--lp-line-soft) !important; }
-.el-loading-mask { background: color-mix(in srgb, var(--lp-surface) 70%, transparent); }
+/* Loading veils appear only when loading takes long enough to notice: a
+   quick load (most of them) shows no veil at all, so nothing flashes. */
+.el-loading-mask {
+  background-color: var(--el-mask-color);
+  opacity: 0;
+  animation: lp-reveal 180ms ease-out 400ms forwards;
+}
+.el-loading-mask.el-loading-fade-leave-active { animation: none; }
+@keyframes lp-reveal { to { opacity: 1; } }

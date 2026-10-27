@@ -17,6 +17,7 @@
 
     <!-- Sparkline: a plain SVG polyline is far cheaper than a chart instance per tile. -->
     <svg v-if="spark && spark.length > 1" class="stat-tile__spark" viewBox="0 0 100 28" preserveAspectRatio="none">
+      <polygon :points="`0,28 ${sparkPoints} 100,28`" :fill="levelColor" opacity="0.08" />
       <polyline :points="sparkPoints" fill="none" :stroke="levelColor" stroke-width="1.5"
         stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
     </svg>
@@ -80,7 +81,8 @@ const sparkPoints = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: var(--lp-4);
+  /* The bottom band belongs to the sparkline: text never runs into it. */
+  padding: var(--lp-4) var(--lp-4) 34px;
   background: var(--lp-surface);
   border: 1px solid var(--lp-line);
   border-radius: var(--lp-r-lg);
@@ -106,10 +108,8 @@ const sparkPoints = computed(() => {
 }
 
 .stat-tile__label {
-  font-size: var(--lp-text-xs);
+  font-size: var(--lp-text-sm);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--lp-text-dim);
 }
 
@@ -151,7 +151,7 @@ const sparkPoints = computed(() => {
   inset: auto 0 0 0;
   width: 100%;
   height: 28px;
-  opacity: 0.18;
+  opacity: 0.55;
   pointer-events: none;
 }
 </style>

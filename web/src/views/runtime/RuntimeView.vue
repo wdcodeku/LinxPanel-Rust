@@ -220,6 +220,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
@@ -595,7 +596,7 @@ watch(tab, (value) => {
 function startAppPolling() {
   stopAppPolling()
   pollTimer = window.setInterval(() => {
-    if (!document.hidden && !formVisible.value) void refreshApps()
+    if (pageActive.value && !document.hidden && !formVisible.value) void refreshApps()
   }, 5000)
 }
 
@@ -607,6 +608,7 @@ function stopAppPolling() {
 }
 
 onMounted(loadAll)
+const { active: pageActive } = usePage(loadAll)
 onUnmounted(() => {
   stopAppPolling()
   stopLogPolling()

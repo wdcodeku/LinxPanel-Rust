@@ -104,6 +104,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import {
@@ -152,12 +153,13 @@ const filtered = computed(() => {
 
 async function load() {
   loading.value = true
-  loadError.value = ''
   try {
     const [backendRes, listRes]: any[] = await Promise.all([getServiceBackend(), getServices()])
     if (backendRes.success) backend.value = backendRes.data
+    // What is on screen stays until the answer is in: no blank in between.
     if (listRes.success) {
       rows.value = listRes.data || []
+      loadError.value = ''
     } else {
       rows.value = []
       loadError.value = listRes.message || ''
@@ -238,6 +240,7 @@ function stateClass(state: string) {
 }
 
 onMounted(load)
+usePage(load)
 </script>
 
 <style scoped lang="scss">

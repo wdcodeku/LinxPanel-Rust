@@ -187,6 +187,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Key, User, Warning } from '@element-plus/icons-vue'
@@ -508,6 +509,7 @@ async function restartPanel() {
 }
 
 onMounted(load)
+usePage(load)
 </script>
 
 <style scoped lang="scss">

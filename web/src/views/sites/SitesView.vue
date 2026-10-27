@@ -340,6 +340,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { usePage } from '@/utils/page'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
 import CertPanel from './CertPanel.vue'
@@ -1050,15 +1051,21 @@ async function handleStop(id: number) {
   else ElMessage.error(res.message)
 }
 
+function tabFromRoute() {
+  const tab = String(route.query.tab || '').trim()
+  if (tab === 'sites' || tab === 'certs' || tab === 'openresty') activeCategory.value = tab
+}
 onMounted(async () => {
-  const initialTab = String(route.query.tab || '').trim()
-  if (initialTab === 'sites' || initialTab === 'certs' || initialTab === 'openresty') {
-    activeCategory.value = initialTab
-  }
+  tabFromRoute()
   await Promise.all([loadOpenrestySettings(), loadOpenRestyStatus(), loadAppOptions()])
   if (canManageSites.value) {
     await loadSites()
   }
+})
+usePage(async () => {
+  tabFromRoute()
+  await loadOpenRestyStatus()
+  if (canManageSites.value) await loadSites()
 })
 </script>
 <style scoped lang="scss">

@@ -285,6 +285,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { usePage } from '@/utils/page'
 import { useRoute } from 'vue-router'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -1654,6 +1655,7 @@ onMounted(async () => {
   await loadFileRoots()
   await loadFiles()
 })
+usePage(() => loadFiles())
 onUnmounted(() => {
   document.removeEventListener('click', closeAllCtx)
   resetUploadDragState()
@@ -1677,23 +1679,30 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
-.file-manager { height: calc(100vh - 88px); display: flex; flex-direction: column; user-select: none; }
+.file-manager {
+  height: calc(100vh - var(--lp-header-h));
+  height: calc(100dvh - var(--lp-header-h));
+  padding: var(--lp-4) var(--lp-5);
+  display: flex; flex-direction: column; user-select: none;
+}
+@media (max-width: 768px) { .file-manager { padding: var(--lp-2); } }
 .fm-toolbar {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; background: var(--lp-card-bg);
   border-radius: var(--lp-radius-lg); margin-bottom: 8px;
   box-shadow: var(--lp-shadow-sm); flex-shrink: 0;
   border: 1px solid var(--lp-border-light);
+  /* Toolbar buttons are quiet icons until hovered; disabled ones fade out. */
   :deep(.el-button) {
-    background: var(--lp-card-bg) !important;
-    border-color: var(--lp-border) !important;
-    color: var(--lp-text-secondary) !important;
-    &:hover, &:focus { color: var(--lp-primary) !important; border-color: var(--lp-primary) !important; background: var(--lp-primary-bg) !important; }
-    &.is-disabled {
-      opacity: 0.85 !important;
-      color: var(--lp-text-secondary) !important;
-      background: var(--lp-table-header-bg) !important;
-      border-color: var(--lp-border) !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    color: var(--lp-text-soft) !important;
+    &:hover, &:focus-visible { color: var(--lp-accent) !important; background: var(--lp-accent-soft) !important; }
+    &.is-disabled,
+    &.is-disabled:hover {
+      opacity: 0.35 !important;
+      color: var(--lp-text-soft) !important;
+      background: transparent !important;
     }
   }
   :deep(.el-divider) { border-color: var(--lp-border-light); }
@@ -1707,11 +1716,7 @@ onUnmounted(() => {
   border-radius: 9px !important;
   box-shadow: 0 1px 0 rgba(0,0,0,0.02);
 }
-.fm-nav-btn.is-disabled {
-  color: var(--lp-text-secondary) !important;
-  background: var(--lp-table-header-bg) !important;
-  border-color: var(--lp-border) !important;
-}
+
 .fm-path-bar {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px;
   padding: 4px 10px; background: var(--lp-input-bg);

@@ -200,6 +200,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Aim, CircleClose, Document, Plus } from '@element-plus/icons-vue'
 import {
@@ -421,10 +422,11 @@ onMounted(() => {
   load()
   timer = setInterval(() => {
     now.value = Date.now()
-    if (!saving.value && !banVisible.value) load()
+    if (pageActive.value && !saving.value && !banVisible.value) load()
   }, 15000)
 })
 onBeforeUnmount(() => clearInterval(timer))
+const { active: pageActive } = usePage(load)
 
 defineExpose({ load })
 </script>

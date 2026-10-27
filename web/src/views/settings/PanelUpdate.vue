@@ -119,6 +119,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Loading, Refresh, Right, Setting, Upload } from '@element-plus/icons-vue'
 import { checkUpdate, getUpdateStatus, runPanelUpdate, saveUpdateSettings } from '@/api'
@@ -286,6 +287,9 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => clearTimeout(timer))
+usePage(() => {
+  if (!updating.value) void load()
+})
 </script>
 
 <style scoped lang="scss">

@@ -505,6 +505,12 @@ export default {
   },
 
   nav: {
+    search: '搜索页面与功能',
+    searchPlaceholder: '输入页面或功能名称，例如 数据库、证书、更新',
+    noMatch: '没有匹配的页面',
+    searchMove: '选择',
+    searchOpen: '打开',
+    siteDetail: '站点详情',
     groupMonitor: '监控',
     groupServer: '服务器',
     groupSystem: '系统',

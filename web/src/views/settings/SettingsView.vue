@@ -132,7 +132,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { Bell, Connection, InfoFilled, Refresh, Setting } from '@element-plus/icons-vue'
@@ -151,6 +151,10 @@ const { staticInfo: info } = storeToRefs(realtime)
 const route = useRoute()
 // ?tab=update opens a tab directly (the header's update badge links there).
 const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'general')
+// The page stays alive between visits: follow ?tab= links on later visits too.
+watch(() => route.query.tab, (value) => {
+  if (typeof value === 'string' && value) tab.value = value
+})
 const loading = ref(false)
 const saving = ref(false)
 const openresty = ref<any>(null)

@@ -505,6 +505,12 @@ export default {
   },
 
   nav: {
+    search: 'Search pages and features',
+    searchPlaceholder: 'Type a page or feature, e.g. databases, certificates, update',
+    noMatch: 'No matching page',
+    searchMove: 'Move',
+    searchOpen: 'Open',
+    siteDetail: 'Site details',
     groupMonitor: 'Monitor',
     groupServer: 'Server',
     groupSystem: 'System',

@@ -119,6 +119,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, Refresh, WarningFilled } from '@element-plus/icons-vue'
@@ -260,6 +261,7 @@ async function submit() {
 }
 
 onMounted(load)
+usePage(load)
 </script>
 
 <style scoped lang="scss">

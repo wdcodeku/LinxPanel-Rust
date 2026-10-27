@@ -147,6 +147,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
@@ -384,14 +385,21 @@ function describe(schedule: string): string {
 }
 
 const route = useRoute()
-onMounted(async () => {
-  await load()
+async function openFromRoute() {
   if (route.query.template === 'site' && route.query.site) {
     openCreate()
     jobType.value = 'site'
     template.siteId = Number(route.query.site)
     await applyTemplate()
   }
+}
+onMounted(async () => {
+  await load()
+  await openFromRoute()
+})
+usePage(async () => {
+  await load()
+  await openFromRoute()
 })
 </script>
 
