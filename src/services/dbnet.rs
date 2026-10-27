@@ -152,6 +152,17 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
                 });
             }
         }
+        // MongoDB's own repository; 8.0 is the current long-term series.
+        (Engine::Mongodb, _) => {
+            for (id, default) in [("8.0", true), ("7.0", false)] {
+                options.push(VersionOption {
+                    id: id.into(),
+                    label: format!("MongoDB {}", id),
+                    version: format!("{}.x", id),
+                    default,
+                });
+            }
+        }
         _ => {}
     }
     options
@@ -279,7 +290,7 @@ pub fn network_info(engine: Engine) -> NetworkInfo {
     let listeners = listeners(port);
     let public = listeners.iter().any(|l| !is_loopback_listen(&l.address));
     let foreign_listener = listeners.iter().map(|l| l.process.clone()).find(|p| {
-        !p.is_empty() && !["mariadbd", "mysqld", "postgres", "redis-server"].contains(&p.as_str())
+        !p.is_empty() && !["mariadbd", "mysqld", "postgres", "redis-server", "mongod"].contains(&p.as_str())
     });
     let fw = firewall::status();
     let allowed_from = if fw.enabled {
@@ -328,6 +339,7 @@ fn engine_port(engine: Engine) -> u16 {
         Engine::Mysql => 3306,
         Engine::Postgresql => 5432,
         Engine::Redis => 6379,
+        Engine::Mongodb => super::mongo::port(),
     }
 }
 

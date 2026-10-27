@@ -170,8 +170,16 @@
             <el-input v-model="form.entry" :placeholder="entryPlaceholder" class="lp-mono" />
             <span v-if="entryHint" class="entry-hint">{{ entryHint }}</span>
           </el-form-item>
-          <el-form-item :label="t('rt.port')" class="form-row__item form-row__item--narrow">
-            <el-input-number v-model="form.port" :min="0" :max="65535" controls-position="right" style="width: 100%" />
+          <el-form-item :label="t('rt.portOptional')" class="form-row__item form-row__item--narrow">
+            <el-input-number
+              v-model="form.port"
+              :min="1"
+              :max="65535"
+              :placeholder="t('rt.portNone')"
+              controls-position="right"
+              style="width: 100%"
+            />
+            <span class="entry-hint">{{ t('rt.portHint') }}</span>
           </el-form-item>
         </div>
 
@@ -429,7 +437,8 @@ const form = reactive({
   entry: '',
   args: '',
   env: '',
-  port: 3000,
+  // Optional: most programs (Go / binaries especially) choose their own.
+  port: undefined as number | undefined,
   autostart: true,
 })
 
@@ -477,8 +486,6 @@ const rules = computed<FormRules>(() => ({
   entry: [{ required: true, message: t('rt.entryRequired'), trigger: 'blur' }],
 }))
 
-const DEFAULT_PORTS: Record<string, number> = { node: 3000, python: 8000, java: 8080, go: 8080, binary: 8080, php: 0 }
-
 function openCreate() {
   editing.value = null
   const runtime = LANG_RUNTIMES[active.value][0]
@@ -489,7 +496,7 @@ function openCreate() {
     entry: '',
     args: '',
     env: '',
-    port: DEFAULT_PORTS[runtime] ?? 3000,
+    port: undefined,
     autostart: true,
   })
   formVisible.value = true
@@ -504,7 +511,7 @@ function openEdit(row: AppRow) {
     entry: row.entry,
     args: row.args,
     env: row.env,
-    port: row.port,
+    port: row.port > 0 ? row.port : undefined,
     autostart: row.autostart,
   })
   formVisible.value = true
@@ -518,7 +525,7 @@ async function submit() {
   }
   saving.value = true
   try {
-    const payload = { ...form }
+    const payload = { ...form, port: form.port || 0 }
     const res: any = editing.value
       ? await updateApp(editing.value.id, payload)
       : await createApp(payload)

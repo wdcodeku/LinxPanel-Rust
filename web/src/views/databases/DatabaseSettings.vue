@@ -32,7 +32,7 @@
           <el-switch
             :model-value="s.remote.enabled"
             :loading="busy === 'remote'"
-            :disabled="engine === 'redis' && !s.superuser_password && !s.remote.enabled"
+            :disabled="!s.remote.enabled && ((engine === 'redis' && !s.superuser_password) || (engine === 'mongodb' && s.remote.needs_password))"
             @change="(v: string | number | boolean) => toggleRemote(v === true)"
           />
         </div>
@@ -40,6 +40,14 @@
           v-if="engine === 'redis' && !s.superuser_password"
           :title="t('dbs.redisNeedsPassword')"
           type="info"
+          :closable="false"
+          show-icon
+          class="block"
+        />
+        <el-alert
+          v-if="engine === 'mongodb' && s.remote.needs_password"
+          :title="t('dbs.mongoNeedsAuth')"
+          type="warning"
           :closable="false"
           show-icon
           class="block"
@@ -203,7 +211,7 @@ import {
 import { useI18n } from '@/i18n'
 import { formatBytes } from '@/utils/format'
 
-type Kind = 'mysql' | 'postgresql' | 'redis'
+type Kind = 'mysql' | 'postgresql' | 'redis' | 'mongodb' | 'sqlite'
 interface Param { key: string; value: string; kind: string; options?: string[] }
 interface LogInfo {
   kind: string; enabled: boolean; switchable: boolean; path: string | null; size: number | null; threshold?: string | null
@@ -242,7 +250,7 @@ const busy = ref('')
 const drawerSize = computed(() => (window.innerWidth < 860 ? '100%' : '800px'))
 
 const superuserLabel = computed(() =>
-  props.engine === 'mysql' ? 'root@localhost' : props.engine === 'postgresql' ? 'postgres' : 'requirepass',
+  ({ mysql: 'root@localhost', postgresql: 'postgres', mongodb: 'root (authSource=admin)' } as Record<string, string>)[props.engine] || 'requirepass',
 )
 
 function randomPassword(length = 20) {

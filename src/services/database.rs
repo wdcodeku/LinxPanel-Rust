@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{runtime, shell, sysservice};
+use super::{mongo, runtime, shell, sysservice};
 use crate::db;
 
 const SQL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -29,6 +29,7 @@ pub enum Engine {
     Mysql,
     Postgresql,
     Redis,
+    Mongodb,
 }
 
 impl Engine {
@@ -37,6 +38,7 @@ impl Engine {
             "mysql" | "mariadb" => Ok(Self::Mysql),
             "postgresql" | "postgres" | "pgsql" => Ok(Self::Postgresql),
             "redis" => Ok(Self::Redis),
+            "mongodb" | "mongo" => Ok(Self::Mongodb),
             other => Err(format!("Unknown database engine: {}", other)),
         }
     }
@@ -46,6 +48,7 @@ impl Engine {
             Self::Mysql => "mysql",
             Self::Postgresql => "postgresql",
             Self::Redis => "redis",
+            Self::Mongodb => "mongodb",
         }
     }
 
@@ -54,6 +57,7 @@ impl Engine {
             Self::Mysql => "MySQL / MariaDB",
             Self::Postgresql => "PostgreSQL",
             Self::Redis => "Redis",
+            Self::Mongodb => "MongoDB",
         }
     }
 
@@ -62,6 +66,7 @@ impl Engine {
             Self::Mysql => &["mariadb", "mysql", "mysqld"],
             Self::Postgresql => &["postgresql"],
             Self::Redis => &["redis-server", "redis"],
+            Self::Mongodb => &["mongod"],
         }
     }
 
@@ -70,6 +75,7 @@ impl Engine {
             Self::Mysql => 3306,
             Self::Postgresql => 5432,
             Self::Redis => 6379,
+            Self::Mongodb => 27017,
         }
     }
 
@@ -88,7 +94,12 @@ impl Engine {
     }
 }
 
-pub const ENGINES: [Engine; 3] = [Engine::Mysql, Engine::Postgresql, Engine::Redis];
+pub const ENGINES: [Engine; 4] = [
+    Engine::Mysql,
+    Engine::Postgresql,
+    Engine::Redis,
+    Engine::Mongodb,
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EngineStatus {
@@ -109,6 +120,7 @@ fn client_binary(engine: Engine) -> Option<&'static str> {
         Engine::Mysql => &["mariadb", "mysql"],
         Engine::Postgresql => &["psql"],
         Engine::Redis => &["redis-server"],
+        Engine::Mongodb => &["mongosh"],
     };
     candidates
         .iter()
@@ -150,11 +162,18 @@ pub fn status(engine: Engine, admin: Option<&MysqlAdmin>) -> EngineStatus {
                 || Path::new("/usr/sbin/mysqld").exists()
         }
         Engine::Redis => true,
+        Engine::Mongodb => super::mongo::server_present(),
     };
     let installed = client.is_some() && server_present;
     let service = service_name(engine);
     let running = installed && sysservice::is_active(&service);
-    let version = client.map(first_line_version).unwrap_or_default();
+    let version = match engine {
+        // mongosh --version prints the shell's version, not the server's.
+        Engine::Mongodb if installed => shell::run("mongod", &["--version"])
+            .map(|o| o.stdout.lines().next().unwrap_or_default().trim().to_string())
+            .unwrap_or_default(),
+        _ => client.map(first_line_version).unwrap_or_default(),
+    };
 
     let (manageable, message) = match (engine, installed, running) {
         (_, false, _) => (false, "Not installed".to_string()),
@@ -170,6 +189,17 @@ pub fn status(engine: Engine, admin: Option<&MysqlAdmin>) -> EngineStatus {
                     .to_string(),
             ),
         },
+        (Engine::Mongodb, true, true) => match admin {
+            Some(admin) => match super::mongo::ping(Some(admin)) {
+                Ok(()) => (true, String::new()),
+                Err(err) => (false, format!("Stored admin login failed: {}", err)),
+            },
+            None => (
+                false,
+                "The panel has no administrator login for this MongoDB; enter an administrator login"
+                    .to_string(),
+            ),
+        },
         (_, true, true) => (true, String::new()),
     };
 
@@ -180,7 +210,11 @@ pub fn status(engine: Engine, admin: Option<&MysqlAdmin>) -> EngineStatus {
         version,
         service,
         running,
-        port: engine.default_port(),
+        port: if engine == Engine::Mongodb {
+            super::mongo::port()
+        } else {
+            engine.default_port()
+        },
         manageable,
         message,
     }
@@ -254,6 +288,36 @@ pub async fn load_mysql_admin(pool: &SqlitePool) -> Option<MysqlAdmin> {
         .flatten()
         .unwrap_or_default();
     (!user.is_empty()).then_some(MysqlAdmin { user, password })
+}
+
+/// The panel's administrator login for an engine (MySQL and MongoDB have one).
+pub async fn load_admin(pool: &SqlitePool, engine: Engine) -> Option<MysqlAdmin> {
+    match engine {
+        Engine::Mysql => load_mysql_admin(pool).await,
+        Engine::Mongodb => {
+            let user = db::get_setting(pool, super::mongo::SETTING_ADMIN_USER)
+                .await
+                .ok()
+                .flatten()?;
+            let password = db::get_setting(pool, super::mongo::SETTING_ADMIN_PASSWORD)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            (!user.is_empty()).then_some(MysqlAdmin { user, password })
+        }
+        _ => None,
+    }
+}
+
+pub async fn save_admin(pool: &SqlitePool, engine: Engine, admin: &MysqlAdmin) -> anyhow::Result<()> {
+    match engine {
+        Engine::Mongodb => {
+            db::set_setting(pool, super::mongo::SETTING_ADMIN_USER, &admin.user).await?;
+            db::set_setting(pool, super::mongo::SETTING_ADMIN_PASSWORD, &admin.password).await
+        }
+        _ => save_mysql_admin(pool, admin).await,
+    }
 }
 
 pub async fn save_mysql_admin(pool: &SqlitePool, admin: &MysqlAdmin) -> anyhow::Result<()> {
@@ -440,6 +504,9 @@ fn pg_databases() -> Result<Vec<String>, String> {
 pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAdmin>) {
     let mut log = format!("[LinxPanel] Installing {}\n", engine.display_name());
     super::tasks::note(&log);
+    if engine == Engine::Mongodb {
+        return install_mongodb(version, log);
+    }
     let manager = runtime::package_manager();
     // MariaDB and MySQL (or two PostgreSQL clusters on one port) do not mix.
     if version.is_some_and(|v| !v.is_empty() && v != "default") && status(engine, None).installed {
@@ -507,6 +574,46 @@ pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAd
     let ready = format!("\n[LinxPanel] {} is ready\n", engine.display_name());
     super::tasks::note(&ready);
     log.push_str(&ready);
+    (log, admin)
+}
+
+/// MongoDB comes from MongoDB's own repository (distributions do not ship
+/// it); once it runs, the panel creates its administrator and turns
+/// authorization on.
+fn install_mongodb(version: Option<&str>, mut log: String) -> (String, Option<MysqlAdmin>) {
+    let version = match version {
+        Some(v) if !v.is_empty() && v != "default" => v,
+        _ => "8.0",
+    };
+    match mongo::install(version) {
+        Ok(text) => log.push_str(&text),
+        Err(err) => {
+            log.push_str(&err);
+            log.push_str("\n[LinxPanel] MongoDB installation failed\n");
+            return (log, None);
+        }
+    }
+    let mut admin = None;
+    for attempt in 0..15 {
+        match mongo::bootstrap_admin() {
+            Ok(created) => {
+                let line = "[LinxPanel] Created the panel's MongoDB administrator and enabled authorization\n";
+                super::tasks::note(line);
+                log.push_str(line);
+                admin = Some(created);
+                break;
+            }
+            Err(err) if attempt == 14 => {
+                let line = format!("[LinxPanel] {}\n", err);
+                super::tasks::note(&line);
+                log.push_str(&line);
+            }
+            Err(_) => std::thread::sleep(Duration::from_secs(2)),
+        }
+    }
+    let ready = "\n[LinxPanel] MongoDB is ready\n";
+    super::tasks::note(ready);
+    log.push_str(ready);
     (log, admin)
 }
 
@@ -718,6 +825,18 @@ pub async fn tables(
             Ok(parse_pg_tables(&rows))
         }
         Engine::Redis => Err("Redis has no tables".into()),
+        Engine::Mongodb => Ok(super::mongo::collections(admin.as_ref(), &name)?
+            .into_iter()
+            .map(|c| TableInfo {
+                name: c.name,
+                rows: Some(c.count),
+                size: c.size,
+                engine: None,
+                collation: None,
+                comment: None,
+                updated: None,
+            })
+            .collect()),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -745,6 +864,17 @@ pub async fn list(
         }
         Engine::Postgresql => Ok((pg_databases()?, pg_facts())),
         Engine::Redis => Ok((Vec::new(), DatabaseFacts::default())),
+        Engine::Mongodb => {
+            let mut facts = DatabaseFacts::default();
+            let mut names = Vec::new();
+            for info in super::mongo::databases(admin.as_ref())? {
+                facts.tables.insert(info.name.clone(), info.collections);
+                facts.size.insert(info.name.clone(), info.size);
+                facts.users.insert(info.name.clone(), info.users);
+                names.push(info.name);
+            }
+            Ok((names, facts))
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -759,6 +889,16 @@ pub async fn list(
     .await
     .map_err(|e| e.to_string())?;
 
+    let mut names = names;
+    // MongoDB creates a database with its first collection: until then the
+    // panel's record is all there is, and it is still listed.
+    if engine == Engine::Mongodb {
+        for record in &records {
+            if !names.contains(&record.name) {
+                names.push(record.name.clone());
+            }
+        }
+    }
     let mut rows: Vec<DatabaseRow> = names
         .into_iter()
         .map(|name| {
@@ -773,11 +913,13 @@ pub async fn list(
                 created_at: record.map(|r| r.created_at.clone()),
                 // An empty MySQL database has no row in information_schema.TABLES.
                 tables: match engine {
-                    Engine::Mysql => Some(facts.tables.get(&name).copied().unwrap_or(0)),
+                    Engine::Mysql | Engine::Mongodb => {
+                        Some(facts.tables.get(&name).copied().unwrap_or(0))
+                    }
                     _ => None,
                 },
                 size: facts.size.get(&name).copied().or(match engine {
-                    Engine::Mysql => Some(0),
+                    Engine::Mysql | Engine::Mongodb => Some(0),
                     _ => None,
                 }),
                 users: facts.users.get(&name).cloned().unwrap_or_default(),
@@ -891,6 +1033,7 @@ pub async fn create(
             .map(|_| ())
         }
         Engine::Redis => unreachable!(),
+        Engine::Mongodb => super::mongo::create(admin.as_ref(), &n, &u, &p),
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1060,6 +1203,13 @@ pub async fn adopt(
             .map(|_| ())
         }
         Engine::Redis => Err("Redis has no databases".into()),
+        Engine::Mongodb => {
+            let existing = super::mongo::databases(admin.as_ref())?;
+            if !existing.iter().any(|d| d.name == n) {
+                return Err(format!("Database {} does not exist", n));
+            }
+            super::mongo::adopt(admin.as_ref(), &n, &u, &p, reset)
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1138,6 +1288,11 @@ pub async fn delete(
             Ok(())
         }
         Engine::Redis => Err("Redis has no databases to delete".into()),
+        Engine::Mongodb => super::mongo::drop(
+            admin.as_ref(),
+            &n,
+            user.as_ref().map(|(user, _)| user.as_str()),
+        ),
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1204,10 +1359,11 @@ pub async fn change_password(
         .unwrap_or_else(generate_db_password);
     validate_db_password(&password)?;
 
-    let (u, h, p) = (
+    let (u, h, p, n) = (
         record.username.clone(),
         record.host.clone(),
         password.clone(),
+        name.to_string(),
     );
     tokio::task::spawn_blocking(move || match engine {
         Engine::Mysql => {
@@ -1222,6 +1378,7 @@ pub async fn change_password(
             psql(&format!("ALTER ROLE {u} WITH PASSWORD '{p}';\n"), None).map(|_| ())
         }
         Engine::Redis => Err("Use the Redis password setting".into()),
+        Engine::Mongodb => super::mongo::change_password(admin.as_ref(), &n, &u, &p),
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1435,7 +1592,12 @@ pub fn backup(
     let dir = backup_dir(data_dir, engine, name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let target = dir.join(format!("{}_{}.sql.gz", name, stamp));
+    let ext = if engine == Engine::Mongodb {
+        "archive.gz"
+    } else {
+        "sql.gz"
+    };
+    let target = dir.join(format!("{}_{}.{}", name, stamp, ext));
 
     match engine {
         Engine::Mysql => {
@@ -1466,6 +1628,11 @@ pub fn backup(
             dump_to_gzip(command, &target)?;
         }
         Engine::Redis => return Err("Redis backups are not supported".into()),
+        Engine::Mongodb => {
+            let admin = admin.ok_or("MongoDB is not set up for the panel")?;
+            let auth = super::mongo::ToolAuth::new(admin)?;
+            dump_to_gzip(super::mongo::dump_command(&auth, admin, name), &target)?;
+        }
     }
 
     if let Some(keep) = keep.filter(|k| *k > 0) {
@@ -1503,6 +1670,11 @@ pub fn restore(
             restore_from_gzip(command, &source)
         }
         Engine::Redis => Err("Redis backups are not supported".into()),
+        Engine::Mongodb => {
+            let admin = admin.ok_or("MongoDB is not set up for the panel")?;
+            let auth = super::mongo::ToolAuth::new(admin)?;
+            restore_from_gzip(super::mongo::restore_command(&auth, admin, name), &source)
+        }
     }
 }
 

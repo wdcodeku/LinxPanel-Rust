@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::database::{self, Engine, MysqlAdmin};
-use crate::services::{dbconf, dbnet, tasks};
+use crate::services::{dbconf, dbnet, sqlitedb, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -47,7 +47,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/databases/engines/mysql/binlog/purge", post(purge_binlogs))
         .route("/databases/engines/{engine}/restart", post(restart))
-        .route("/databases/engines/mysql/admin", post(set_mysql_admin))
+        .route("/databases/engines/{engine}/admin", post(set_admin))
         .route(
             "/databases/engines/redis/password",
             post(set_redis_password),
@@ -67,10 +67,23 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/databases/{engine}/{name}/backups/delete",
             post(delete_backup),
         )
+        .route("/sqlite", get(sqlite_list))
+        .route("/sqlite/discover", get(sqlite_discover))
+        .route("/sqlite/register", post(sqlite_register))
+        .route("/sqlite/create", post(sqlite_create))
+        .route("/sqlite/remove", post(sqlite_remove))
+        .route("/sqlite/tables", get(sqlite_tables))
+        .route(
+            "/sqlite/backups",
+            get(sqlite_backups).post(sqlite_backup),
+        )
+        .route("/sqlite/restore", post(sqlite_restore))
+        .route("/sqlite/backups/delete", post(sqlite_delete_backup))
 }
 
-async fn admin(state: &AppState) -> Option<MysqlAdmin> {
-    database::load_mysql_admin(&state.db).await
+/// The panel's administrator login for the engine (MySQL / MongoDB).
+async fn admin(state: &AppState, engine: Engine) -> Option<MysqlAdmin> {
+    database::load_admin(&state.db, engine).await
 }
 
 fn parse_engine(raw: &str) -> Result<Engine, Json<ApiResponse<()>>> {
@@ -87,12 +100,19 @@ struct EngineInfo {
 }
 
 async fn engines(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<EngineInfo>>> {
-    let admin = admin(&state).await;
+    let mysql_admin = admin(&state, Engine::Mysql).await;
+    let mongo_admin = admin(&state, Engine::Mongodb).await;
     let result = tokio::task::spawn_blocking(move || {
         database::ENGINES
             .iter()
             .map(|engine| EngineInfo {
-                status: database::status(*engine, admin.as_ref()),
+                status: database::status(
+                    *engine,
+                    match engine {
+                        Engine::Mongodb => mongo_admin.as_ref(),
+                        _ => mysql_admin.as_ref(),
+                    },
+                ),
                 redis_password: (*engine == Engine::Redis)
                     .then(database::redis_password)
                     .flatten(),
@@ -243,11 +263,15 @@ async fn install_task(
         Err(err) => return ApiResponse::err(&err.to_string()),
     };
     if let Some(admin) = created_admin {
-        if let Err(err) = database::save_mysql_admin(&state.db, &admin).await {
-            return ApiResponse::err(&format!("Cannot save MySQL login: {}", err));
+        if let Err(err) = database::save_admin(&state.db, engine, &admin).await {
+            return ApiResponse::err(&format!(
+                "Cannot save the {} login: {}",
+                engine.display_name(),
+                err
+            ));
         }
     }
-    let admin = database::load_mysql_admin(&state.db).await;
+    let admin = admin(&state, engine).await;
     let success = tasks::blocking(move || database::status(engine, admin.as_ref()).running)
         .await
         .unwrap_or(false);
@@ -275,26 +299,36 @@ struct MysqlAdminRequest {
     password: String,
 }
 
-/// Connects the panel to a MySQL it did not install (or repairs the stored login).
-async fn set_mysql_admin(
+/// Connects the panel to a MySQL / MongoDB it did not install (or repairs
+/// the stored login).
+async fn set_admin(
     State(state): State<Arc<AppState>>,
+    Path(engine): Path<String>,
     Json(req): Json<MysqlAdminRequest>,
 ) -> Json<ApiResponse<()>> {
+    let engine = match parse_engine(&engine) {
+        Ok(engine @ (Engine::Mysql | Engine::Mongodb)) => engine,
+        Ok(_) => return Json(ApiResponse::err("This engine has no administrator login")),
+        Err(err) => return err,
+    };
     let result = tokio::task::spawn_blocking(move || {
-        if req.user.trim().is_empty() {
-            database::bootstrap_mysql_admin()
-        } else {
-            let admin = MysqlAdmin {
-                user: req.user.trim().to_string(),
-                password: req.password,
-            };
-            database::verify_mysql_admin(&admin).map(|_| admin)
+        let given = MysqlAdmin {
+            user: req.user.trim().to_string(),
+            password: req.password,
+        };
+        match (engine, given.user.is_empty()) {
+            (Engine::Mongodb, true) => crate::services::mongo::bootstrap_admin(),
+            (Engine::Mongodb, false) => {
+                crate::services::mongo::ping(Some(&given)).map(|_| given)
+            }
+            (_, true) => database::bootstrap_mysql_admin(),
+            (_, false) => database::verify_mysql_admin(&given).map(|_| given),
         }
     })
     .await;
     match result {
-        Ok(Ok(admin)) => match database::save_mysql_admin(&state.db, &admin).await {
-            Ok(()) => Json(ApiResponse::ok_msg("MySQL connected")),
+        Ok(Ok(admin)) => match database::save_admin(&state.db, engine, &admin).await {
+            Ok(()) => Json(ApiResponse::ok_msg("Connected")),
             Err(err) => Json(ApiResponse::err(&err.to_string())),
         },
         Ok(Err(err)) => Json(ApiResponse::err(&err)),
@@ -330,7 +364,7 @@ async fn list(
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    match database::list(&state.db, engine, admin(&state).await).await {
+    match database::list(&state.db, engine, admin(&state, engine).await).await {
         Ok(rows) => Json(ApiResponse::ok(rows)),
         Err(err) => Json(ApiResponse::err(&err)),
     }
@@ -340,7 +374,9 @@ async fn create(
     State(state): State<Arc<AppState>>,
     Json(req): Json<database::CreateDatabaseRequest>,
 ) -> Json<ApiResponse<database::CreatedDatabase>> {
-    match database::create(&state.db, req, admin(&state).await).await {
+    let engine = Engine::parse(&req.engine).unwrap_or(Engine::Mysql);
+    let admin = admin(&state, engine).await;
+    match database::create(&state.db, req, admin).await {
         Ok(created) => Json(ApiResponse::ok(created)),
         Err(err) => Json(ApiResponse::err(&err)),
     }
@@ -354,7 +390,7 @@ async fn delete(
         Ok(engine) => engine,
         Err(err) => return err,
     };
-    match database::delete(&state.db, engine, &name, admin(&state).await).await {
+    match database::delete(&state.db, engine, &name, admin(&state, engine).await).await {
         Ok(()) => Json(ApiResponse::ok_msg("Database deleted")),
         Err(err) => Json(ApiResponse::err(&err)),
     }
@@ -376,7 +412,7 @@ async fn change_password(
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    match database::change_password(&state.db, engine, &name, req.password, admin(&state).await)
+    match database::change_password(&state.db, engine, &name, req.password, admin(&state, engine).await)
         .await
     {
         Ok(password) => Json(ApiResponse::ok(serde_json::json!({ "password": password }))),
@@ -416,7 +452,7 @@ async fn create_backup(
         Err(err) => return Json(ApiResponse::err(&err)),
     };
     let keep = body.and_then(|Json(b)| b.keep);
-    let admin = admin(&state).await;
+    let admin = admin(&state, engine).await;
     let data_dir = state.data_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
         database::backup(&data_dir, engine, &name, admin.as_ref(), keep)
@@ -445,7 +481,7 @@ async fn restore(
         Ok(engine) => engine,
         Err(err) => return err,
     };
-    let admin = admin(&state).await;
+    let admin = admin(&state, engine).await;
     let data_dir = state.data_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
         database::restore(&data_dir, engine, &name, &req.file, admin.as_ref())
@@ -488,7 +524,7 @@ async fn tables(
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    match database::tables(engine, &name, admin(&state).await).await {
+    match database::tables(engine, &name, admin(&state, engine).await).await {
         Ok(list) => Json(ApiResponse::ok(list)),
         Err(err) => Json(ApiResponse::err(&err)),
     }
@@ -504,7 +540,7 @@ async fn adopt(
         Ok(engine) => engine,
         Err(err) => return Json(ApiResponse::err(&err)),
     };
-    let admin = admin(&state).await;
+    let admin = admin(&state, engine).await;
     match database::adopt(&state.db, engine, &name, req, admin).await {
         Ok(created) => Json(ApiResponse::ok(created)),
         Err(err) => Json(ApiResponse::err(&err)),
@@ -735,6 +771,121 @@ async fn clear_log(
     };
     match dbconf::clear_log(&state.db, engine, &kind).await {
         Ok(()) => Json(ApiResponse::ok_msg("Log cleared")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+// ===== SQLite (files, managed by path) =====
+
+#[derive(Deserialize)]
+struct SqlitePathQuery {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct SqliteRequest {
+    path: String,
+    /// remove: also delete the file.
+    #[serde(default)]
+    delete_file: bool,
+    /// backup: keep only this many newest backups.
+    #[serde(default)]
+    keep: Option<usize>,
+    /// restore / delete backup: the backup's file name.
+    #[serde(default)]
+    file: String,
+}
+
+fn result<T: Serialize>(value: Result<T, String>) -> Json<ApiResponse<T>> {
+    match value {
+        Ok(value) => Json(ApiResponse::ok(value)),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn sqlite_list(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<Vec<sqlitedb::SqliteFile>>> {
+    Json(ApiResponse::ok(sqlitedb::list(&state.db).await))
+}
+
+async fn sqlite_discover(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<Vec<sqlitedb::Found>>> {
+    let known = sqlitedb::registered(&state.db).await;
+    let data_dir = state.data_dir.clone();
+    result(
+        tokio::task::spawn_blocking(move || sqlitedb::discover(&data_dir, &known))
+            .await
+            .map_err(|e| e.to_string()),
+    )
+}
+
+async fn sqlite_register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<sqlitedb::SqliteFile>> {
+    result(sqlitedb::register(&state.db, &state.data_dir, &req.path).await)
+}
+
+async fn sqlite_create(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<sqlitedb::SqliteFile>> {
+    result(sqlitedb::create(&state.db, &state.data_dir, &req.path).await)
+}
+
+async fn sqlite_remove(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<()>> {
+    match sqlitedb::remove(&state.db, &state.data_dir, &req.path, req.delete_file).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Removed")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn sqlite_tables(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SqlitePathQuery>,
+) -> Json<ApiResponse<Vec<database::TableInfo>>> {
+    result(sqlitedb::tables(&state.db, &state.data_dir, &query.path).await)
+}
+
+async fn sqlite_backups(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SqlitePathQuery>,
+) -> Json<ApiResponse<Vec<database::BackupFile>>> {
+    result(sqlitedb::list_backups(&state.db, &state.data_dir, &query.path).await)
+}
+
+async fn sqlite_backup(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    result(
+        sqlitedb::backup(&state.db, &state.data_dir, &req.path, req.keep)
+            .await
+            .map(|path| serde_json::json!({ "path": path.to_string_lossy() })),
+    )
+}
+
+async fn sqlite_restore(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<()>> {
+    match sqlitedb::restore(&state.db, &state.data_dir, &req.path, &req.file).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Database restored")),
+        Err(err) => Json(ApiResponse::err(&err)),
+    }
+}
+
+async fn sqlite_delete_backup(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteRequest>,
+) -> Json<ApiResponse<()>> {
+    match sqlitedb::delete_backup(&state.db, &state.data_dir, &req.path, &req.file).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Backup deleted")),
         Err(err) => Json(ApiResponse::err(&err)),
     }
 }

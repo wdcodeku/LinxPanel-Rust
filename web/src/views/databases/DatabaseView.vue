@@ -14,7 +14,7 @@
     <div class="engines" role="tablist">
       <template v-if="loaded">
         <button
-          v-for="item in engines"
+          v-for="item in engineCards"
           :key="item.engine"
           type="button"
           role="tab"
@@ -28,19 +28,22 @@
             <span class="engine__name">{{ item.display_name }}</span>
             <span class="engine__sub">
               <span class="dot" :class="item.running ? 'dot--ok' : item.installed ? 'dot--warn' : ''"></span>
-              {{ item.running ? shortVersion(item) : item.installed ? t('dbm.stopped') : t('dbm.notInstalled') }}
+              <template v-if="item.engine === 'sqlite'">{{ t('sql.cardSub') }}</template>
+              <template v-else>{{ item.running ? shortVersion(item) : item.installed ? t('dbm.stopped') : t('dbm.notInstalled') }}</template>
             </span>
           </span>
         </button>
       </template>
       <el-skeleton v-else animated class="engines__skeleton">
         <template #template>
-          <el-skeleton-item v-for="i in 3" :key="i" variant="rect" class="engine-skel" />
+          <el-skeleton-item v-for="i in 5" :key="i" variant="rect" class="engine-skel" />
         </template>
       </el-skeleton>
     </div>
 
-    <template v-if="loaded && current">
+    <SqlitePanel v-if="sqliteSeen" v-show="engine === 'sqlite'" />
+
+    <template v-if="loaded && current && engine !== 'sqlite'">
       <!-- Not installed: choose a version and install -->
       <section v-if="!current.installed" class="lp-card hero">
         <div class="hero__head">
@@ -67,6 +70,7 @@
             <span class="version__tags">
               <span v-if="v.default" class="lp-pill lp-pill--ok">{{ t('dbm.recommended') }}</span>
               <span v-if="v.id === 'mysql'" class="lp-pill lp-pill--accent">{{ t('dbm.mysqlCompat') }}</span>
+              <span v-if="current.engine === 'mongodb' && v.default" class="lp-pill lp-pill--accent">{{ t('dbm.lts') }}</span>
             </span>
             <span class="version__full lp-mono">{{ v.version }}</span>
           </button>
@@ -78,6 +82,7 @@
           </el-button>
           <span class="lp-dim hero__note">{{ t('dbm.installHint') }}</span>
         </div>
+        <p v-if="current.engine === 'mongodb'" class="lp-dim hero__note hero__extra">{{ t('dbm.mongoInstallNote') }}</p>
       </section>
 
       <template v-else>
@@ -101,8 +106,8 @@
           </div>
           <div class="status__actions">
             <el-button
-              v-if="current.engine === 'mysql' && current.running && !current.manageable"
-              size="small" type="warning" plain @click="adminDialog = true"
+              v-if="hasAdmin(current.engine) && current.running && !current.manageable"
+              size="small" type="warning" plain @click="openAdmin"
             >{{ t('dbm.connect') }}</el-button>
             <el-button v-if="!current.running" size="small" type="primary" plain :loading="busy === `start-${current.engine}`" @click="startEngine(current.engine)">
               {{ t('dbm.start') }}
@@ -169,7 +174,7 @@
             <el-table-column :label="t('dbm.tablesSize')" min-width="120">
               <template #default="{ row }">
                 <button type="button" class="db-stats" @click="openTables(row)">
-                  <template v-if="row.tables !== null && row.tables !== undefined">{{ t('dbm.tableCount', { n: row.tables }) }} · </template>{{ row.size !== null && row.size !== undefined ? formatBytes(row.size) : '—' }}
+                  <template v-if="row.tables !== null && row.tables !== undefined">{{ countLabel(row.tables) }} · </template>{{ row.size !== null && row.size !== undefined ? formatBytes(row.size) : '—' }}
                 </button>
               </template>
             </el-table-column>
@@ -278,7 +283,7 @@
       <template #header>
         <div class="drawer-head">
           <span class="drawer-head__title lp-mono">{{ tablesTarget?.name }}</span>
-          <span class="lp-dim">{{ t('dbm.tableCount', { n: tableList.length }) }} · {{ formatBytes(tablesTotal) }}</span>
+          <span class="lp-dim">{{ countLabel(tableList.length) }} · {{ formatBytes(tablesTotal) }}</span>
         </div>
       </template>
       <div class="tables-tools">
@@ -287,14 +292,14 @@
       </div>
       <el-skeleton v-if="tablesLoading && !tableList.length" animated :rows="6" />
       <el-table v-else :data="filteredTables" size="small" :empty-text="tableKeyword ? t('dbm.noMatch') : t('dbm.noTables')">
-        <el-table-column :label="t('dbm.table')" min-width="170">
+        <el-table-column :label="engine === 'mongodb' ? t('dbm.collection') : t('dbm.table')" min-width="170">
           <template #default="{ row }">
             <span class="lp-mono strong">{{ row.name }}</span>
             <div v-if="row.comment" class="lp-dim note">{{ row.comment }}</div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('dbm.rows')" width="100" align="right">
-          <template #default="{ row }"><span class="lp-num">{{ row.rows === null ? '—' : '≈ ' + row.rows.toLocaleString() }}</span></template>
+        <el-table-column :label="engine === 'mongodb' ? t('dbm.documents') : t('dbm.rows')" width="100" align="right">
+          <template #default="{ row }"><span class="lp-num">{{ row.rows === null ? '—' : (engine === 'mongodb' ? '' : '≈ ') + row.rows.toLocaleString() }}</span></template>
         </el-table-column>
         <el-table-column :label="t('dbm.size')" width="100" align="right">
           <template #default="{ row }"><span class="lp-num">{{ formatBytes(row.size) }}</span></template>
@@ -360,7 +365,7 @@
 
     <!-- Connect an existing MySQL -->
     <el-dialog v-model="adminDialog" :title="t('dbm.connect')" width="460px" append-to-body>
-      <p class="dialog-text">{{ t('dbm.connectHint') }}</p>
+      <p class="dialog-text">{{ engine === 'mongodb' ? t('dbm.connectHintMongo') : t('dbm.connectHint') }}</p>
       <el-form label-position="top">
         <el-form-item :label="t('dbm.user')"><el-input v-model="adminForm.user" class="lp-mono" /></el-form-item>
         <el-form-item :label="t('dbm.password')">
@@ -468,14 +473,15 @@ import {
 import {
   backupDatabase, changeDatabaseHost, changeDatabasePassword, createDatabase, deleteDatabase,
   deleteDatabaseBackup, downloadFileApi, getDbEngines, getDbNetwork, getDbVersions, installDbEngine,
-  listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setMysqlAdmin,
+  listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setDbAdmin,
   startDbEngine, stopDbEngine, uninstallDbEngine,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatBytes } from '@/utils/format'
 import DatabaseSettings from './DatabaseSettings.vue'
+import SqlitePanel from './SqlitePanel.vue'
 
-type EngineKind = 'mysql' | 'postgresql' | 'redis'
+type EngineKind = 'mysql' | 'postgresql' | 'redis' | 'mongodb' | 'sqlite'
 interface EngineInfo {
   engine: EngineKind
   display_name: string
@@ -530,6 +536,15 @@ const keyword = ref('')
 const shown = reactive<Record<string, boolean>>({})
 
 const current = computed(() => engines.value.find((e) => e.engine === engine.value))
+// SQLite has no server: its databases are files, managed on their own panel.
+const engineCards = computed<EngineInfo[]>(() => [
+  ...engines.value,
+  { engine: 'sqlite', display_name: 'SQLite', installed: true, version: '', running: true, port: 0, manageable: true, message: '' },
+])
+const sqliteSeen = ref(false)
+watch(engine, (kind) => { if (kind === 'sqlite') sqliteSeen.value = true }, { immediate: true })
+const hasAdmin = (kind: EngineKind) => kind === 'mysql' || kind === 'mongodb'
+const countLabel = (n: number) => (engine.value === 'mongodb' ? t('dbm.collectionCount', { n }) : t('dbm.tableCount', { n }))
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   if (!q) return rows.value
@@ -539,7 +554,7 @@ const filteredRows = computed(() => {
 const serverHost = window.location.hostname
 
 function logo(kind: string) {
-  return { mysql: 'My', postgresql: 'Pg', redis: 'Rd' }[kind] || '?'
+  return { mysql: 'My', postgresql: 'Pg', redis: 'Rd', mongodb: 'Mg', sqlite: 'Sq' }[kind] || '?'
 }
 
 /** "mariadb Ver 15.1 Distrib 10.11.14-MariaDB ..." -> "MariaDB 10.11.14". */
@@ -590,7 +605,7 @@ async function loadEngines() {
 }
 
 async function loadRows() {
-  if (!current.value?.manageable || engine.value === 'redis') {
+  if (!current.value?.manageable || engine.value === 'redis' || engine.value === 'sqlite') {
     rows.value = []
     return
   }
@@ -605,7 +620,7 @@ async function loadRows() {
 
 const network = ref<NetworkInfo | null>(null)
 async function loadNetwork() {
-  if (!current.value?.running) {
+  if (!current.value?.running || engine.value === 'sqlite') {
     network.value = null
     return
   }
@@ -620,7 +635,7 @@ const chosenLabel = computed(() => versions.value.find((v) => v.id === chosenVer
 async function loadVersions() {
   versions.value = []
   chosenVersion.value = ''
-  if (!current.value || current.value.installed) return
+  if (!current.value || current.value.installed || engine.value === 'sqlite') return
   versionsLoading.value = true
   try {
     const res: any = await getDbVersions(engine.value)
@@ -904,7 +919,7 @@ function openConnection(row: DbRow) {
 const connItems = computed(() => {
   const row = connTarget.value
   if (!row) return []
-  const remote = engine.value === 'mysql' && network.value?.public && row.host && row.host !== 'localhost'
+  const remote = network.value?.public && (engine.value !== 'mysql' || (row.host && row.host !== 'localhost'))
   return [
     { label: t('dbm.connHost'), value: remote ? serverHost : `127.0.0.1 (${t('dbm.viaSsh')})`, copy: !!remote },
     { label: t('dbm.port'), value: String(current.value?.port ?? ''), copy: false },
@@ -919,6 +934,15 @@ const connStrings = computed(() => {
   const user = row.username || 'user'
   const pass = row.password || 'password'
   const port = current.value?.port
+  if (engine.value === 'mongodb') {
+    const uri = `mongodb://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@127.0.0.1:${port}/${row.name}?authSource=${row.name}`
+    return [
+      { label: 'URI', value: uri },
+      { label: 'mongosh', value: `mongosh "${uri}"` },
+      { label: 'Node', value: `new MongoClient("${uri}")` },
+      { label: 'Python', value: `MongoClient("${uri}")` },
+    ]
+  }
   if (engine.value === 'postgresql') {
     return [
       { label: 'URL', value: `postgresql://${user}:${pass}@127.0.0.1:${port}/${row.name}` },
@@ -967,10 +991,14 @@ async function resetPassword(row: DbRow) {
 // --- MySQL admin / Redis password ---
 const adminDialog = ref(false)
 const adminForm = reactive({ user: 'root', password: '' })
+function openAdmin() {
+  Object.assign(adminForm, { user: engine.value === 'mongodb' ? '' : 'root', password: '' })
+  adminDialog.value = true
+}
 async function submitAdmin() {
   busy.value = 'admin'
   try {
-    const res: any = await setMysqlAdmin({ ...adminForm })
+    const res: any = await setDbAdmin(engine.value, { user: adminForm.user.trim(), password: adminForm.password })
     if (res.success) {
       adminDialog.value = false
       ElMessage.success(t('dbm.connected'))
@@ -1046,7 +1074,7 @@ usePage(loadAll)
 /* ---------- Engine switcher ---------- */
 .engines {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
   gap: var(--lp-3);
   margin-bottom: var(--lp-4);
 }
@@ -1081,6 +1109,8 @@ usePage(loadAll)
   background: #00758f;
   &[data-engine='postgresql'] { background: #336791; }
   &[data-engine='redis'] { background: #d82c20; }
+  &[data-engine='mongodb'] { background: #3f9142; }
+  &[data-engine='sqlite'] { background: #0f80cc; }
   &--lg { width: 52px; height: 52px; font-size: 17px; border-radius: var(--lp-r-lg); }
 }
 .engine__text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -1098,6 +1128,7 @@ usePage(loadAll)
 .hero__label { font-size: var(--lp-text-xs); color: var(--lp-text-soft); margin-bottom: var(--lp-2); }
 .hero__actions { display: flex; align-items: center; gap: var(--lp-3); flex-wrap: wrap; margin-top: var(--lp-5); }
 .hero__note { font-size: var(--lp-text-xs); margin: 0; }
+.hero__extra { margin-top: var(--lp-3); line-height: 1.6; }
 .versions { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--lp-3); }
 .version-skel { height: 76px; border-radius: var(--lp-r-lg); }
 .version {
@@ -1241,7 +1272,7 @@ usePage(loadAll)
 }
 
 @media (max-width: 720px) {
-  .engines { grid-template-columns: 1fr; }
+  .engines { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .search { width: 140px; }
 }
 </style>

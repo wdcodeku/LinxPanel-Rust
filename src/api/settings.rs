@@ -26,6 +26,10 @@ const PRIVATE_KEYS: &[&str] = &[
     crate::services::database::SETTING_MYSQL_ADMIN_PASSWORD,
     crate::services::dbconf::SETTING_MYSQL_ROOT_PASSWORD,
     crate::services::dbconf::SETTING_POSTGRES_PASSWORD,
+    crate::services::mongo::SETTING_ADMIN_USER,
+    crate::services::mongo::SETTING_ADMIN_PASSWORD,
+    crate::services::mongo::SETTING_ROOT_PASSWORD,
+    crate::services::sqlitedb::SETTING_FILES,
 ];
 
 /// Readable here, but only writable through their dedicated, validating endpoints.

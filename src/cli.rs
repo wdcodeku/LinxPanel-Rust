@@ -648,7 +648,7 @@ async fn backup(args: &[String]) -> Result<()> {
         ["db", engine, name] => {
             use crate::services::database;
             let engine = database::Engine::parse(engine).map_err(|e| anyhow!(e))?;
-            let admin = database::load_mysql_admin(&pool).await;
+            let admin = database::load_admin(&pool, engine).await;
             database::backup(&data_dir, engine, name, admin.as_ref(), keep)
                 .map_err(|e| anyhow!(e))?
         }

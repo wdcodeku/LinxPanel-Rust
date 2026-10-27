@@ -185,6 +185,8 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
   - 安装 MySQL 时自动创建面板专用管理账号；已有 MySQL 可输入 root 密码接管
   - 备份为 `.sql.gz`（mysqldump / pg_dump），支持下载、一键恢复、删除
   - Redis 可设置访问密码
+  - MongoDB（8.0 / 7.0，官方源，国内自动用阿里云镜像）：安装后自动创建面板管理员并开启身份验证；数据库、用户、集合、`mongodump` 备份恢复；远程访问要求已开启验证。x86 CPU 需支持 AVX
+  - SQLite：扫描网站与程序目录自动发现数据库文件，或手动添加 / 新建；查看表与行数，`VACUUM INTO` 一致性备份与恢复（运行中也可备份）；面板自身数据库不可被管理
   - 所有库名、用户名、密码均经白名单校验，SQL 与密码通过 stdin 传给客户端，不会出现在进程列表中
 - **应用商店**：一键部署 WordPress、Typecho、Adminer
   - 自动检查 OpenResty / PHP / MySQL，自动建库、下载解压、写入配置（WordPress 自动生成 `wp-config.php` 与安全密钥）、设置目录属主并创建站点
@@ -285,7 +287,7 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### 生产环境就绪度
 
-已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
 
 与宝塔 / 1Panel 相比仍缺少（后续计划）：
 
@@ -480,6 +482,8 @@ The panel detects and installs language runtimes, and supervises application pro
   - Installing MySQL creates a panel-owned admin login; an existing MySQL can be connected with its root password
   - Backups as `.sql.gz` (mysqldump / pg_dump) with download, one-click restore and delete
   - Redis password setting
+  - MongoDB (8.0 / 7.0 from MongoDB's repository, Aliyun mirror as fallback): the panel creates its administrator and turns authorization on; databases, users, collections, `mongodump` backup and restore; remote access requires authorization. x86 CPUs need AVX
+  - SQLite: finds database files in site and application directories, or add / create one; tables and row counts, consistent `VACUUM INTO` backups (safe while the app runs) and restore; the panel's own database is off limits
   - Names, users and passwords are allowlisted; SQL and passwords reach the clients on stdin, never in the process list
 - **App Store**: one-click WordPress, Typecho and Adminer
   - Checks OpenResty / PHP / MySQL, creates the database, downloads and unpacks, writes the config (`wp-config.php` with fresh keys for WordPress), sets ownership and creates the site
@@ -580,7 +584,7 @@ Runtime keys (panel settings / `settings` table / env):
 
 ### Production Readiness
 
-In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
 
 Still missing compared with BaoTa / 1Panel (planned):
 

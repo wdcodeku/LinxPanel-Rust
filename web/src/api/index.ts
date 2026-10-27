@@ -228,8 +228,25 @@ export const clearDbLog = (engine: string, kind: string) =>
 export const purgeBinlogs = () => request.post('/databases/engines/mysql/binlog/purge', {}, { timeout: 120000 })
 export const changeDatabaseHost = (name: string, host: string) =>
   request.post(`/databases/mysql/${encodeURIComponent(name)}/host`, { host })
-export const setMysqlAdmin = (data: { user: string; password: string }) =>
-  request.post('/databases/engines/mysql/admin', data)
+/** MySQL / MongoDB: the administrator login the panel uses (empty user: create one). */
+export const setDbAdmin = (engine: string, data: { user: string; password: string }) =>
+  request.post(`/databases/engines/${engine}/admin`, data, LONG)
+
+// --- SQLite (files, by path) ---
+export const listSqlite = () => request.get('/sqlite', { timeout: 60000 })
+export const discoverSqlite = () => request.get('/sqlite/discover', { timeout: 120000 })
+export const registerSqlite = (path: string) => request.post('/sqlite/register', { path })
+export const createSqlite = (path: string) => request.post('/sqlite/create', { path })
+export const removeSqlite = (path: string, deleteFile: boolean) =>
+  request.post('/sqlite/remove', { path, delete_file: deleteFile })
+export const getSqliteTables = (path: string) =>
+  request.get('/sqlite/tables', { params: { path }, timeout: 60000 })
+export const listSqliteBackups = (path: string) => request.get('/sqlite/backups', { params: { path } })
+export const backupSqlite = (path: string) => request.post('/sqlite/backups', { path }, LONG)
+export const restoreSqlite = (path: string, file: string) =>
+  request.post('/sqlite/restore', { path, file }, LONG)
+export const deleteSqliteBackup = (path: string, file: string) =>
+  request.post('/sqlite/backups/delete', { path, file })
 export const setRedisPassword = (password: string) =>
   request.post('/databases/engines/redis/password', { password })
 export const listDatabases = (engine: string) => request.get('/databases', { params: { engine } })

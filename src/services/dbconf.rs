@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::database::{self, mysql_query, psql, Engine, MysqlAdmin};
-use super::{firewall, runtime, shell, sysservice};
+use super::{firewall, mongo, runtime, shell, sysservice};
 
 /// Stored superuser passwords (never sent through the generic settings API).
 pub const SETTING_MYSQL_ROOT_PASSWORD: &str = "mysql_root_password";
@@ -1045,6 +1045,137 @@ fn redis_set_remote(enabled: bool) -> Result<String, String> {
     })
 }
 
+// ===== MongoDB =====
+
+/// (parameter key on the page, path in mongod.conf, kind)
+const MONGO_PARAMS: &[(&str, &[&str], &str)] = &[
+    (
+        "maxIncomingConnections",
+        &["net", "maxIncomingConnections"],
+        "int",
+    ),
+    (
+        "cacheSizeGB",
+        &["storage", "wiredTiger", "engineConfig", "cacheSizeGB"],
+        "size",
+    ),
+    (
+        "slowOpThresholdMs",
+        &["operationProfiling", "slowOpThresholdMs"],
+        "int",
+    ),
+];
+
+fn mongo_remote_enabled(text: &str) -> bool {
+    mongo::yaml_get(text, &["net", "bindIpAll"]).as_deref() == Some("true")
+        || mongo::yaml_get(text, &["net", "bindIp"]).is_some_and(|bind| {
+            bind.split(',')
+                .map(str::trim)
+                .any(|a| a == "0.0.0.0" || a == "::" || a == "*")
+        })
+}
+
+fn mongo_settings(admin: Option<&MysqlAdmin>, mut base: EngineSettings) -> EngineSettings {
+    base.flavor = "mongodb".into();
+    let text = std::fs::read_to_string(mongo::conf_path()).unwrap_or_default();
+    base.port = mongo::port();
+    let data_dir = mongo::data_dir();
+    base.data_size = dir_size(&data_dir);
+    base.data_dir = Some(data_dir);
+    let facts = mongo::server_facts(admin);
+    base.params = MONGO_PARAMS
+        .iter()
+        .map(|(key, path, kind)| {
+            let configured = mongo::yaml_get(&text, path);
+            let value = match *key {
+                // GB in the file; bytes on the page (0: MongoDB's own default).
+                "cacheSizeGB" => configured
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .map(|gb| ((gb * (1u64 << 30) as f64) as u64).to_string())
+                    .unwrap_or_else(|| facts.cache_bytes.to_string()),
+                "maxIncomingConnections" => configured.unwrap_or_else(|| "65536".into()),
+                _ => configured.unwrap_or_else(|| "100".into()),
+            };
+            Param {
+                key: (*key).into(),
+                value,
+                kind: *kind,
+                options: Vec::new(),
+            }
+        })
+        .collect();
+    let log = mongo::log_path();
+    base.logs = vec![LogInfo {
+        kind: "server",
+        enabled: log.is_some(),
+        switchable: false,
+        size: log.as_deref().and_then(file_size),
+        path: log.map(|p| p.display().to_string()),
+        threshold: None,
+    }];
+    base.remote.needs_password = !mongo::auth_enabled();
+    base.remote.enabled = mongo_remote_enabled(&text);
+    base
+}
+
+fn update_mongo_conf(
+    change: impl FnOnce(String) -> Result<String, String>,
+) -> Result<String, String> {
+    let conf = mongo::conf_path();
+    let previous =
+        std::fs::read_to_string(&conf).map_err(|e| format!("{}: {}", conf.display(), e))?;
+    let next = change(previous.clone())?;
+    if next == previous {
+        return Ok(String::new());
+    }
+    write_config(&conf, &next)?;
+    restart_or_rollback(Engine::Mongodb, move || restore(&conf, Some(&previous)))
+}
+
+fn mongo_apply(params: &BTreeMap<String, String>) -> Result<String, String> {
+    let mut checked: Vec<(&'static [&'static str], Option<String>)> = Vec::new();
+    for (key, value) in params {
+        let &(_, path, kind) = MONGO_PARAMS
+            .iter()
+            .find(|(k, _, _)| *k == key.as_str())
+            .ok_or_else(|| format!("Unknown parameter: {}", key))?;
+        let value = check_value(kind, &[], value)?;
+        let value = match key.as_str() {
+            "cacheSizeGB" => {
+                let bytes = parse_size(&value).unwrap_or(0);
+                // 0 leaves the choice to MongoDB (half of RAM minus 1 GB).
+                (bytes > 0).then(|| {
+                    let gb = (bytes as f64 / (1u64 << 30) as f64).max(0.25);
+                    format!("{:.2}", gb)
+                })
+            }
+            "maxIncomingConnections" if value == "0" => None,
+            _ => Some(value),
+        };
+        checked.push((path, value));
+    }
+    update_mongo_conf(|mut text| {
+        for (path, value) in checked {
+            text = mongo::yaml_set(&text, path, value.as_deref());
+        }
+        Ok(text)
+    })
+}
+
+fn mongo_set_remote(enabled: bool) -> Result<String, String> {
+    if enabled && !mongo::auth_enabled() {
+        return Err(
+            "Turn on MongoDB authorization (connect the panel's administrator) before opening it to other machines"
+                .into(),
+        );
+    }
+    update_mongo_conf(|text| {
+        let text = mongo::yaml_set(&text, &["net", "bindIpAll"], None);
+        let bind = if enabled { "0.0.0.0" } else { "127.0.0.1" };
+        Ok(mongo::yaml_set(&text, &["net", "bindIp"], Some(bind)))
+    })
+}
+
 // ===== Public API =====
 
 #[derive(Debug, Default, Deserialize)]
@@ -1062,10 +1193,11 @@ pub struct SettingsChange {
 }
 
 pub async fn settings(pool: &SqlitePool, engine: Engine) -> EngineSettings {
-    let admin = database::load_mysql_admin(pool).await;
+    let admin = database::load_admin(pool, engine).await;
     let stored = match engine {
         Engine::Mysql => crate::db::get_setting(pool, SETTING_MYSQL_ROOT_PASSWORD).await,
         Engine::Postgresql => crate::db::get_setting(pool, SETTING_POSTGRES_PASSWORD).await,
+        Engine::Mongodb => crate::db::get_setting(pool, mongo::SETTING_ROOT_PASSWORD).await,
         Engine::Redis => Ok(None),
     }
     .ok()
@@ -1090,6 +1222,7 @@ pub async fn settings(pool: &SqlitePool, engine: Engine) -> EngineSettings {
                 Engine::Mysql => "root",
                 Engine::Postgresql => "postgres",
                 Engine::Redis => "requirepass",
+                Engine::Mongodb => "root",
             },
             superuser_password: stored,
             params: Vec::new(),
@@ -1102,6 +1235,7 @@ pub async fn settings(pool: &SqlitePool, engine: Engine) -> EngineSettings {
             Engine::Mysql => mysql_settings(admin.as_ref(), base),
             Engine::Postgresql => pg_settings(base),
             Engine::Redis => redis_settings(base),
+            Engine::Mongodb => mongo_settings(admin.as_ref(), base),
         }
     })
     .await
@@ -1134,11 +1268,12 @@ pub async fn apply(
     engine: Engine,
     change: SettingsChange,
 ) -> Result<String, String> {
-    let admin = database::load_mysql_admin(pool).await;
+    let admin = database::load_admin(pool, engine).await;
     tokio::task::spawn_blocking(move || match engine {
         Engine::Mysql => mysql_apply(admin.as_ref(), &change.params, &change.logs),
         Engine::Postgresql => pg_apply(&change.params, &change.logs),
         Engine::Redis => redis_apply(&change.params),
+        Engine::Mongodb => mongo_apply(&change.params),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1154,12 +1289,14 @@ pub fn set_remote(
         Engine::Mysql => mysql_set_remote(enabled)?,
         Engine::Postgresql => pg_set_remote(enabled, allow_from)?,
         Engine::Redis => redis_set_remote(enabled)?,
+        Engine::Mongodb => mongo_set_remote(enabled)?,
     };
     if enabled {
         let port = match engine {
             Engine::Mysql => 3306,
             Engine::Postgresql => 5432,
             Engine::Redis => 6379,
+            Engine::Mongodb => mongo::port(),
         };
         open_firewall(port, allow_from, &mut log);
     }
@@ -1181,18 +1318,20 @@ pub async fn set_superuser_password(
     } else {
         database::validate_db_password(&password)?;
     }
-    let admin = database::load_mysql_admin(pool).await;
+    let admin = database::load_admin(pool, engine).await;
     let value = password.clone();
     tokio::task::spawn_blocking(move || match engine {
         Engine::Mysql => mysql_set_root_password(admin.as_ref(), &value),
         Engine::Postgresql => pg_set_password(&value),
         Engine::Redis => database::set_redis_password(&value),
+        Engine::Mongodb => mongo::set_root_password(admin.as_ref(), &value),
     })
     .await
     .map_err(|e| e.to_string())??;
     let key = match engine {
         Engine::Mysql => SETTING_MYSQL_ROOT_PASSWORD,
         Engine::Postgresql => SETTING_POSTGRES_PASSWORD,
+        Engine::Mongodb => mongo::SETTING_ROOT_PASSWORD,
         Engine::Redis => return Ok(()),
     };
     crate::db::set_setting(pool, key, &password)
@@ -1245,6 +1384,15 @@ pub fn config_files(engine: Engine) -> Vec<ConfigFile> {
         }
         Engine::Redis => {
             if let Some(path) = database::redis_conf() {
+                files.push(ConfigFile {
+                    id: "main",
+                    path: path.display().to_string(),
+                });
+            }
+        }
+        Engine::Mongodb => {
+            let path = mongo::conf_path();
+            if path.exists() {
                 files.push(ConfigFile {
                     id: "main",
                     path: path.display().to_string(),
@@ -1306,6 +1454,7 @@ fn log_path(engine: Engine, kind: &str, admin: Option<&MysqlAdmin>) -> Option<Pa
                 .map(|v| PathBuf::from(v.trim_matches('"')))
                 .filter(|p| p.is_absolute())
         }
+        Engine::Mongodb => (kind == "server").then(mongo::log_path).flatten(),
     }
 }
 
@@ -1316,7 +1465,7 @@ pub async fn tail_log(
     kind: &str,
     lines: usize,
 ) -> Result<String, String> {
-    let admin = database::load_mysql_admin(pool).await;
+    let admin = database::load_admin(pool, engine).await;
     let kind = kind.to_string();
     tokio::task::spawn_blocking(move || {
         let path = log_path(engine, &kind, admin.as_ref()).ok_or("This log is not available")?;
@@ -1339,7 +1488,7 @@ pub async fn tail_log(
 
 /// Empties a log file (frees its disk space at once).
 pub async fn clear_log(pool: &SqlitePool, engine: Engine, kind: &str) -> Result<(), String> {
-    let admin = database::load_mysql_admin(pool).await;
+    let admin = database::load_admin(pool, engine).await;
     let kind = kind.to_string();
     tokio::task::spawn_blocking(move || {
         let path = log_path(engine, &kind, admin.as_ref()).ok_or("This log is not available")?;
@@ -1386,6 +1535,11 @@ fn installed_packages(engine: Engine) -> Vec<String> {
                         .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
             }
             Engine::Redis => name == "redis-server" || name == "redis" || name == "redis-tools",
+            Engine::Mongodb => {
+                name.starts_with("mongodb-org")
+                    || name.starts_with("mongodb-mongosh")
+                    || name == "mongodb-database-tools"
+            }
         }
     };
     let listing = match runtime::package_manager() {
@@ -1421,6 +1575,7 @@ fn data_dirs(engine: Engine) -> &'static [&'static str] {
         Engine::Mysql => &["/var/lib/mysql"],
         Engine::Postgresql => &["/var/lib/postgresql", "/var/lib/pgsql"],
         Engine::Redis => &["/var/lib/redis"],
+        Engine::Mongodb => &["/var/lib/mongodb", "/var/lib/mongo"],
     }
 }
 
@@ -1468,6 +1623,18 @@ pub fn uninstall(engine: Engine, purge_data: bool) -> Result<String, String> {
             let _ = std::fs::remove_file(path);
         }
     }
+    if engine == Engine::Mongodb {
+        // The package source the panel added at install time.
+        for dir in ["/etc/apt/sources.list.d", "/etc/yum.repos.d"] {
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("mongodb-org-") {
+                    let _ = std::fs::remove_file(entry.path());
+                    note(format!("[LinxPanel] Removed {}\n", entry.path().display()));
+                }
+            }
+        }
+    }
     if purge_data {
         for dir in data_dirs(engine) {
             if Path::new(dir).exists() {
@@ -1498,6 +1665,13 @@ pub async fn forget(pool: &SqlitePool, engine: Engine, purge_data: bool) {
         ],
         Engine::Postgresql => &[SETTING_POSTGRES_PASSWORD],
         Engine::Redis => &[],
+        // Kept data keeps its users, so the logins stay valid for a reinstall.
+        Engine::Mongodb if purge_data => &[
+            mongo::SETTING_ADMIN_USER,
+            mongo::SETTING_ADMIN_PASSWORD,
+            mongo::SETTING_ROOT_PASSWORD,
+        ],
+        Engine::Mongodb => &[],
     };
     for key in keys {
         let _ = sqlx::query("DELETE FROM settings WHERE key = ?")
