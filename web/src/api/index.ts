@@ -5,7 +5,8 @@ import { t } from '@/i18n'
 const PRODUCT_NAMES: Record<string, string> = {
   mysql: 'MySQL / MariaDB', postgresql: 'PostgreSQL', redis: 'Redis',
   php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go',
-  wordpress: 'WordPress', typecho: 'Typecho', adminer: 'Adminer',
+  wordpress: 'WordPress', typecho: 'Typecho', adminer: 'Adminer', phpmyadmin: 'phpMyAdmin', dokuwiki: 'DokuWiki',
+  filebrowser: 'File Browser', frps: 'frp Server', 'ddns-go': 'DDNS-GO', gitea: 'Gitea',
 }
 const productName = (key: string) => PRODUCT_NAMES[key] || key
 
@@ -304,6 +305,16 @@ export const getInstalledApps = () => request.get('/appstore/installed')
 export const deployApp = (data: {
   app: string; domains: string[]; doc_root?: string; db_name?: string; source_url?: string; locale?: string
 }) => runTask(t('task.deploy', { name: productName(data.app) }), () => request.post('/appstore/deploy', data), { closeOnSuccess: true })
+/** Service programs (File Browser, frps, ...): installed, upgraded and removed as managed apps. */
+export const getServiceInstalls = () => request.get('/appstore/services')
+export const installService = (data: {
+  app: string; version: string; ports: number[]; public: boolean; domain: string; open_firewall: boolean
+  run_user: string; root_dir: string; source_url: string; access_host: string; locale: string
+}) => runTask(t('task.install', { name: productName(data.app) }), () => request.post('/appstore/services/install', data), { closeOnSuccess: true })
+export const upgradeService = (id: number, name: string, data: { version: string; source_url: string }) =>
+  runTask(t('task.upgrade', { name }), () => request.post(`/appstore/services/${id}/upgrade`, data), { closeOnSuccess: true })
+export const uninstallService = (id: number, deleteData: boolean) =>
+  request.post(`/appstore/services/${id}/uninstall`, { delete_data: deleteData })
 
 // Settings
 export const getSettings = () => request.get('/settings')

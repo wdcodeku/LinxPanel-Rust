@@ -20,6 +20,7 @@ pub mod server;
 pub mod servicectl;
 pub mod shell;
 pub mod sqlite_edit;
+pub mod svcapps;
 pub mod sqlitedb;
 pub mod sysservice;
 pub mod tasks;

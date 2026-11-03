@@ -29,6 +29,9 @@ pub struct AppDef {
     url_en: &'static str,
     #[serde(skip)]
     url_zh: &'static str,
+    /// Site rewrite rules the program needs (e.g. hiding its data directories).
+    #[serde(skip)]
+    pub rewrite_rules: Option<&'static str>,
 }
 
 impl AppDef {
@@ -50,6 +53,7 @@ pub const CATALOG: &[AppDef] = &[
         archive: Archive::TarGz,
         url_en: "https://wordpress.org/latest.tar.gz",
         url_zh: "https://cn.wordpress.org/latest-zh_CN.tar.gz",
+        rewrite_rules: None,
     },
     AppDef {
         key: "typecho",
@@ -59,6 +63,7 @@ pub const CATALOG: &[AppDef] = &[
         archive: Archive::Zip,
         url_en: "https://github.com/typecho/typecho/releases/latest/download/typecho.zip",
         url_zh: "https://github.com/typecho/typecho/releases/latest/download/typecho.zip",
+        rewrite_rules: None,
     },
     AppDef {
         key: "adminer",
@@ -68,6 +73,33 @@ pub const CATALOG: &[AppDef] = &[
         archive: Archive::PhpFile,
         url_en: "https://www.adminer.org/latest.php",
         url_zh: "https://www.adminer.org/latest.php",
+        rewrite_rules: None,
+    },
+    AppDef {
+        key: "phpmyadmin",
+        name: "phpMyAdmin",
+        needs_mysql: false,
+        homepage: "https://www.phpmyadmin.net",
+        archive: Archive::TarGz,
+        url_en: "https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz",
+        url_zh: "https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz",
+        // Only the entry scripts and static assets are public: code, templates,
+        // the compiled-template cache (tmp) and the setup tool are not.
+        rewrite_rules: Some(
+            "rewrite ^/(libraries|templates|vendor|src|setup|sql|tmp)(/|$) /index.php last;",
+        ),
+    },
+    AppDef {
+        key: "dokuwiki",
+        name: "DokuWiki",
+        needs_mysql: false,
+        homepage: "https://www.dokuwiki.org",
+        archive: Archive::TarGz,
+        url_en: "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-stable.tgz",
+        url_zh: "https://download.dokuwiki.org/src/dokuwiki/dokuwiki-stable.tgz",
+        // Pages, users and configuration live in plain files under these
+        // directories; DokuWiki relies on the web server to hide them.
+        rewrite_rules: Some("rewrite ^/(data|conf|bin|inc|vendor)/ /doku.php last;"),
     },
 ];
 
@@ -261,6 +293,34 @@ pub fn configure_wordpress(
     std::fs::write(doc_root.join("wp-config.php"), config).map_err(|e| e.to_string())
 }
 
+/// Writes config.inc.php from the sample with a fresh cookie-encryption key.
+pub fn configure_phpmyadmin(doc_root: &Path) -> Result<(), String> {
+    let sample = std::fs::read_to_string(doc_root.join("config.sample.inc.php"))
+        .map_err(|e| format!("config.sample.inc.php: {}", e))?;
+    // Exactly 32 bytes: the sodium secretbox key length phpMyAdmin expects.
+    let secret = crate::db::generate_password(32);
+    let line = format!("$cfg['blowfish_secret'] = '{}';", secret);
+    let config = match sample.find("$cfg['blowfish_secret']") {
+        Some(start) => {
+            let end = sample[start..]
+                .find(';')
+                .map(|i| start + i + 1)
+                .ok_or("Unexpected config.sample.inc.php")?;
+            format!("{}{}{}", &sample[..start], line, &sample[end..])
+        }
+        None => format!("{}\n{}\n", sample.trim_end(), line),
+    };
+    let config = format!(
+        "{}\n$cfg['TempDir'] = __DIR__ . '/tmp';\n",
+        config.trim_end().trim_end_matches("?>").trim_end()
+    );
+    std::fs::create_dir_all(doc_root.join("tmp")).map_err(|e| e.to_string())?;
+    std::fs::write(doc_root.join("config.inc.php"), config).map_err(|e| e.to_string())?;
+    // The setup tool is not needed (and is an attack surface) once configured.
+    let _ = std::fs::remove_dir_all(doc_root.join("setup"));
+    Ok(())
+}
+
 /// Gives the PHP-FPM user ownership, so uploads, plugins and caches can be written.
 pub fn set_owner(doc_root: &Path, user: &str, log: &mut String) -> Result<(), String> {
     let owner = format!("{}:{}", user, user);
@@ -295,6 +355,25 @@ mod tests {
         assert!(validate_url("file:///etc/passwd").is_err());
         assert!(validate_url("https://x/a b").is_err());
         assert!(validate_url("-o/etc/x").is_err());
+    }
+
+    #[test]
+    fn phpmyadmin_config_gets_a_secret() {
+        let dir = std::env::temp_dir().join(format!("lp-pma-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("setup")).unwrap();
+        std::fs::write(
+            dir.join("config.sample.inc.php"),
+            "<?php\n$cfg['blowfish_secret'] = ''; /* YOU MUST FILL IN THIS FOR COOKIE AUTH! */\n$i = 0;\n",
+        )
+        .unwrap();
+        configure_phpmyadmin(&dir).unwrap();
+        let config = std::fs::read_to_string(dir.join("config.inc.php")).unwrap();
+        let start = config.find("$cfg['blowfish_secret'] = '").unwrap() + 27;
+        assert_eq!(config[start..].find('\'').unwrap(), 32);
+        assert!(config.contains("/* YOU MUST FILL IN"));
+        assert!(config.contains("$cfg['TempDir']"));
+        assert!(dir.join("tmp").is_dir() && !dir.join("setup").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

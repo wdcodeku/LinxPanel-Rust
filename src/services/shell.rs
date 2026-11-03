@@ -65,9 +65,24 @@ pub fn run_with_input(
 /// Runs a prepared `Command` (for a working directory or extra environment),
 /// with the same output capture, stdin feeding and timeout as `run`.
 pub fn run_command(
+    command: Command,
+    input: Option<&str>,
+    timeout: Duration,
+) -> Result<CmdOutput, String> {
+    run_command_inner(command, input, timeout, true)
+}
+
+/// Like `run_command`, but a background task's log does not show the command
+/// line: for programs that take a secret as a plain positional argument.
+pub fn run_command_private(command: Command, timeout: Duration) -> Result<CmdOutput, String> {
+    run_command_inner(command, None, timeout, false)
+}
+
+fn run_command_inner(
     mut command: Command,
     input: Option<&str>,
     timeout: Duration,
+    echo: bool,
 ) -> Result<CmdOutput, String> {
     let program = command.get_program().to_string_lossy().to_string();
     let program = program.as_str();
@@ -101,7 +116,7 @@ pub fn run_command(
     // Inside a background task, show the command and stream its output live.
     // `which` lookups are internal plumbing, not steps worth showing.
     let task = super::tasks::current().filter(|_| program != "which");
-    if let Some(task) = &task {
+    if let Some(task) = task.as_ref().filter(|_| echo) {
         task.append(&format!("$ {}\n", describe(&command)));
     }
 

@@ -164,7 +164,11 @@ pub fn run_user_ids(user: &str) -> Option<(u32, u32, String)> {
     passwd.lines().find_map(|line| {
         let cols: Vec<&str> = line.split(':').collect();
         (cols.len() >= 6 && cols[0] == user).then(|| {
-            Some((cols[2].parse().ok()?, cols[3].parse().ok()?, cols[5].to_string()))
+            Some((
+                cols[2].parse().ok()?,
+                cols[3].parse().ok()?,
+                cols[5].to_string(),
+            ))
         })?
     })
 }
@@ -184,7 +188,7 @@ fn hand_over_work_dir(request: &SaveAppRequest) {
 }
 
 /// Gives `dir` (recursively) to `user` and its primary group.
-fn chown_to(user: &str, dir: &std::path::Path) {
+pub fn chown_to(user: &str, dir: &std::path::Path) {
     if let Some((uid, gid, _)) = run_user_ids(user) {
         let mut stack = vec![dir.to_path_buf()];
         while let Some(path) = stack.pop() {
@@ -412,7 +416,13 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
             } else if first.ends_with(".csproj") || first.ends_with(".fsproj") {
                 (
                     dotnet,
-                    vec!["run".into(), "--project".into(), first, "-c".into(), "Release".into()],
+                    vec![
+                        "run".into(),
+                        "--project".into(),
+                        first,
+                        "-c".into(),
+                        "Release".into(),
+                    ],
                 )
             } else if first == "dotnet" {
                 (dotnet, rest)
@@ -427,7 +437,14 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
             if first.ends_with(".rb") || first.starts_with('-') {
                 (ruby, tokens.clone())
             } else if work_dir.join("bin").join(&first).is_file() {
-                (work_dir.join("bin").join(&first).to_string_lossy().to_string(), rest)
+                (
+                    work_dir
+                        .join("bin")
+                        .join(&first)
+                        .to_string_lossy()
+                        .to_string(),
+                    rest,
+                )
             } else if first == "ruby" {
                 (ruby, rest)
             } else {
@@ -441,7 +458,10 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
         }
         "lua" => {
             let lua = runtime::interpreter_path("lua").unwrap_or_else(|| "lua".into());
-            if matches!(first.as_str(), "lua" | "luajit" | "lua5.1" | "lua5.3" | "lua5.4") {
+            if matches!(
+                first.as_str(),
+                "lua" | "luajit" | "lua5.1" | "lua5.3" | "lua5.4"
+            ) {
                 (
                     shell::which(&first)
                         .map(|p| p.to_string_lossy().to_string())
@@ -497,7 +517,9 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
         }
         // Composer refuses to run as root without this.
         command.env("COMPOSER_ALLOW_SUPERUSER", "1");
-        command.env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1");
+        command
+            .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+            .env("DOTNET_NOLOGO", "1");
         let output = shell::run_command(command, None, std::time::Duration::from_secs(1800))?;
         for text in [&output.stdout, &output.stderr] {
             if !text.trim().is_empty() {
@@ -583,9 +605,15 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
         "dotnet" => {
             let project = find_with_extension(work_dir, &["sln", "csproj", "fsproj"])
                 .ok_or("No .sln / .csproj found")?;
-            let dotnet = runtime::interpreter_path("dotnet").ok_or("The .NET SDK is not installed")?;
+            let dotnet =
+                runtime::interpreter_path("dotnet").ok_or("The .NET SDK is not installed")?;
             step(&dotnet, &["restore", &project])?;
-            step(&dotnet, &["publish", &project, "-c", "Release", "-o", "publish", "--nologo"])
+            step(
+                &dotnet,
+                &[
+                    "publish", &project, "-c", "Release", "-o", "publish", "--nologo",
+                ],
+            )
         }
         // A release build (entry: target/release/<name>).
         "rust" => {
@@ -605,27 +633,36 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
             let bundle = shell::which("bundle")
                 .map(|p| p.to_string_lossy().to_string())
                 .ok_or("bundler is not installed")?;
-            step(&bundle, &["config", "set", "--local", "path", "vendor/bundle"])?;
+            step(
+                &bundle,
+                &["config", "set", "--local", "path", "vendor/bundle"],
+            )?;
             step(&bundle, &["install", "--jobs", "4"])
         }
         // Rocks into ./lua_modules for the Lua version that runs the app.
         "lua" => {
-            let rockspec = find_with_extension(work_dir, &["rockspec"]).ok_or("No .rockspec found")?;
+            let rockspec =
+                find_with_extension(work_dir, &["rockspec"]).ok_or("No .rockspec found")?;
             let luarocks = shell::which("luarocks")
                 .map(|p| p.to_string_lossy().to_string())
                 .ok_or("luarocks is not installed")?;
-            let lua_version = shell::cached_version_output("lua", &["-v"])
-                .and_then(|text| {
-                    let v = text.split_whitespace().nth(1)?.to_string();
-                    let mut parts = v.split('.');
-                    Some(format!("{}.{}", parts.next()?, parts.next()?))
-                });
+            let lua_version = shell::cached_version_output("lua", &["-v"]).and_then(|text| {
+                let v = text.split_whitespace().nth(1)?.to_string();
+                let mut parts = v.split('.');
+                Some(format!("{}.{}", parts.next()?, parts.next()?))
+            });
             let mut args = vec![];
             if let Some(version) = &lua_version {
                 args.push("--lua-version");
                 args.push(version.as_str());
             }
-            args.extend(["--tree", "lua_modules", "install", "--only-deps", rockspec.as_str()]);
+            args.extend([
+                "--tree",
+                "lua_modules",
+                "install",
+                "--only-deps",
+                rockspec.as_str(),
+            ]);
             step(&luarocks, &args)
         }
         _ => Err("This runtime has no dependency step".into()),
@@ -788,7 +825,10 @@ fn apply_run_user(command: &mut tokio::process::Command, user: &str) -> Result<(
     }
     let (uid, gid, home) =
         run_user_ids(&user).ok_or_else(|| format!("No such system user: {}", user))?;
-    command.env("HOME", if home.is_empty() { "/".into() } else { home }).env("USER", &user).env("LOGNAME", &user);
+    command
+        .env("HOME", if home.is_empty() { "/".into() } else { home })
+        .env("USER", &user)
+        .env("LOGNAME", &user);
     #[cfg(unix)]
     // SAFETY: only async-signal-safe system calls between fork and exec.
     unsafe {
@@ -852,7 +892,9 @@ fn spawn_child(
     let unset = |key: &str| !user_env.iter().any(|k| k == key);
     match record.runtime.as_str() {
         "dotnet" => {
-            command.env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1");
+            command
+                .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+                .env("DOTNET_NOLOGO", "1");
             // ASP.NET Core listens on its own setting, not PORT.
             if record.port > 0 && unset("ASPNETCORE_URLS") && unset("ASPNETCORE_HTTP_PORTS") {
                 command.env("ASPNETCORE_URLS", format!("http://0.0.0.0:{}", record.port));

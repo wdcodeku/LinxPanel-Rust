@@ -74,6 +74,12 @@ impl UpdateConfig {
         }
     }
 
+    /// Prefix for github.com downloads ("" for direct): the acceleration proxy,
+    /// when that is the configured source. Also used by the app store.
+    pub fn github_prefix(&self) -> &str {
+        self.proxy_prefix()
+    }
+
     fn proxy_prefix(&self) -> &str {
         if self.source == "proxy" {
             self.proxy.trim()

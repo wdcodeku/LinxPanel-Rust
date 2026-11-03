@@ -17,6 +17,7 @@ pub mod runtime_api;
 pub mod services_api;
 pub mod settings;
 pub mod sites;
+pub mod svcapps_api;
 pub mod system;
 pub mod tasks_api;
 pub mod update_api;
@@ -48,6 +49,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(account_api::routes())
         .merge(database_api::routes())
         .merge(appstore_api::routes())
+        .merge(svcapps_api::routes())
         .merge(backup_api::routes())
         .merge(defense_api::routes())
         .merge(update_api::routes())

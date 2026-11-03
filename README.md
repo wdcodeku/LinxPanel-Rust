@@ -168,9 +168,12 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 面板内置语言运行环境检测与安装，并托管应用进程：
 
-- `GET /api/runtimes`：检测 PHP / Node.js / Python / Java / Go 的版本、路径与配套工具（npm、pip、composer、maven…）
+- `GET /api/runtimes`：检测 PHP / Node.js / Python / Java / Go / C#(.NET) / Rust / Ruby / Lua 的版本、路径与配套工具（npm、pip、composer、maven…）
 - `POST /api/runtimes/install`：通过发行版包管理器安装（apt / dnf / yum / apk，macOS 用 brew），返回完整安装日志
-- 应用托管（`/api/apps`）支持 Node / Python / Java(jar) / Go / 二进制 / PHP-CLI：
+- .NET SDK（apt 官方包，失败时用 dotnet-install 脚本）、Rust（rustup，官方源失败自动换 rsproxy / 中科大镜像，安装到 /opt/rust 并提供全局命令）、Ruby（含 bundler）、Lua 5.4（含 LuaRocks）
+- 应用托管（`/api/apps`）支持 Node / Python / Java(jar) / Go / 二进制 / PHP-CLI / C# / Rust / Ruby / Lua：
+  - C# 自动 `dotnet publish` 并运行发布的 dll；Rust `cargo build --release` 后运行二进制；Ruby `bundle install` 到项目目录；Lua 依赖用 LuaRocks 装入 `lua_modules`
+  - 可指定运行用户（如 www-data），不必以 root 运行；可一并把项目目录交给该用户
   - 工作目录、启动文件、启动参数、环境变量、端口
   - 设置端口后自动注入 `PORT` 环境变量
   - 崩溃自动重启，指数退避（2s → 60s），进程存活 30s 后退避重置
@@ -187,10 +190,14 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
   - Redis 可设置访问密码
   - MongoDB（8.0 / 7.0，官方源，国内自动用阿里云镜像）：安装后自动创建面板管理员并开启身份验证；数据库、用户、集合、`mongodump` 备份恢复；远程访问要求已开启验证。x86 CPU 需支持 AVX
   - SQLite：扫描网站与程序目录自动发现数据库文件，或手动添加 / 新建；查看表与行数，`VACUUM INTO` 一致性备份与恢复（运行中也可备份）；面板自身数据库不可被管理
+  - SQLite 数据编辑器：浏览表和视图，按列排序、WHERE 条件筛选、分页；双击编辑行、新增、批量删除（按 rowid 或主键，视图只读，BLOB 与超长文本不会被误改，超出 JS 精度的整数原样保留）；查看表结构、索引与建表语句；SQL 控制台可一次执行多条语句，逐条显示结果与影响行数，Ctrl+Enter 执行、记住历史
   - 所有库名、用户名、密码均经白名单校验，SQL 与密码通过 stdin 传给客户端，不会出现在进程列表中
-- **应用商店**：一键部署 WordPress、Typecho、Adminer
-  - 自动检查 OpenResty / PHP / MySQL，自动建库、下载解压、写入配置（WordPress 自动生成 `wp-config.php` 与安全密钥）、设置目录属主并创建站点
-  - 任何一步失败都会回滚已创建的数据库、文件和站点
+- **应用商店**：分类与搜索，网站程序与常用服务一键安装
+  - 网站程序：WordPress、Typecho、Adminer、phpMyAdmin、DokuWiki。自动检查 OpenResty / PHP / MySQL，自动建库、下载解压、写入配置（WordPress 生成 `wp-config.php` 与安全密钥；phpMyAdmin 生成 Cookie 加密密钥并删除 setup），设置目录属主并创建站点；phpMyAdmin 内部目录、DokuWiki 的 data / conf 等目录自动禁止外部访问
+  - 服务：File Browser（Web 文件管理）、frp 服务端（内网穿透）、DDNS-GO（动态域名）、Gitea（Git 代码托管）。从 GitHub 下载对应 CPU 架构的官方发布包（使用「设置 › 更新」中的 GitHub 加速代理，也可指定版本或镜像地址），校验下载的确是 Linux 程序（代理返回错误页时不会装上），生成配置与随机账号密码 / 令牌，以独立系统用户运行（frp、ddnsgo、git；File Browser 默认 www-data），由面板守护进程、崩溃重启、开机自启
+  - 可选访问方式：端口直接访问，或仅监听本机并通过域名反向代理（自动创建网站，可再申请 SSL）；防火墙启用时可自动放行端口
+  - 已安装列表：运行状态、访问地址、访问信息（账号密码可显示 / 复制）、启动 / 停止 / 重启、日志；一键升级到最新或指定版本，新版本起不来自动回滚到旧版本；卸载可选择保留或删除数据，重装时旧数据自动另存
+  - 任何一步失败都会回滚已创建的数据库、文件、进程和站点
   - 可填写自定义下载地址（国内镜像）
 - **PHP 网站开箱即用**：安装 PHP 时自动安装常用扩展（mysql、gd、curl、mbstring、zip、intl 等）、启动 PHP-FPM，并自动识别其 socket 地址、放开 socket 权限（此前固定 `127.0.0.1:9000`，在 Debian/Ubuntu/RHEL 上 PHP 站点会 502）；已安装的 PHP 可在「运行环境」中一键「检查修复」
 - **站点默认加固**：上传上限 256MB、禁止访问 `.env` / `.git` 等隐藏文件、FastCGI 超时 300 秒；服务器未启用 IPv6 时不再生成 `listen [::]`（否则 nginx 无法启动）
@@ -290,7 +297,7 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### 生产环境就绪度
 
-已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理、WordPress 等一键部署、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理（含 SQLite 数据编辑与 SQL 控制台）、WordPress 等网站程序与 File Browser / frp / DDNS-GO / Gitea 等服务一键安装、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
 
 与宝塔 / 1Panel 相比仍缺少（后续计划）：
 
@@ -468,9 +475,12 @@ The JWT signing secret is persisted in the `settings` table (`JWT_SECRET` env wi
 
 The panel detects and installs language runtimes, and supervises application processes:
 
-- `GET /api/runtimes`: detects PHP / Node.js / Python / Java / Go with versions, paths and companion tooling (npm, pip, composer, maven…)
+- `GET /api/runtimes`: detects PHP / Node.js / Python / Java / Go / C# (.NET) / Rust / Ruby / Lua with versions, paths and companion tooling (npm, pip, composer, maven…)
 - `POST /api/runtimes/install`: installs through the distro package manager (apt / dnf / yum / apk, brew on macOS) and returns the full install log
-- Managed applications (`/api/apps`) support Node / Python / Java (jar) / Go / binary / PHP-CLI:
+- .NET SDK (distro package, dotnet-install script as fallback), Rust (rustup, falling back to the rsproxy / USTC mirrors, installed under /opt/rust with system-wide commands), Ruby (with bundler), Lua 5.4 (with LuaRocks)
+- Managed applications (`/api/apps`) support Node / Python / Java (jar) / Go / binary / PHP-CLI / C# / Rust / Ruby / Lua:
+  - C# is published with `dotnet publish` and runs the published dll; Rust builds with `cargo build --release`; Ruby bundles into the project; Lua modules go to `lua_modules` through LuaRocks
+  - an app can run as another system user (e.g. www-data) instead of root, optionally taking over its directory
   - working directory, entry point, arguments, environment variables, port
   - a `PORT` environment variable is injected when a port is set
   - crash auto-restart with exponential backoff (2s → 60s), reset once a process stays up 30s
@@ -487,10 +497,14 @@ The panel detects and installs language runtimes, and supervises application pro
   - Redis password setting
   - MongoDB (8.0 / 7.0 from MongoDB's repository, Aliyun mirror as fallback): the panel creates its administrator and turns authorization on; databases, users, collections, `mongodump` backup and restore; remote access requires authorization. x86 CPUs need AVX
   - SQLite: finds database files in site and application directories, or add / create one; tables and row counts, consistent `VACUUM INTO` backups (safe while the app runs) and restore; the panel's own database is off limits
+  - SQLite data editor: browse tables and views with sorting, WHERE filters and paging; edit (double-click), insert and bulk-delete rows by rowid or primary key (views are read-only; BLOBs and very long text are never overwritten by accident; integers beyond JavaScript's precision are kept exact); structure, indexes and CREATE statement; a SQL console runs several statements at once with per-statement results and changed-row counts, Ctrl+Enter, and history
   - Names, users and passwords are allowlisted; SQL and passwords reach the clients on stdin, never in the process list
-- **App Store**: one-click WordPress, Typecho and Adminer
-  - Checks OpenResty / PHP / MySQL, creates the database, downloads and unpacks, writes the config (`wp-config.php` with fresh keys for WordPress), sets ownership and creates the site
-  - Any failure rolls back the database, files and site it created
+- **App Store**: categories and search; website programs and server tools in one click
+  - Website programs: WordPress, Typecho, Adminer, phpMyAdmin, DokuWiki. Checks OpenResty / PHP / MySQL, creates the database, downloads and unpacks, writes the config (`wp-config.php` with fresh keys; a cookie key for phpMyAdmin, whose setup tool is removed), sets ownership and creates the site; phpMyAdmin's internal directories and DokuWiki's data / conf are hidden from the web
+  - Services: File Browser (web file manager), frp server (NAT tunnelling), DDNS-GO (dynamic DNS), Gitea (Git hosting). The official GitHub release for the CPU is downloaded (through the GitHub proxy from Settings › Updates; a version or mirror URL can be given) and checked to be a Linux program, so a proxy's error page is never installed. Configuration and random credentials / tokens are generated; each runs as its own system user (frp, ddnsgo, git; www-data for File Browser), supervised by the panel with crash restarts and start at boot
+  - Access directly on the port, or on localhost only behind a domain (a reverse-proxy site is created, ready for SSL); ports are opened when a firewall is active
+  - Installed list: status, address, access details (show / copy credentials), start / stop / restart, logs; upgrade to the latest or a given version with automatic rollback when the new one does not start; uninstall keeping or deleting data, and a reinstall sets old data aside
+  - Any failure rolls back the database, files, process and site it created
   - A custom download URL (mirror) can be given
 - **PHP sites work out of the box**: installing PHP adds common extensions (mysql, gd, curl, mbstring, zip, intl...), starts PHP-FPM, detects its socket and opens it to nginx (the fixed `127.0.0.1:9000` used before gave every PHP site a 502 on Debian/Ubuntu/RHEL); an installed PHP can be repaired with "Check & repair" under Runtimes
 - **Hardened site defaults**: 256MB uploads, dotfiles (`.env`, `.git`) denied, 300s FastCGI timeout; no `listen [::]` on hosts without IPv6 (nginx would refuse to start)
@@ -590,7 +604,7 @@ Runtime keys (panel settings / `settings` table / env):
 
 ### Production Readiness
 
-In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management; one-click WordPress and friends; scheduled website and database backups; firewall, cron, file manager and terminal.
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management (with a SQLite data editor and SQL console); one-click WordPress and other website programs plus File Browser / frp / DDNS-GO / Gitea services; scheduled website and database backups; firewall, cron, file manager and terminal.
 
 Still missing compared with BaoTa / 1Panel (planned):
 

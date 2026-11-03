@@ -23,11 +23,14 @@ struct Prerequisites {
     openresty: bool,
     php: bool,
     mysql: bool,
+    /// A firewall is active (service ports may need opening).
+    firewall: bool,
 }
 
 #[derive(Serialize)]
 struct Catalog {
     apps: &'static [appstore::AppDef],
+    services: &'static [crate::services::svcapps::ServiceDef],
     prerequisites: Prerequisites,
 }
 
@@ -37,24 +40,28 @@ async fn prerequisites(state: &AppState) -> Prerequisites {
         .await
         .map(|status| status.installed)
         .unwrap_or(false);
-    let (php, mysql) = tokio::task::spawn_blocking(move || {
+    let (php, mysql, firewall) = tokio::task::spawn_blocking(move || {
+        let firewall = crate::services::firewall::status();
         (
             php::detect().is_some(),
             database::status(database::Engine::Mysql, admin.as_ref()).manageable,
+            firewall.available && firewall.enabled,
         )
     })
     .await
-    .unwrap_or((false, false));
+    .unwrap_or((false, false, false));
     Prerequisites {
         openresty,
         php,
         mysql,
+        firewall,
     }
 }
 
 async fn apps(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Catalog>> {
     Json(ApiResponse::ok(Catalog {
         apps: appstore::CATALOG,
+        services: crate::services::svcapps::SERVICES,
         prerequisites: prerequisites(&state).await,
     }))
 }
@@ -108,9 +115,11 @@ async fn deploy(
     };
     let title = format!("Deploy {}", app.name);
     let task_state = state.clone();
-    Json(ApiResponse::ok(state.tasks.start("app-deploy", &title, async move {
-        deploy_task(task_state, req).await.0
-    })))
+    Json(ApiResponse::ok(state.tasks.start(
+        "app-deploy",
+        &title,
+        async move { deploy_task(task_state, req).await.0 },
+    )))
 }
 
 async fn deploy_task(state: Arc<AppState>, req: DeployRequest) -> Json<ApiResponse<DeployResult>> {
@@ -251,6 +260,10 @@ async fn deploy_task(state: Arc<AppState>, req: DeployRequest) -> Json<ApiRespon
                     appstore::configure_wordpress(&doc_root, &db.name, &db.username, &db.password)?;
                     step_log.push_str("[LinxPanel] Wrote wp-config.php\n");
                 }
+                if app.key == "phpmyadmin" {
+                    appstore::configure_phpmyadmin(&doc_root)?;
+                    step_log.push_str("[LinxPanel] Wrote config.inc.php\n");
+                }
                 appstore::set_owner(&doc_root, &user, &mut step_log)?;
                 Ok::<_, String>(())
             })();
@@ -285,7 +298,7 @@ async fn deploy_task(state: Arc<AppState>, req: DeployRequest) -> Json<ApiRespon
                     index_files: Some("index.php index.html".into()),
                     stopped_page_html: None,
                     app_id: None,
-                    rewrite_rules: None,
+                    rewrite_rules: app.rewrite_rules.map(str::to_string),
                 },
             )
             .await

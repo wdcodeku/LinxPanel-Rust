@@ -252,6 +252,24 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Service programs installed from the app store (run as managed apps).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS service_installs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app TEXT NOT NULL UNIQUE,
+            version TEXT NOT NULL,
+            dir TEXT NOT NULL,
+            app_id INTEGER NOT NULL,
+            site_id INTEGER,
+            ports TEXT NOT NULL DEFAULT '[]',
+            info TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Databases created through the panel, with the credentials it generated.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS databases (
