@@ -149,6 +149,17 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Managed apps may run as another system user.
+    let has_run_user: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM pragma_table_info('apps') WHERE name = 'run_user' LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
+    if has_run_user.is_none() {
+        sqlx::query("ALTER TABLE apps ADD COLUMN run_user TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await?;
+    }
+
     // Sites of an app type proxy to a managed application instead of a raw address.
     let has_app_id: Option<(i64,)> =
         sqlx::query_as("SELECT 1 FROM pragma_table_info('sites') WHERE name = 'app_id' LIMIT 1")

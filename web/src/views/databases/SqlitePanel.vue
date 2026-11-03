@@ -114,34 +114,8 @@
     </template>
   </el-dialog>
 
-  <!-- Tables -->
-  <el-drawer v-model="tablesDrawer" :size="drawerSize" append-to-body>
-    <template #header>
-      <div class="drawer-head">
-        <span class="drawer-head__title lp-mono">{{ target ? baseName(target.path) : '' }}</span>
-        <span class="lp-dim">{{ t('dbm.tableCount', { n: tables.filter((r) => r.engine === 'table').length }) }} · {{ target ? formatBytes(target.size) : '' }}</span>
-      </div>
-    </template>
-    <div class="tables-tools">
-      <el-input v-model="tableKeyword" :prefix-icon="Search" size="small" clearable :placeholder="t('dbm.searchTables')" class="search" />
-      <el-button size="small" :icon="Refresh" :loading="tablesLoading" @click="loadTables">{{ t('refresh') }}</el-button>
-    </div>
-    <el-skeleton v-if="tablesLoading && !tables.length" animated :rows="6" />
-    <el-table v-else :data="filteredTables" size="small" :empty-text="tableKeyword ? t('dbm.noMatch') : t('dbm.noTables')">
-      <el-table-column :label="t('dbm.table')" min-width="200">
-        <template #default="{ row }">
-          <span class="lp-mono strong">{{ row.name }}</span>
-          <el-tag v-if="row.engine === 'view'" size="small" type="info" class="ml">{{ t('sql.view') }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('dbm.rows')" width="110" align="right">
-        <template #default="{ row }"><span class="lp-num">{{ row.rows === null ? '—' : row.rows.toLocaleString() }}</span></template>
-      </el-table-column>
-      <el-table-column :label="t('dbm.size')" width="100" align="right">
-        <template #default="{ row }"><span class="lp-num">{{ row.size ? formatBytes(row.size) : '—' }}</span></template>
-      </el-table-column>
-    </el-table>
-  </el-drawer>
+  <!-- Data: tables, rows, structure, SQL -->
+  <SqliteBrowser v-if="browserPath" v-model="browserOpen" :path="browserPath" @changed="load" />
 
   <!-- Connection info -->
   <el-drawer v-model="connDrawer" :title="`${t('dbm.connInfo')} · ${target ? baseName(target.path) : ''}`" size="520px" append-to-body>
@@ -186,10 +160,11 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Aim, Coin, CopyDocument, InfoFilled, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import {
-  backupSqlite, createSqlite, deleteSqliteBackup, discoverSqlite, downloadFileApi, getSqliteTables,
+  backupSqlite, createSqlite, deleteSqliteBackup, discoverSqlite, downloadFileApi,
   listSqlite, listSqliteBackups, registerSqlite, removeSqlite, restoreSqlite,
 } from '@/api'
 import { useI18n } from '@/i18n'
+import SqliteBrowser from './SqliteBrowser.vue'
 import { formatBytes } from '@/utils/format'
 
 interface SqliteFile {
@@ -204,7 +179,6 @@ interface SqliteFile {
   error: string | null
 }
 interface Found { path: string; size: number; modified: string | null }
-interface TableRow { name: string; rows: number | null; size: number; engine: string | null }
 
 const { t } = useI18n()
 const files = ref<SqliteFile[]>([])
@@ -334,34 +308,13 @@ async function submitRemove() {
   }
 }
 
-// --- Tables ---
-const tablesDrawer = ref(false)
-const tables = ref<TableRow[]>([])
-const tablesLoading = ref(false)
-const tableKeyword = ref('')
-const drawerSize = computed(() => (window.innerWidth < 760 ? '100%' : '640px'))
-const filteredTables = computed(() => {
-  const q = tableKeyword.value.trim().toLowerCase()
-  return q ? tables.value.filter((r) => r.name.toLowerCase().includes(q)) : tables.value
-})
+// --- Data browser ---
+const browserOpen = ref(false)
+const browserPath = ref('')
 function openTables(row: SqliteFile) {
-  if (target.value?.path !== row.path) tables.value = []
   target.value = row
-  tableKeyword.value = ''
-  tablesDrawer.value = true
-  void loadTables()
-}
-async function loadTables() {
-  if (!target.value) return
-  tablesLoading.value = true
-  try {
-    const res: any = await getSqliteTables(target.value.path)
-    if (res.success) tables.value = res.data || []
-  } catch {
-    // Interceptor reports it.
-  } finally {
-    tablesLoading.value = false
-  }
+  browserPath.value = row.path
+  browserOpen.value = true
 }
 
 // --- Connection ---

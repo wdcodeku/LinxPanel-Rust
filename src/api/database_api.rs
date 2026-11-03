@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::models::ApiResponse;
 use crate::services::database::{self, Engine, MysqlAdmin};
-use crate::services::{dbconf, dbnet, sqlitedb, tasks};
+use crate::services::{dbconf, dbnet, sqlite_edit, sqlitedb, tasks};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -76,6 +76,12 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/sqlite/backups", get(sqlite_backups).post(sqlite_backup))
         .route("/sqlite/restore", post(sqlite_restore))
         .route("/sqlite/backups/delete", post(sqlite_delete_backup))
+        .route("/sqlite/schema", get(sqlite_schema))
+        .route("/sqlite/rows", get(sqlite_rows))
+        .route("/sqlite/rows/update", post(sqlite_update_row))
+        .route("/sqlite/rows/insert", post(sqlite_insert_row))
+        .route("/sqlite/rows/delete", post(sqlite_delete_rows))
+        .route("/sqlite/query", post(sqlite_query))
 }
 
 /// The panel's administrator login for the engine (MySQL / MongoDB).
@@ -896,6 +902,62 @@ async fn sqlite_delete_backup(
         Ok(()) => Json(ApiResponse::ok_msg("Backup deleted")),
         Err(err) => Json(ApiResponse::err(&err)),
     }
+}
+
+// ----- SQLite data editing -----
+
+#[derive(Deserialize)]
+struct SqliteTableQuery {
+    path: String,
+    table: String,
+}
+
+async fn sqlite_schema(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SqliteTableQuery>,
+) -> Json<ApiResponse<sqlite_edit::TableSchema>> {
+    result(sqlite_edit::schema(&state.db, &state.data_dir, &query.path, &query.table).await)
+}
+
+async fn sqlite_rows(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<sqlite_edit::RowsQuery>,
+) -> Json<ApiResponse<sqlite_edit::RowsPage>> {
+    result(sqlite_edit::rows(&state.db, &state.data_dir, &query).await)
+}
+
+async fn sqlite_update_row(
+    State(state): State<Arc<AppState>>,
+    Json(change): Json<sqlite_edit::RowChange>,
+) -> Json<ApiResponse<u64>> {
+    result(sqlite_edit::update_row(&state.db, &state.data_dir, &change).await)
+}
+
+async fn sqlite_insert_row(
+    State(state): State<Arc<AppState>>,
+    Json(change): Json<sqlite_edit::RowChange>,
+) -> Json<ApiResponse<i64>> {
+    result(sqlite_edit::insert_row(&state.db, &state.data_dir, &change).await)
+}
+
+async fn sqlite_delete_rows(
+    State(state): State<Arc<AppState>>,
+    Json(change): Json<sqlite_edit::RowChange>,
+) -> Json<ApiResponse<u64>> {
+    result(sqlite_edit::delete_rows(&state.db, &state.data_dir, &change).await)
+}
+
+#[derive(Deserialize)]
+struct SqliteSql {
+    path: String,
+    sql: String,
+}
+
+async fn sqlite_query(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SqliteSql>,
+) -> Json<ApiResponse<sqlite_edit::QueryOutput>> {
+    result(sqlite_edit::run_sql(&state.db, &state.data_dir, &req.path, &req.sql).await)
 }
 
 /// Deletes MySQL binary logs except the current one; returns the bytes freed.

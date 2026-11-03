@@ -239,6 +239,19 @@ export const registerSqlite = (path: string) => request.post('/sqlite/register',
 export const createSqlite = (path: string) => request.post('/sqlite/create', { path })
 export const removeSqlite = (path: string, deleteFile: boolean) =>
   request.post('/sqlite/remove', { path, delete_file: deleteFile })
+// SQLite data editing
+export type SqliteRowsParams = { path: string; table: string; offset: number; limit: number; order?: string; desc?: boolean; filter?: string }
+export const getSqliteSchema = (path: string, table: string) =>
+  request.get('/sqlite/schema', { params: { path, table } })
+export const getSqliteRows = (params: SqliteRowsParams) => request.get('/sqlite/rows', { params, timeout: 60000 })
+export const updateSqliteRow = (path: string, table: string, key: unknown, values: Record<string, unknown>) =>
+  request.post('/sqlite/rows/update', { path, table, key, values })
+export const insertSqliteRow = (path: string, table: string, values: Record<string, unknown>) =>
+  request.post('/sqlite/rows/insert', { path, table, values })
+export const deleteSqliteRows = (path: string, table: string, keys: unknown[]) =>
+  request.post('/sqlite/rows/delete', { path, table, keys })
+export const runSqliteQuery = (path: string, sql: string) =>
+  request.post('/sqlite/query', { path, sql }, { timeout: 180000 })
 export const getSqliteTables = (path: string) =>
   request.get('/sqlite/tables', { params: { path }, timeout: 60000 })
 export const listSqliteBackups = (path: string) => request.get('/sqlite/backups', { params: { path } })

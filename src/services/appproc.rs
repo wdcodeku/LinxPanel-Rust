@@ -29,7 +29,7 @@ const LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub struct AppRecord {
     pub id: i64,
     pub name: String,
-    /// node | python | java | go | binary | php
+    /// node | python | java | go | binary | php | dotnet | rust | ruby | lua
     pub runtime: String,
     pub work_dir: String,
     /// Script, jar or executable, relative to work_dir unless absolute.
@@ -41,6 +41,9 @@ pub struct AppRecord {
     pub autostart: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// System user the app runs as; empty = the panel's own user.
+    #[sqlx(default)]
+    pub run_user: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +60,11 @@ pub struct SaveAppRequest {
     pub port: i64,
     #[serde(default)]
     pub autostart: bool,
+    #[serde(default)]
+    pub run_user: String,
+    /// Give the working directory to `run_user` (recursively) on save.
+    #[serde(default)]
+    pub chown_work_dir: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,6 +158,46 @@ pub fn log_path(data_dir: &std::path::Path, id: i64) -> std::path::PathBuf {
     data_dir.join("app-logs").join(format!("app-{}.log", id))
 }
 
+/// uid, gid and home of a system user.
+pub fn run_user_ids(user: &str) -> Option<(u32, u32, String)> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split(':').collect();
+        (cols.len() >= 6 && cols[0] == user).then(|| {
+            Some((cols[2].parse().ok()?, cols[3].parse().ok()?, cols[5].to_string()))
+        })?
+    })
+}
+
+fn normalized_user(user: &str) -> String {
+    match user.trim() {
+        "root" => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn hand_over_work_dir(request: &SaveAppRequest) {
+    let user = normalized_user(&request.run_user);
+    if request.chown_work_dir && !user.is_empty() {
+        chown_to(&user, std::path::Path::new(request.work_dir.trim()));
+    }
+}
+
+/// Gives `dir` (recursively) to `user` and its primary group.
+fn chown_to(user: &str, dir: &std::path::Path) {
+    if let Some((uid, gid, _)) = run_user_ids(user) {
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(path) = stack.pop() {
+            let _ = std::os::unix::fs::lchown(&path, Some(uid), Some(gid));
+            if std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+                if let Ok(entries) = std::fs::read_dir(&path) {
+                    stack.extend(entries.flatten().map(|e| e.path()));
+                }
+            }
+        }
+    }
+}
+
 fn validate(request: &SaveAppRequest) -> Result<(), String> {
     if request.name.trim().is_empty() {
         return Err("Application name is required".into());
@@ -164,12 +212,18 @@ fn validate(request: &SaveAppRequest) -> Result<(), String> {
     if !std::path::Path::new(work_dir).is_dir() {
         return Err(format!("Working directory does not exist: {}", work_dir));
     }
-    const KINDS: &[&str] = &["node", "python", "java", "go", "binary", "php"];
+    const KINDS: &[&str] = &[
+        "node", "python", "java", "go", "binary", "php", "dotnet", "rust", "ruby", "lua",
+    ];
     if !KINDS.contains(&request.runtime.as_str()) {
         return Err(format!("Unsupported runtime: {}", request.runtime));
     }
     if request.port != 0 && !(1..=65535).contains(&request.port) {
         return Err("Port must be between 1 and 65535".into());
+    }
+    let user = request.run_user.trim();
+    if !user.is_empty() && user != "root" && run_user_ids(user).is_none() {
+        return Err(format!("No such system user: {}", user));
     }
     for line in request.env.lines() {
         let line = line.trim();
@@ -202,8 +256,8 @@ pub async fn get(pool: &sqlx::SqlitePool, id: i64) -> Result<AppRecord, String> 
 pub async fn create(pool: &sqlx::SqlitePool, request: &SaveAppRequest) -> Result<i64, String> {
     validate(request)?;
     let result = sqlx::query(
-        "INSERT INTO apps (name, runtime, work_dir, entry, args, env, port, autostart, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+        "INSERT INTO apps (name, runtime, work_dir, entry, args, env, port, autostart, run_user, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
     )
     .bind(request.name.trim())
     .bind(&request.runtime)
@@ -213,9 +267,11 @@ pub async fn create(pool: &sqlx::SqlitePool, request: &SaveAppRequest) -> Result
     .bind(request.env.trim())
     .bind(request.port)
     .bind(request.autostart)
+    .bind(normalized_user(&request.run_user))
     .execute(pool)
     .await
     .map_err(|err| err.to_string())?;
+    hand_over_work_dir(request);
     Ok(result.last_insert_rowid())
 }
 
@@ -227,7 +283,7 @@ pub async fn update(
     validate(request)?;
     sqlx::query(
         "UPDATE apps SET name = ?, runtime = ?, work_dir = ?, entry = ?, args = ?, env = ?,
-         port = ?, autostart = ?, updated_at = datetime('now') WHERE id = ?",
+         port = ?, autostart = ?, run_user = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(request.name.trim())
     .bind(&request.runtime)
@@ -237,10 +293,12 @@ pub async fn update(
     .bind(request.env.trim())
     .bind(request.port)
     .bind(request.autostart)
+    .bind(normalized_user(&request.run_user))
     .bind(id)
     .execute(pool)
     .await
     .map_err(|err| err.to_string())?;
+    hand_over_work_dir(request);
     Ok(())
 }
 
@@ -335,8 +393,65 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
             runtime::interpreter_path("java").unwrap_or_else(|| "java".into()),
             vec!["-jar".to_string(), entry],
         ),
-        // Go programs and plain binaries are executed directly.
-        "go" | "binary" => (entry, Vec::new()),
+        // Go and Rust programs and plain binaries are executed directly
+        // (`cargo run --release` works too, for development).
+        "rust" if first == "cargo" => (
+            runtime::interpreter_path("rust")
+                .map(|rustc| rustc.replace("rustc", "cargo"))
+                .filter(|cargo| std::path::Path::new(cargo).exists())
+                .unwrap_or_else(|| "cargo".into()),
+            rest,
+        ),
+        "go" | "binary" | "rust" => (entry, Vec::new()),
+        // App.dll runs on the dotnet host; a published apphost runs directly;
+        // a project file runs with `dotnet run` (development).
+        "dotnet" => {
+            let dotnet = runtime::interpreter_path("dotnet").unwrap_or_else(|| "dotnet".into());
+            if first.ends_with(".dll") {
+                (dotnet, tokens.clone())
+            } else if first.ends_with(".csproj") || first.ends_with(".fsproj") {
+                (
+                    dotnet,
+                    vec!["run".into(), "--project".into(), first, "-c".into(), "Release".into()],
+                )
+            } else if first == "dotnet" {
+                (dotnet, rest)
+            } else {
+                (first, rest)
+            }
+        }
+        // app.rb, or a command (bundle exec puma, rails server, rackup ...)
+        // from the project's bin/ stubs or the system.
+        "ruby" => {
+            let ruby = runtime::interpreter_path("ruby").unwrap_or_else(|| "ruby".into());
+            if first.ends_with(".rb") || first.starts_with('-') {
+                (ruby, tokens.clone())
+            } else if work_dir.join("bin").join(&first).is_file() {
+                (work_dir.join("bin").join(&first).to_string_lossy().to_string(), rest)
+            } else if first == "ruby" {
+                (ruby, rest)
+            } else {
+                (
+                    shell::which(&first)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or(first),
+                    rest,
+                )
+            }
+        }
+        "lua" => {
+            let lua = runtime::interpreter_path("lua").unwrap_or_else(|| "lua".into());
+            if matches!(first.as_str(), "lua" | "luajit" | "lua5.1" | "lua5.3" | "lua5.4") {
+                (
+                    shell::which(&first)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or(first),
+                    rest,
+                )
+            } else {
+                (lua, tokens.clone())
+            }
+        }
         other => return Err(format!("Unsupported runtime: {}", other)),
     };
     args.extend(extra);
@@ -382,6 +497,7 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
         }
         // Composer refuses to run as root without this.
         command.env("COMPOSER_ALLOW_SUPERUSER", "1");
+        command.env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1");
         let output = shell::run_command(command, None, std::time::Duration::from_secs(1800))?;
         for text in [&output.stdout, &output.stderr] {
             if !text.trim().is_empty() {
@@ -463,12 +579,83 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
                 ],
             )
         }
+        // Restore and publish into ./publish (entry: publish/App.dll).
+        "dotnet" => {
+            let project = find_with_extension(work_dir, &["sln", "csproj", "fsproj"])
+                .ok_or("No .sln / .csproj found")?;
+            let dotnet = runtime::interpreter_path("dotnet").ok_or("The .NET SDK is not installed")?;
+            step(&dotnet, &["restore", &project])?;
+            step(&dotnet, &["publish", &project, "-c", "Release", "-o", "publish", "--nologo"])
+        }
+        // A release build (entry: target/release/<name>).
+        "rust" => {
+            if !has("Cargo.toml") {
+                return Err("No Cargo.toml found".into());
+            }
+            let cargo = shell::which("cargo")
+                .map(|p| p.to_string_lossy().to_string())
+                .ok_or("cargo is not installed")?;
+            step(&cargo, &["build", "--release"])
+        }
+        // Gems into ./vendor/bundle, so the app does not depend on system gems.
+        "ruby" => {
+            if !has("Gemfile") {
+                return Err("No Gemfile found".into());
+            }
+            let bundle = shell::which("bundle")
+                .map(|p| p.to_string_lossy().to_string())
+                .ok_or("bundler is not installed")?;
+            step(&bundle, &["config", "set", "--local", "path", "vendor/bundle"])?;
+            step(&bundle, &["install", "--jobs", "4"])
+        }
+        // Rocks into ./lua_modules for the Lua version that runs the app.
+        "lua" => {
+            let rockspec = find_with_extension(work_dir, &["rockspec"]).ok_or("No .rockspec found")?;
+            let luarocks = shell::which("luarocks")
+                .map(|p| p.to_string_lossy().to_string())
+                .ok_or("luarocks is not installed")?;
+            let lua_version = shell::cached_version_output("lua", &["-v"])
+                .and_then(|text| {
+                    let v = text.split_whitespace().nth(1)?.to_string();
+                    let mut parts = v.split('.');
+                    Some(format!("{}.{}", parts.next()?, parts.next()?))
+                });
+            let mut args = vec![];
+            if let Some(version) = &lua_version {
+                args.push("--lua-version");
+                args.push(version.as_str());
+            }
+            args.extend(["--tree", "lua_modules", "install", "--only-deps", rockspec.as_str()]);
+            step(&luarocks, &args)
+        }
         _ => Err("This runtime has no dependency step".into()),
     };
+    // Built files belong to the user the app runs as.
+    let run_user = normalized_user(&record.run_user);
+    if result.is_ok() && !run_user.is_empty() {
+        chown_to(&run_user, work_dir);
+    }
     match result {
         Ok(()) => Ok(log),
         Err(err) => Err(format!("{}\n{}", log, err)),
     }
+}
+
+/// The first file in `dir` with one of `extensions` (sorted, for stability).
+fn find_with_extension(dir: &std::path::Path, extensions: &[&str]) -> Option<String> {
+    for ext in extensions {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(&format!(".{}", ext)))
+            .collect();
+        names.sort();
+        if let Some(first) = names.into_iter().next() {
+            return Some(first);
+        }
+    }
+    None
 }
 
 /// Minimal argument splitter honouring single and double quotes.
@@ -570,6 +757,51 @@ pub async fn start(
     Ok(())
 }
 
+/// LUA_PATH / LUA_CPATH for a project-local rocks tree.
+fn lua_module_paths(work_dir: &std::path::Path) -> Option<(String, String)> {
+    let tree = work_dir.join("lua_modules");
+    let version = std::fs::read_dir(tree.join("share/lua"))
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .next()?;
+    let t = tree.to_string_lossy();
+    Some((
+        format!("{t}/share/lua/{version}/?.lua;{t}/share/lua/{version}/?/init.lua;;"),
+        format!("{t}/lib/lua/{version}/?.so;;"),
+    ))
+}
+
+#[cfg(unix)]
+extern "C" {
+    fn setgid(gid: u32) -> i32;
+    fn setuid(uid: u32) -> i32;
+    fn setgroups(size: usize, list: *const u32) -> i32;
+}
+
+/// Runs the child as `user` (dropping root's groups first); HOME and USER
+/// follow. Nothing changes for an empty user or root.
+fn apply_run_user(command: &mut tokio::process::Command, user: &str) -> Result<(), String> {
+    let user = normalized_user(user);
+    if user.is_empty() {
+        return Ok(());
+    }
+    let (uid, gid, home) =
+        run_user_ids(&user).ok_or_else(|| format!("No such system user: {}", user))?;
+    command.env("HOME", if home.is_empty() { "/".into() } else { home }).env("USER", &user).env("LOGNAME", &user);
+    #[cfg(unix)]
+    // SAFETY: only async-signal-safe system calls between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            if setgroups(1, &gid) != 0 || setgid(gid) != 0 || setuid(uid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
 fn spawn_child(
     record: &AppRecord,
     program: &str,
@@ -616,6 +848,38 @@ fn spawn_child(
         // Convention every supported runtime understands.
         command.env("PORT", record.port.to_string());
     }
+    let user_env: Vec<String> = parse_env(&record.env).into_iter().map(|(k, _)| k).collect();
+    let unset = |key: &str| !user_env.iter().any(|k| k == key);
+    match record.runtime.as_str() {
+        "dotnet" => {
+            command.env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1");
+            // ASP.NET Core listens on its own setting, not PORT.
+            if record.port > 0 && unset("ASPNETCORE_URLS") && unset("ASPNETCORE_HTTP_PORTS") {
+                command.env("ASPNETCORE_URLS", format!("http://0.0.0.0:{}", record.port));
+            }
+            if std::path::Path::new("/usr/share/dotnet/dotnet").exists() && unset("DOTNET_ROOT") {
+                command.env("DOTNET_ROOT", "/usr/share/dotnet");
+            }
+        }
+        "lua" => {
+            // Rocks installed into the project (luarocks --tree lua_modules).
+            if let Some((path, cpath)) = lua_module_paths(work_dir) {
+                if unset("LUA_PATH") {
+                    command.env("LUA_PATH", path);
+                }
+                if unset("LUA_CPATH") {
+                    command.env("LUA_CPATH", cpath);
+                }
+            }
+        }
+        "ruby" => {
+            if unset("RACK_ENV") && unset("RAILS_ENV") {
+                command.env("RACK_ENV", "production");
+            }
+        }
+        _ => {}
+    }
+    apply_run_user(&mut command, &record.run_user)?;
 
     command
         .spawn()

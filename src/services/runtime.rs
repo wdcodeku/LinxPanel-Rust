@@ -1,8 +1,11 @@
 //! Language runtime detection and installation.
 //!
-//! The panel hosts PHP / Node.js / Python / Java / Go / plain-binary applications,
+//! The panel hosts PHP / Node.js / Python / Java / Go / C# (.NET) / Rust / Ruby /
+//! Lua / plain-binary applications,
 //! so it needs to know which runtimes exist on the host, what version they are,
 //! and how to install the missing ones through the distro package manager.
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +144,88 @@ const RUNTIMES: &[RuntimeSpec] = &[
         brew: &["go"],
         components: &[],
     },
+    RuntimeSpec {
+        kind: "dotnet",
+        display_name: "C# / .NET",
+        binaries: &["dotnet"],
+        // The SDK version; a runtime-only install has no --version.
+        version_args: &["--version"],
+        // Installed by `install_dotnet` (newest LTS SDK the system offers).
+        apt: &["dotnet-sdk-10.0"],
+        dnf: &["dotnet-sdk-10.0"],
+        apk: &["dotnet10-sdk"],
+        brew: &["dotnet"],
+        components: &[],
+    },
+    RuntimeSpec {
+        kind: "rust",
+        display_name: "Rust",
+        binaries: &["rustc"],
+        version_args: &["--version"],
+        // Installed by `install_rust` (rustup, current stable); these are
+        // the fallback when rustup cannot be downloaded.
+        apt: &["rustc", "cargo"],
+        dnf: &["rust", "cargo"],
+        apk: &["rust", "cargo"],
+        brew: &["rust"],
+        components: &[
+            ComponentSpec {
+                name: "cargo",
+                binary: "cargo",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "rustup",
+                binary: "rustup",
+                version_args: &["--version"],
+            },
+        ],
+    },
+    RuntimeSpec {
+        kind: "ruby",
+        display_name: "Ruby",
+        binaries: &["ruby"],
+        version_args: &["--version"],
+        // Headers and a compiler: most Gemfiles build a native extension.
+        apt: &["ruby-full", "ruby-bundler", "build-essential"],
+        dnf: &["ruby", "ruby-devel", "rubygem-bundler", "gcc", "gcc-c++", "make", "redhat-rpm-config"],
+        apk: &["ruby", "ruby-dev", "ruby-bundler", "build-base"],
+        brew: &["ruby"],
+        components: &[
+            ComponentSpec {
+                name: "gem",
+                binary: "gem",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "bundler",
+                binary: "bundle",
+                version_args: &["--version"],
+            },
+        ],
+    },
+    RuntimeSpec {
+        kind: "lua",
+        display_name: "Lua",
+        binaries: &["lua", "lua5.4", "luajit", "lua5.3", "lua5.1"],
+        version_args: &["-v"],
+        apt: &["lua5.4", "liblua5.4-dev", "luarocks", "build-essential"],
+        dnf: &["lua", "lua-devel", "luarocks", "gcc", "make"],
+        apk: &["lua5.4", "lua5.4-dev", "luarocks5.4", "build-base"],
+        brew: &["lua", "luarocks"],
+        components: &[
+            ComponentSpec {
+                name: "luarocks",
+                binary: "luarocks",
+                version_args: &["--version"],
+            },
+            ComponentSpec {
+                name: "luajit",
+                binary: "luajit",
+                version_args: &["-v"],
+            },
+        ],
+    },
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,7 +287,12 @@ fn probe_version(binary: &str, args: &[&str]) -> Option<(String, String)> {
     let first_line = text
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("Picked up "))
+        // Skip banners and separators (gradle starts with a line of dashes).
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("Picked up ")
+                && line.chars().any(|c| c.is_ascii_digit())
+        })
         .unwrap_or("")
         .to_string();
     Some((extract_version(&first_line), path.display().to_string()))
@@ -318,6 +408,245 @@ pub fn list() -> Vec<RuntimeStatus> {
     })
 }
 
+// ===== Rust and .NET: installers of their own =====
+
+const RUST_HOME: &str = "/opt/rust";
+
+/// The rustup target triple of this machine.
+fn rust_host_triple() -> Option<&'static str> {
+    let musl = Path::new("/etc/alpine-release").exists();
+    Some(match (std::env::consts::ARCH, musl) {
+        ("x86_64", false) => "x86_64-unknown-linux-gnu",
+        ("x86_64", true) => "x86_64-unknown-linux-musl",
+        ("aarch64", false) => "aarch64-unknown-linux-gnu",
+        ("aarch64", true) => "aarch64-unknown-linux-musl",
+        ("arm", _) => "armv7-unknown-linux-gnueabihf",
+        ("x86", _) => "i686-unknown-linux-gnu",
+        ("riscv64", _) => "riscv64gc-unknown-linux-gnu",
+        ("loongarch64", _) => "loongarch64-unknown-linux-gnu",
+        ("powerpc64", _) => "powerpc64le-unknown-linux-gnu",
+        ("s390x", _) => "s390x-unknown-linux-gnu",
+        _ => return None,
+    })
+}
+
+/// Official server first, then the mirrors most used in mainland China.
+/// (dist server, rustup-init base, crates.io mirror for cargo when not official)
+const RUST_SOURCES: &[(&str, &str, Option<&str>)] = &[
+    ("https://static.rust-lang.org", "https://static.rust-lang.org/rustup/dist", None),
+    ("https://rsproxy.cn", "https://rsproxy.cn/rustup/dist", Some("sparse+https://rsproxy.cn/index/")),
+    (
+        "https://mirrors.ustc.edu.cn/rust-static",
+        "https://mirrors.ustc.edu.cn/rust-static/rustup/dist",
+        Some("sparse+https://mirrors.ustc.edu.cn/crates.io-index/"),
+    ),
+];
+
+fn note(log: &mut String, line: &str) {
+    super::tasks::note(line);
+    log.push_str(line);
+    log.push('\n');
+}
+
+/// Writes /usr/local/bin/<tool> that runs the rustup-managed tool with the
+/// panel's RUSTUP_HOME / CARGO_HOME, so every shell and app finds it.
+fn rust_wrapper_script(home: &str, tool: &str, mirror: Option<&str>) -> String {
+    // rustup reads its mirror only from the environment.
+    let mirror_lines = mirror
+        .map(|server| {
+            format!(
+                "export RUSTUP_DIST_SERVER=\"${{RUSTUP_DIST_SERVER:-{server}}}\"\nexport RUSTUP_UPDATE_ROOT=\"${{RUSTUP_UPDATE_ROOT:-{server}/rustup}}\"\n"
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "#!/bin/sh\n# Installed by LinxPanel (rustup in {home})\nexport RUSTUP_HOME=\"${{RUSTUP_HOME:-{home}/rustup}}\"\nexport CARGO_HOME=\"${{CARGO_HOME:-{home}/cargo}}\"\n{mirror_lines}exec \"{home}/cargo/bin/{tool}\" \"$@\"\n"
+    )
+}
+
+fn write_rust_wrapper(tool: &str, mirror: Option<&str>) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = Path::new("/usr/local/bin").join(tool);
+    std::fs::write(&path, rust_wrapper_script(RUST_HOME, tool, mirror))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+}
+
+/// Rust through rustup (current stable, minimal profile) in /opt/rust, from
+/// the official server or a mirror; distro packages when none is reachable.
+fn install_rust(spec: &RuntimeSpec, before: RuntimeStatus) -> RuntimeInstallResult {
+    let mut log = String::new();
+    note(&mut log, "[LinxPanel] Installing Rust (rustup, stable toolchain)");
+    let manager = package_manager();
+    // A linker and C compiler: most crates need one.
+    let toolchain: &[&str] = match manager {
+        "apt-get" => &["build-essential", "curl"],
+        "dnf" | "yum" => &["gcc", "make", "curl"],
+        "apk" => &["build-base", "curl"],
+        _ => &[],
+    };
+    if !toolchain.is_empty() {
+        install_packages(toolchain, &mut log);
+    }
+    let mut installed = false;
+    if let Some(triple) = rust_host_triple() {
+        let init = Path::new(RUST_HOME).join("rustup-init");
+        let _ = std::fs::create_dir_all(RUST_HOME);
+        for (server, base, crates_mirror) in RUST_SOURCES {
+            let url = format!("{}/{}/rustup-init", base, triple);
+            note(&mut log, &format!("[LinxPanel] Downloading {}", url));
+            let fetched = shell::run_with_timeout(
+                "curl",
+                &["-fsSL", "--retry", "2", "--connect-timeout", "15", "-o", &init.to_string_lossy(), &url],
+                std::time::Duration::from_secs(600),
+            )
+            .map(|o| o.ok())
+            .unwrap_or(false);
+            if !fetched {
+                note(&mut log, "[LinxPanel] Not reachable, trying the next source");
+                continue;
+            }
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&init, std::fs::Permissions::from_mode(0o755));
+            }
+            let mut command = std::process::Command::new(&init);
+            command
+                .args(["-y", "--no-modify-path", "--profile", "minimal", "--default-toolchain", "stable"])
+                .env("RUSTUP_HOME", format!("{}/rustup", RUST_HOME))
+                .env("CARGO_HOME", format!("{}/cargo", RUST_HOME))
+                .env("RUSTUP_DIST_SERVER", server)
+                .env("RUSTUP_UPDATE_ROOT", format!("{}/rustup", server));
+            let ok = shell::run_command(command, None, std::time::Duration::from_secs(1800))
+                .map(|o| o.ok())
+                .unwrap_or(false);
+            let _ = std::fs::remove_file(&init);
+            if !ok {
+                note(&mut log, "[LinxPanel] rustup failed with this source");
+                continue;
+            }
+            let mirror = crates_mirror.map(|_| *server);
+            for tool in ["rustup", "cargo", "rustc", "rustdoc"] {
+                if let Err(err) = write_rust_wrapper(tool, mirror) {
+                    note(&mut log, &format!("[LinxPanel] Cannot write /usr/local/bin/{}: {}", tool, err));
+                }
+            }
+            // Keep using the mirror for toolchain updates and crates.
+            if let Some(index) = crates_mirror {
+                let config = format!(
+                    "[source.crates-io]\nreplace-with = \"mirror\"\n\n[source.mirror]\nregistry = \"{}\"\n",
+                    index
+                );
+                let _ = std::fs::write(Path::new(RUST_HOME).join("cargo/config.toml"), config);
+                note(&mut log, &format!("[LinxPanel] Using the mirror {} for toolchains and crates", server));
+            }
+            installed = true;
+            break;
+        }
+    } else {
+        note(&mut log, "[LinxPanel] rustup has no build for this CPU");
+    }
+    if !installed {
+        note(&mut log, "[LinxPanel] Falling back to the distribution's Rust packages (may be older)");
+        let packages = packages_for(spec, manager);
+        if !packages.is_empty() {
+            install_packages(&packages, &mut log);
+        }
+    }
+    finish_install(spec, before, log)
+}
+
+/// The .NET SDK: the newest LTS the system's packages offer (10.0, then
+/// 8.0), else Microsoft's install script into /usr/share/dotnet.
+fn install_dotnet(spec: &RuntimeSpec, before: RuntimeStatus) -> RuntimeInstallResult {
+    let mut log = String::new();
+    note(&mut log, "[LinxPanel] Installing the .NET SDK");
+    let manager = package_manager();
+    let candidates: &[&[&str]] = match manager {
+        "apt-get" => &[&["dotnet-sdk-10.0"], &["dotnet-sdk-8.0"]],
+        "dnf" | "yum" => &[&["dotnet-sdk-10.0"], &["dotnet-sdk-8.0"]],
+        "apk" => &[&["dotnet10-sdk"], &["dotnet8-sdk"]],
+        "brew" => &[&["dotnet"]],
+        _ => &[],
+    };
+    let mut installed = false;
+    for packages in candidates {
+        if install_packages(packages, &mut log) && detect_one(spec).installed {
+            installed = true;
+            break;
+        }
+    }
+    if !installed {
+        note(&mut log, "[LinxPanel] No SDK package here; using Microsoft's dotnet-install script");
+        // ICU for globalization (the script does not install dependencies).
+        match manager {
+            "apt-get" => {
+                install_packages(&["libicu-dev", "curl"], &mut log);
+            }
+            "dnf" | "yum" => {
+                install_packages(&["libicu", "curl"], &mut log);
+            }
+            "apk" => {
+                install_packages(&["icu-libs", "bash", "curl"], &mut log);
+            }
+            _ => {}
+        }
+        let script = std::env::temp_dir().join(format!("dotnet-install-{}.sh", uuid::Uuid::new_v4().simple()));
+        let fetched = ["https://dot.net/v1/dotnet-install.sh", "https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh"]
+            .iter()
+            .any(|url| {
+                shell::run_with_timeout(
+                    "curl",
+                    &["-fsSL", "--retry", "2", "--connect-timeout", "15", "-o", &script.to_string_lossy(), url],
+                    std::time::Duration::from_secs(300),
+                )
+                .map(|o| o.ok())
+                .unwrap_or(false)
+            });
+        if fetched {
+            let mut command = std::process::Command::new("bash");
+            command
+                .arg(&script)
+                .args(["--channel", "LTS", "--install-dir", "/usr/share/dotnet"])
+                .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
+            let ok = shell::run_command(command, None, std::time::Duration::from_secs(1800))
+                .map(|o| o.ok())
+                .unwrap_or(false);
+            if ok {
+                let link = Path::new("/usr/local/bin/dotnet");
+                let _ = std::fs::remove_file(link);
+                let _ = std::os::unix::fs::symlink("/usr/share/dotnet/dotnet", link);
+            } else {
+                note(&mut log, "[LinxPanel] dotnet-install failed");
+            }
+        } else {
+            note(&mut log, "[LinxPanel] Cannot download dotnet-install.sh (dot.net unreachable)");
+        }
+        let _ = std::fs::remove_file(&script);
+    }
+    finish_install(spec, before, log)
+}
+
+fn finish_install(spec: &RuntimeSpec, before: RuntimeStatus, mut log: String) -> RuntimeInstallResult {
+    let after = detect_one(spec);
+    note(
+        &mut log,
+        &format!(
+            "\n[LinxPanel] Done. {} is {}",
+            spec.display_name,
+            if after.installed {
+                format!("installed ({})", after.version)
+            } else {
+                "still not detected".to_string()
+            }
+        ),
+    );
+    RuntimeInstallResult {
+        changed: after.installed && !before.installed,
+        status: after,
+        log,
+    }
+}
+
 /// Extensions common PHP apps (WordPress, Laravel, Typecho...) need. Installed one
 /// at a time after PHP itself, so a name missing from one distro's repos does not
 /// fail the whole install.
@@ -428,6 +757,12 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
         });
     }
 
+    match kind {
+        "rust" => return Ok(install_rust(spec, before)),
+        "dotnet" => return Ok(install_dotnet(spec, before)),
+        _ => {}
+    }
+
     let manager = package_manager();
     let packages = packages_for(spec, manager);
     if packages.is_empty() || manager == "none" {
@@ -496,6 +831,14 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
 
     if kind == "php" && detect_one(spec).installed {
         finish_php_install(manager, &mut log);
+    }
+    // Debian ranks lua5.1 (pulled in by luarocks) above lua5.4: make `lua`
+    // the version that was asked for.
+    if kind == "lua" && manager == "apt-get" && Path::new("/usr/bin/lua5.4").exists() {
+        for (group, target) in [("lua-interpreter", "/usr/bin/lua5.4"), ("lua-compiler", "/usr/bin/luac5.4")] {
+            let _ = shell::run_privileged("update-alternatives", &["--set", group, target]);
+        }
+        log.push_str("[LinxPanel] lua now points to Lua 5.4\n");
     }
 
     let after = detect_one(spec);
@@ -656,5 +999,28 @@ mod package_tests {
     fn waits_for_dpkg_lock() {
         let mut log = String::new();
         assert!(super::install_packages(&["sl"], &mut log), "{log}");
+    }
+}
+
+#[cfg(test)]
+mod rust_tests {
+    use super::*;
+
+    #[test]
+    fn rust_wrappers_set_the_homes() {
+        let plain = rust_wrapper_script("/opt/rust", "cargo", None);
+        assert!(plain.starts_with("#!/bin/sh\n"));
+        assert!(plain.contains("export RUSTUP_HOME=\"${RUSTUP_HOME:-/opt/rust/rustup}\""));
+        assert!(plain.contains("exec \"/opt/rust/cargo/bin/cargo\" \"$@\""));
+        assert!(!plain.contains("RUSTUP_DIST_SERVER"));
+        let mirrored = rust_wrapper_script("/opt/rust", "rustup", Some("https://rsproxy.cn"));
+        assert!(mirrored.contains("RUSTUP_UPDATE_ROOT:-https://rsproxy.cn/rustup"));
+    }
+
+    #[test]
+    fn versions_skip_banners() {
+        assert_eq!(extract_version("Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio"), "5.4.6");
+        assert_eq!(extract_version("ruby 3.3.6 (2024-11-05 revision 75015d4c1f) [x86_64-linux]"), "3.3.6");
+        assert_eq!(extract_version("10.0.114"), "10.0.114");
     }
 }

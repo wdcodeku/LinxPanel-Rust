@@ -122,6 +122,7 @@
                 <span class="lp-pill__dot"></span>{{ row.running ? t('rt.running') : t('rt.stopped') }}
               </span>
               <span v-if="row.running && row.pid" class="lp-dim pid">pid {{ row.pid }}</span>
+              <div v-if="row.run_user" class="lp-dim restarts">{{ t('rt.runsAs', { user: row.run_user }) }}</div>
               <div v-if="row.restarts" class="lp-dim restarts">{{ t('rt.restarts', { n: row.restarts }) }}</div>
             </template>
           </el-table-column>
@@ -136,12 +137,12 @@
                 <el-button link size="small" :loading="busy === row.id" @click="action(row, 'stop')">{{ t('rt.stop') }}</el-button>
               </template>
               <el-button
-                v-if="['python', 'node', 'php'].includes(row.runtime)"
+                v-if="DEPS_RUNTIMES.includes(row.runtime)"
                 link
                 size="small"
                 :loading="busy === `deps-${row.id}`"
                 @click="installDeps(row)"
-              >{{ t('rt.installDeps') }}</el-button>
+              >{{ BUILD_RUNTIMES.includes(row.runtime) ? t('rt.build') : t('rt.installDeps') }}</el-button>
               <el-button link size="small" @click="openLogs(row)">{{ t('rt.logs') }}</el-button>
               <el-button link size="small" @click="openEdit(row)">{{ t('cron.edit') }}</el-button>
               <el-button link type="danger" size="small" @click="remove(row)">{{ t('delete') }}</el-button>
@@ -216,6 +217,16 @@
           <span class="field-hint">{{ t('rt.envHint') }}</span>
         </el-form-item>
 
+        <el-form-item :label="t('rt.runUser')">
+          <div class="inline-row">
+            <el-select v-model="form.run_user" filterable clearable :placeholder="t('rt.runUserRoot')" class="run-user">
+              <el-option v-for="u in systemUsers" :key="u" :label="u" :value="u" />
+            </el-select>
+            <el-checkbox v-if="form.run_user && form.run_user !== 'root'" v-model="form.chown_work_dir">{{ t('rt.chownWorkDir') }}</el-checkbox>
+          </div>
+          <span class="field-hint">{{ t('rt.runUserHint') }}</span>
+        </el-form-item>
+
         <el-form-item>
           <el-switch v-model="form.autostart" :active-text="t('rt.autostart')" />
           <span class="field-hint field-hint--inline">{{ t('rt.autostartHint') }}</span>
@@ -260,7 +271,7 @@ import { FolderOpened, Monitor, Plus, Refresh } from '@element-plus/icons-vue'
 import DirPicker from '@/components/DirPicker.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
-  installAppDeps, installRuntime, listFiles, mkdirApi, pathState, updateApp,
+  getOwnerChoices, installAppDeps, installRuntime, listFiles, mkdirApi, pathState, updateApp,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatDuration } from '@/utils/format'
@@ -287,6 +298,7 @@ type AppRow = {
   env: string
   port: number
   autostart: boolean
+  run_user: string
   running: boolean
   pid: number | null
   started_at: number | null
@@ -296,7 +308,7 @@ type AppRow = {
 
 const { t } = useI18n()
 
-type LangKey = 'php' | 'node' | 'python' | 'java' | 'go'
+type LangKey = 'php' | 'node' | 'python' | 'java' | 'go' | 'dotnet' | 'rust' | 'ruby' | 'lua'
 const LANG_RUNTIMES: Record<LangKey, string[]> = {
   php: ['php'],
   node: ['node'],
@@ -304,7 +316,18 @@ const LANG_RUNTIMES: Record<LangKey, string[]> = {
   java: ['java'],
   // Compiled Go programs and any other binary run the same way.
   go: ['go', 'binary'],
+  dotnet: ['dotnet'],
+  rust: ['rust'],
+  ruby: ['ruby'],
+  lua: ['lua'],
 }
+const LANG_LABELS: Record<LangKey, string> = {
+  php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go',
+  dotnet: 'C# / .NET', rust: 'Rust', ruby: 'Ruby', lua: 'Lua',
+}
+/** Runtimes whose dependency step builds the app (vs. only fetching packages). */
+const BUILD_RUNTIMES = ['dotnet', 'rust']
+const DEPS_RUNTIMES = ['python', 'node', 'php', 'dotnet', 'rust', 'ruby', 'lua']
 const LANG_KEY = 'lp.runtime.lang'
 const route = useRoute()
 const router = useRouter()
@@ -353,6 +376,10 @@ const appRuntimes = computed(() => [
   { value: 'go', label: t('rt.goBinary') },
   { value: 'binary', label: t('rt.binary') },
   { value: 'php', label: 'PHP (CLI)' },
+  { value: 'dotnet', label: 'C# / .NET' },
+  { value: 'rust', label: 'Rust' },
+  { value: 'ruby', label: 'Ruby' },
+  { value: 'lua', label: 'Lua' },
 ])
 
 const languages = computed(() =>
@@ -360,7 +387,7 @@ const languages = computed(() =>
     const list = apps.value.filter((app) => LANG_RUNTIMES[key].includes(app.runtime))
     return {
       key,
-      label: { php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go' }[key],
+      label: LANG_LABELS[key],
       runtime: runtimes.value.find((r) => r.kind === key),
       apps: list,
       running: list.filter((app) => app.running).length,
@@ -379,7 +406,7 @@ function runtimeLabel(kind: string) {
 }
 
 function logoText(kind: string) {
-  return { php: 'php', node: 'js', python: 'py', java: 'jv', go: 'go' }[kind] || kind.slice(0, 2)
+  return ({ php: 'php', node: 'js', python: 'py', java: 'jv', go: 'go', dotnet: 'C#', rust: 'rs', ruby: 'rb', lua: 'lua' } as Record<string, string>)[kind] || kind.slice(0, 2)
 }
 
 function uptimeOf(row: AppRow) {
@@ -465,6 +492,8 @@ const form = reactive({
   // Optional: most programs (Go / binaries especially) choose their own.
   port: undefined as number | undefined,
   autostart: true,
+  run_user: '',
+  chown_work_dir: false,
 })
 
 const entryLabel = computed(() =>
@@ -473,13 +502,33 @@ const entryLabel = computed(() =>
     : t('rt.entry'),
 )
 const entryHint = computed(() =>
-  ({ python: t('rt.entryHintPython'), node: t('rt.entryHintNode') } as Record<string, string>)[form.runtime] || '',
+  ({
+    python: t('rt.entryHintPython'),
+    node: t('rt.entryHintNode'),
+    dotnet: t('rt.entryHintDotnet'),
+    rust: t('rt.entryHintRust'),
+    ruby: t('rt.entryHintRuby'),
+    lua: t('rt.entryHintLua'),
+  } as Record<string, string>)[form.runtime] || '',
 )
+
+// System users the app may run as (www-data for files PHP sites own ...).
+const systemUsers = ref<string[]>([])
+async function loadSystemUsers() {
+  if (systemUsers.value.length) return
+  const res: any = await getOwnerChoices().catch(() => null)
+  if (res?.success) systemUsers.value = res.data.users || []
+}
 
 // --- Project dependencies (the task window shows the live log) ---
 async function installDeps(row: AppRow) {
   try {
-    await ElMessageBox.confirm(t('rt.confirmDeps', { name: row.name }), t('rt.installDeps'), { type: 'info' })
+    const building = BUILD_RUNTIMES.includes(row.runtime)
+    await ElMessageBox.confirm(
+      t(building ? 'rt.confirmBuild' : 'rt.confirmDeps', { name: row.name }),
+      building ? t('rt.build') : t('rt.installDeps'),
+      { type: 'info' },
+    )
   } catch {
     return
   }
@@ -502,6 +551,10 @@ const entryPlaceholder = computed(
       go: './server',
       binary: './myapp',
       php: 'worker.php',
+      dotnet: 'publish/MyApp.dll',
+      rust: 'target/release/myapp',
+      ruby: 'app.rb / bundle exec puma',
+      lua: 'main.lua',
     })[form.runtime] || 'server.js',
 )
 
@@ -517,30 +570,46 @@ const ENTRY_EXTENSIONS: Record<string, string[]> = {
   python: ['.py'],
   java: ['.jar'],
   php: ['.php'],
+  dotnet: ['.dll'],
+  ruby: ['.rb'],
+  lua: ['.lua'],
+}
+/** Where builds put their output, searched as well as the project root. */
+const ENTRY_DIRS: Record<string, string[]> = {
+  dotnet: ['publish', ''],
+  rust: ['target/release'],
+  java: ['', 'target', 'build/libs'],
 }
 function suggestEntries(query: string, done: (items: { value: string }[]) => void) {
   void entryCandidates(query).then(done)
 }
 async function entryCandidates(query: string): Promise<{ value: string }[]> {
-  const dir = form.work_dir.trim()
-  if (!dir.startsWith('/')) return []
-  try {
-    const state: any = await pathState(dir)
-    if (!state.success || !state.data.is_dir) return []
-    const res: any = await listFiles(dir)
-    if (!res.success) return []
-    const exts = ENTRY_EXTENSIONS[form.runtime]
-    const q = query.trim().toLowerCase()
-    return (res.data as { name: string; is_dir: boolean; permissions: string }[])
-      .filter((f) => !f.is_dir)
-      // Go / binaries: anything executable.
-      .filter((f) => (exts ? exts.some((e) => f.name.toLowerCase().endsWith(e)) : /[1357]/.test(String(f.permissions))))
-      .filter((f) => !q || f.name.toLowerCase().includes(q))
-      .slice(0, 50)
-      .map((f) => ({ value: exts ? f.name : `./${f.name}` }))
-  } catch {
-    return []
+  const root = form.work_dir.trim().replace(/\/+$/, '')
+  if (!root.startsWith('/')) return []
+  const exts = ENTRY_EXTENSIONS[form.runtime]
+  const q = query.trim().toLowerCase()
+  const out: { value: string }[] = []
+  for (const sub of ENTRY_DIRS[form.runtime] || ['']) {
+    const dir = sub ? `${root}/${sub}` : root
+    try {
+      const state: any = await pathState(dir)
+      if (!state.success || !state.data.is_dir) continue
+      const res: any = await listFiles(dir)
+      if (!res.success) continue
+      for (const f of res.data as { name: string; is_dir: boolean; permissions: string }[]) {
+        if (f.is_dir) continue
+        // Compiled programs (Go, Rust, binaries): anything executable.
+        const match = exts ? exts.some((e) => f.name.toLowerCase().endsWith(e)) : /[1357]/.test(String(f.permissions))
+        if (!match || (q && !f.name.toLowerCase().includes(q))) continue
+        const rel = sub ? `${sub}/${f.name}` : f.name
+        out.push({ value: exts ? rel : `./${rel}` })
+      }
+    } catch {
+      // Not readable: no suggestions from there.
+    }
+    if (out.length >= 50) break
   }
+  return out.slice(0, 50)
 }
 
 // --- Directory: file manager / terminal / picker ---
@@ -568,7 +637,10 @@ function openCreate() {
     env: '',
     port: undefined,
     autostart: true,
+    run_user: '',
+    chown_work_dir: false,
   })
+  void loadSystemUsers()
   formVisible.value = true
 }
 
@@ -583,7 +655,10 @@ function openEdit(row: AppRow) {
     env: row.env,
     port: row.port > 0 ? row.port : undefined,
     autostart: row.autostart,
+    run_user: row.run_user || '',
+    chown_work_dir: false,
   })
+  void loadSystemUsers()
   formVisible.value = true
 }
 
@@ -762,7 +837,7 @@ onUnmounted(() => {
 /* ---------- Language tabs ---------- */
 .langs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: var(--lp-3);
   margin-bottom: var(--lp-4);
 }
@@ -896,6 +971,10 @@ onUnmounted(() => {
   &[data-kind='python'] { background: rgba(55, 118, 171, 0.16); color: #3776ab; }
   &[data-kind='java'] { background: rgba(215, 99, 60, 0.16); color: #d7633c; }
   &[data-kind='go'] { background: rgba(0, 173, 216, 0.16); color: #00add8; }
+  &[data-kind='dotnet'] { background: rgba(81, 43, 212, 0.14); color: #6a45e0; }
+  &[data-kind='rust'] { background: rgba(183, 65, 14, 0.14); color: #b7410e; }
+  &[data-kind='ruby'] { background: rgba(204, 52, 45, 0.14); color: #cc342d; }
+  &[data-kind='lua'] { background: rgba(0, 0, 128, 0.12); color: #3b4cc0; }
 }
 
 /* ---------- App table ---------- */
@@ -915,6 +994,7 @@ onUnmounted(() => {
 .dir-link:hover { color: var(--lp-accent); text-decoration: underline; text-underline-offset: 2px; }
 .dir-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0; }
 .dir-icon:hover { color: var(--lp-accent); background: var(--lp-accent-soft); }
+.run-user { flex: 1; min-width: 0; }
 .inline-row { display: flex; gap: var(--lp-2); width: 100%; }
 .inline-row .el-input { flex: 1; min-width: 0; }
 .dir-picker-shell {

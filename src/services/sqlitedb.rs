@@ -166,7 +166,7 @@ async fn save_registered(pool: &SqlitePool, files: &[String]) -> Result<(), Stri
 }
 
 /// Only registered files can be inspected, backed up or restored.
-async fn registered_path(pool: &SqlitePool, raw: &str, data_dir: &Path) -> Result<PathBuf, String> {
+pub(super) async fn registered_path(pool: &SqlitePool, raw: &str, data_dir: &Path) -> Result<PathBuf, String> {
     let path = check_path(raw, data_dir)?;
     let text = path.display().to_string();
     if registered(pool).await.contains(&text) {
@@ -189,28 +189,25 @@ async fn add_registered(pool: &SqlitePool, path: &Path) -> Result<(), String> {
 
 // ===== Connections =====
 
-fn options(path: &Path, read_only: bool) -> SqliteConnectOptions {
-    let mut options = SqliteConnectOptions::new()
+/// Connection options that change nothing about the file: no journal mode,
+/// no foreign-key enforcement beyond what the application itself uses.
+pub(super) fn options(path: &Path, read_only: bool) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
         .filename(path)
         .read_only(read_only)
         .busy_timeout(Duration::from_secs(5))
         .foreign_keys(false)
-        .disable_statement_logging();
-    if !read_only {
-        // Never switch an application's database to another journal mode.
-        options = options.journal_mode(SqliteJournalMode::Delete);
-    }
-    options
+        .disable_statement_logging()
 }
 
-async fn open_read_only(path: &Path) -> Result<SqliteConnection, String> {
+pub(super) async fn open_read_only(path: &Path) -> Result<SqliteConnection, String> {
     options(path, true)
         .connect()
         .await
         .map_err(|e| format!("Cannot open {}: {}", path.display(), e))
 }
 
-fn quote_ident(name: &str) -> String {
+pub(super) fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -359,6 +356,7 @@ pub async fn create(pool: &SqlitePool, data_dir: &Path, raw: &str) -> Result<Sql
     }
     let parent = path.parent().ok_or("Invalid path")?.to_path_buf();
     let mut conn = options(&path, false)
+        .journal_mode(SqliteJournalMode::Delete)
         .create_if_missing(true)
         .connect()
         .await
