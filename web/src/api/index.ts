@@ -439,3 +439,12 @@ export const chmodApi = (path: string, mode: string, recursive = false) =>
 export const chownApi = (path: string, user: string, group: string, recursive = false) =>
   request.post('/files/chown', { path, user, group, recursive }, { timeout: 10 * 60 * 1000 })
 export const getOwnerChoices = () => request.get('/files/owners')
+const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+/** Archive operations and copy / move run as tasks (their log shows in the task window). */
+export const extractArchive = (path: string, dest: string, overwrite: boolean) =>
+  runTask(t('task.extract', { name: fileName(path) }), () => request.post('/files/extract', { path, dest, overwrite }), { closeOnSuccess: true })
+export const compressFiles = (dir: string, names: string[], name: string, format: string) =>
+  runTask(t('task.compress', { name }), () => request.post('/files/compress', { dir, names, name, format }), { closeOnSuccess: true })
+export const transferFiles = (sources: string[], dest: string, mode: 'copy' | 'move', conflict: string) =>
+  runTask(t(mode === 'move' ? 'task.move' : 'task.copy', { n: sources.length }), () =>
+    request.post('/files/transfer', { sources, dest, mode, conflict }), { closeOnSuccess: true })

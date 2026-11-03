@@ -34,12 +34,28 @@
         <input v-else ref="pathInputRef" v-model="pathInputVal" class="fm-path-input"
           @keyup.enter="confirmPath" @keyup.escape="editingPath = false" @blur="editingPath = false" />
       </div>
+      <div v-if="clipboard" class="fm-clip">
+        <el-icon><Scissor v-if="clipboard.mode === 'cut'" /><DocumentCopy v-else /></el-icon>
+        <span>{{ t(clipboard.mode === 'cut' ? 'fm.clipCut' : 'fm.clipCopy', { n: clipboard.paths.length }) }}</span>
+        <el-button size="small" type="primary" link :disabled="isVirtualDriveView" @click="paste()">{{ t('fm.pasteHere') }}</el-button>
+        <el-icon class="fm-clip__close" :title="t('cancel')" @click="clipboard = null"><Close /></el-icon>
+      </div>
       <div class="fm-actions">
         <el-tooltip :content="t('fm.newFolder')" :show-after="400"><el-button size="small" :icon="FolderAdd" @click="showMkdir = true" /></el-tooltip>
         <el-tooltip :content="t('fm.newFile')" :show-after="400"><el-button size="small" :icon="DocumentAdd" @click="showNewFile = true" /></el-tooltip>
-        <el-tooltip :content="t('fm.uploadFiles')" :show-after="400">
-          <el-button size="small" :icon="Upload" :loading="uploadingFiles" :disabled="isVirtualDriveView" @click="triggerUpload" />
-        </el-tooltip>
+        <el-dropdown trigger="click" :disabled="isVirtualDriveView" @command="onUploadCommand">
+          <el-button size="small" :icon="Upload" :loading="uploadingFiles" :disabled="isVirtualDriveView" :title="t('fm.uploadFiles')" />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="files"><el-icon><Document /></el-icon>{{ t('fm.uploadFiles') }}</el-dropdown-item>
+              <el-dropdown-item command="folder"><el-icon><Folder /></el-icon>{{ t('fm.uploadFolder') }}</el-dropdown-item>
+              <el-dropdown-item command="exec" divided>
+                <el-checkbox :model-value="uploadExecutable" size="small" class="fm-exec-check" @click.prevent />
+                {{ t('fm.uploadExec') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-divider direction="vertical" />
         <el-tooltip :content="viewMode === 'list' ? t('gridView') : t('listView')" :show-after="400">
           <el-button size="small" @click="toggleView"><el-icon :size="14"><Grid v-if="viewMode === 'list'" /><List v-else /></el-icon></el-button>
@@ -47,6 +63,7 @@
         <el-tooltip :content="t('terminal')" :show-after="400"><el-button size="small" @click="toggleTerminal"><el-icon :size="14"><Monitor /></el-icon></el-button></el-tooltip>
       </div>
       <input ref="uploadInputRef" class="fm-upload-input" type="file" multiple @change="onUploadInputChange" />
+      <input ref="folderInputRef" class="fm-upload-input" type="file" webkitdirectory multiple @change="onFolderInputChange" />
     </div>
 
     <div
@@ -158,34 +175,41 @@
         <div class="fm-uploads__head" @click="uploadPanelOpen = !uploadPanelOpen">
           <el-icon :size="15"><Upload /></el-icon>
           <span class="fm-uploads__title">
-            {{ uploadActive ? t('fm.uploadingN', { done: uploadDoneCount, total: uploadQueue.filter((u) => u.status !== 'canceled').length }) : t('fm.uploadFinished', { n: uploadDoneCount }) }}
+            <template v-if="uploadActive">{{ t('fm.uploadingN', { done: uploader.doneCount.value, total: uploadQueue.filter((u) => u.status !== 'canceled').length }) }}</template>
+            <template v-else-if="uploader.failedCount.value">{{ t('fm.uploadFailedN', { n: uploader.failedCount.value }) }}</template>
+            <template v-else>{{ t('fm.uploadFinished', { n: uploader.doneCount.value }) }}</template>
           </span>
-          <span class="fm-uploads__pct lp-num">{{ uploadOverallPercent }}%</span>
-          <el-button v-if="uploadActive" link size="small" @click.stop="cancelAllUploads">{{ t('fm.cancelAll') }}</el-button>
-          <el-button v-else link size="small" @click.stop="clearFinishedUploads">{{ t('close') }}</el-button>
+          <span class="fm-uploads__pct lp-num">
+            <template v-if="uploadActive && uploader.speed.value">{{ fmtSize(uploader.speed.value) }}/s · </template>{{ uploader.percent.value }}%
+          </span>
+          <el-button v-if="uploader.failedCount.value && !uploadActive" link size="small" type="primary" @click.stop="uploader.retryFailed">{{ t('fm.retryAll') }}</el-button>
+          <el-button v-if="uploadActive" link size="small" @click.stop="uploader.cancelAll">{{ t('fm.cancelAll') }}</el-button>
+          <el-button v-else link size="small" @click.stop="uploader.clearFinished">{{ t('close') }}</el-button>
           <el-icon class="fm-uploads__chevron" :class="{ open: uploadPanelOpen }"><CaretTop /></el-icon>
         </div>
-        <el-progress v-if="uploadActive" :percentage="uploadOverallPercent" :show-text="false" :stroke-width="3" class="fm-uploads__bar" />
+        <el-progress v-if="uploadActive" :percentage="uploader.percent.value" :show-text="false" :stroke-width="3" class="fm-uploads__bar" />
         <div v-show="uploadPanelOpen" class="fm-uploads__list">
-          <div v-for="u in uploadQueue" :key="u.id" class="fm-upload" :class="`is-${u.status}`">
+          <div v-for="u in visibleUploads" :key="u.id" class="fm-upload" :class="`is-${u.status}`">
             <div class="fm-upload__line">
-              <span class="fm-upload__name" :title="`${u.dir}/${u.file.name}`">{{ u.file.name }}</span>
+              <span class="fm-upload__name" :title="`${u.dir}/${u.name}`">{{ u.name }}</span>
               <span class="fm-upload__meta lp-num">
                 <template v-if="u.status === 'uploading'">{{ fmtSize(u.loaded) }} / {{ fmtSize(u.file.size) }} · {{ fmtSize(u.speed) }}/s</template>
-                <template v-else-if="u.status === 'failed'">{{ u.error }}</template>
+                <template v-else-if="u.status === 'retrying'">{{ t('fm.uploadRetrying', { n: u.attempt + 1 }) }}</template>
+                <template v-else-if="u.status === 'failed'">{{ uploadErrorText(u) }}</template>
                 <template v-else>{{ fmtSize(u.file.size) }} · {{ t(`fm.upload_${u.status}`) }}</template>
               </span>
-              <el-button v-if="u.status === 'uploading' || u.status === 'waiting'" link size="small" :icon="Close" @click="cancelUpload(u)" />
-              <el-button v-else-if="u.status === 'failed' || u.status === 'canceled'" link size="small" :icon="RefreshRight" @click="retryUpload(u)" />
+              <el-button v-if="['uploading', 'waiting', 'retrying'].includes(u.status)" link size="small" :icon="Close" :title="t('cancel')" @click="uploader.cancel(u)" />
+              <el-button v-else-if="u.status === 'failed' || u.status === 'canceled'" link size="small" :icon="RefreshRight" :title="t('fm.retry')" @click="uploader.retry(u)" />
             </div>
             <el-progress
-              v-if="u.status === 'uploading' || u.status === 'failed'"
+              v-if="['uploading', 'retrying', 'failed'].includes(u.status)"
               :percentage="uploadPercent(u)"
-              :status="u.status === 'failed' ? 'exception' : undefined"
+              :status="u.status === 'failed' ? 'exception' : u.status === 'retrying' ? 'warning' : undefined"
               :stroke-width="4"
               :show-text="false"
             />
           </div>
+          <div v-if="uploadHidden > 0" class="fm-upload fm-upload--more">{{ t('fm.uploadMore', { n: uploadHidden }) }}</div>
         </div>
       </div>
 
@@ -220,6 +244,12 @@
           <div class="fm-ctx-item" @click="ctxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
           <div class="fm-ctx-item" :class="{ 'is-disabled': ctxDownloadDisabled }" @click="ctxAction('download')"><el-icon><Download /></el-icon> {{ t('fm.download') }}</div>
           <div class="fm-ctx-sep"></div>
+          <div class="fm-ctx-item" @click="ctxAction('clipCopy')"><el-icon><DocumentCopy /></el-icon> {{ t('fm.copy') }}<span class="fm-ctx-key">Ctrl+C</span></div>
+          <div class="fm-ctx-item" @click="ctxAction('clipCut')"><el-icon><Scissor /></el-icon> {{ t('fm.cut') }}<span class="fm-ctx-key">Ctrl+X</span></div>
+          <div v-if="clipboard && ctxFile?.is_dir" class="fm-ctx-item" @click="ctxAction('pasteInto')"><el-icon><DocumentAdd /></el-icon> {{ t('fm.pasteInto') }}</div>
+          <div v-if="ctxFile && !ctxFile.is_dir && isArchive(ctxFile.name)" class="fm-ctx-item" @click="ctxAction('extract')"><el-icon><Files /></el-icon> {{ t('fm.extract') }}</div>
+          <div class="fm-ctx-item" @click="ctxAction('compress')"><el-icon><Box /></el-icon> {{ t('fm.compress') }}</div>
+          <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="ctxAction('terminal')"><el-icon><Monitor /></el-icon> {{ t('fm.openTerminal') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('chmod')"><el-icon><Lock /></el-icon> {{ t('fm.chmod') }}</div>
           <div class="fm-ctx-item" @click="ctxAction('props')"><el-icon><InfoFilled /></el-icon> {{ t('fm.properties') }}</div>
@@ -236,10 +266,14 @@
           <div class="fm-ctx-sep"></div>
           <div class="fm-ctx-item" @click="bgCtxAction('terminal')"><el-icon><Monitor /></el-icon> {{ t('fm.openInTerminal') }}</div>
           <div class="fm-ctx-item" @click="bgCtxAction('refresh')"><el-icon><RefreshRight /></el-icon> {{ t('refresh') }}</div>
+          <div v-if="clipboard" class="fm-ctx-item" @click="bgCtxAction('paste')"><el-icon><DocumentAdd /></el-icon> {{ t('fm.pasteN', { n: clipboard.paths.length }) }}<span class="fm-ctx-key">Ctrl+V</span></div>
           <template v-if="selectedSet.size > 0">
             <div class="fm-ctx-sep"></div>
             <div class="fm-ctx-item" @click="bgCtxAction('copy')"><el-icon><CopyDocument /></el-icon> {{ t('fm.copyPath') }}</div>
             <div class="fm-ctx-item" @click="bgCtxAction('download')"><el-icon><Download /></el-icon> {{ t('fm.download') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('clipCopy')"><el-icon><DocumentCopy /></el-icon> {{ t('fm.copy') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('clipCut')"><el-icon><Scissor /></el-icon> {{ t('fm.cut') }}</div>
+            <div class="fm-ctx-item" @click="bgCtxAction('compress')"><el-icon><Box /></el-icon> {{ t('fm.compress') }}</div>
             <div class="fm-ctx-item" @click="bgCtxAction('chmod')"><el-icon><Lock /></el-icon> {{ t('fm.chmod') }}</div>
             <div class="fm-ctx-item" @click="bgCtxAction('props')"><el-icon><InfoFilled /></el-icon> {{ t('fm.properties') }}</div>
             <div class="fm-ctx-item fm-ctx-danger" @click="bgCtxAction('delete')"><el-icon><Delete /></el-icon> {{ t('delete') }}</div>
@@ -290,6 +324,54 @@
       <template #footer><el-button @click="showRename = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doRename">{{ t('ok') }}</el-button></template>
     </el-dialog>
     <PermissionDialog v-model="showChmod" :targets="chmodItems" @done="loadFiles" />
+
+    <el-dialog v-model="pasteDialog" :title="t('fm.pasteConflictTitle')" width="460px" append-to-body>
+      <p class="fm-dialog-text">{{ t('fm.pasteConflictText', { n: pasteClashes.length, names: pasteClashes.slice(0, 3).join(', ') }) }}</p>
+      <el-radio-group v-model="pasteConflict" class="fm-radio-col">
+        <el-radio value="rename">{{ t('fm.conflictRename') }}</el-radio>
+        <el-radio value="overwrite">{{ t('fm.conflictOverwrite') }}</el-radio>
+        <el-radio value="skip">{{ t('fm.conflictSkip') }}</el-radio>
+      </el-radio-group>
+      <template #footer>
+        <el-button @click="pasteDialog = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" @click="doPaste(pasteConflict)">{{ t('ok') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="compressDialog" :title="t('fm.compress')" width="480px" append-to-body>
+      <p class="fm-dialog-text">{{ compressForm.names.length === 1 ? compressForm.names[0] : t('fm.batchTargetN', { n: compressForm.names.length }) }}</p>
+      <el-form label-position="top" @submit.prevent="doCompress">
+        <el-form-item :label="t('fm.archiveFormat')">
+          <el-radio-group v-model="compressForm.format">
+            <el-radio-button value="zip">zip</el-radio-button>
+            <el-radio-button value="tar.gz">tar.gz</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item :label="t('fm.archiveName')">
+          <el-input v-model="compressForm.name" class="lp-mono" @keyup.enter="doCompress" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="compressDialog = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="compressing" @click="doCompress">{{ t('fm.compress') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="extractDialog" :title="t('fm.extract')" width="520px" append-to-body>
+      <p class="fm-dialog-text lp-mono">{{ fileNameOfPath(extractForm.path) }}</p>
+      <el-form label-position="top" @submit.prevent="doExtract">
+        <el-form-item :label="t('fm.extractTo')">
+          <el-input v-model="extractForm.dest" class="lp-mono" />
+        </el-form-item>
+        <el-checkbox v-model="extractForm.intoFolder">{{ t('fm.extractIntoFolder', { name: extractBase }) }}</el-checkbox>
+        <el-checkbox v-model="extractForm.overwrite">{{ t('fm.extractOverwrite') }}</el-checkbox>
+        <p class="fm-dialog-hint">{{ t('fm.extractResult') }} <span class="lp-mono">{{ extractTarget }}</span></p>
+      </el-form>
+      <template #footer>
+        <el-button @click="extractDialog = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="extracting" @click="doExtract">{{ t('fm.extract') }}</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="showProps" :title="t('fm.fileProps')" width="450px" v-drag :modal="false" :close-on-click-modal="false">
       <el-descriptions :column="1" border size="small">
         <template v-if="!propsData.is_batch">
@@ -321,10 +403,12 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from
 import { usePage } from '@/utils/page'
 import { useRoute } from 'vue-router'
 import PermissionDialog from '@/components/PermissionDialog.vue'
+import { createUploader, droppedFiles, pickedFolderFiles, type UploadItem } from '@/utils/uploader'
+import { localizeApiMessage } from '@/utils/request'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
-import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, uploadFileApi, mkdirApi, pathState, deletePathApi, renamePathApi, fileInfo } from '@/api'
+import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, mkdirApi, pathState, extractArchive, compressFiles, transferFiles, deletePathApi, renamePathApi, fileInfo } from '@/api'
 import { useI18n } from '@/i18n'
 import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -372,6 +456,7 @@ const editingPath = ref(false)
 const pathInputVal = ref('')
 const pathInputRef = ref<HTMLInputElement>()
 const uploadInputRef = ref<HTMLInputElement>()
+const folderInputRef = ref<HTMLInputElement>()
 const uploadingFiles = ref(false)
 const uploadDragActive = ref(false)
 let uploadDragDepth = 0
@@ -647,46 +732,60 @@ function triggerUpload() {
   uploadInputRef.value?.click()
 }
 
-// --- Upload queue: one file per request, with progress, speed and cancel ---
-type UploadItem = {
-  id: number
-  file: File
-  dir: string
-  loaded: number
-  speed: number
-  status: 'waiting' | 'uploading' | 'done' | 'failed' | 'canceled'
-  error: string
-  controller?: AbortController
-}
-let uploadSeq = 0
-const uploadQueue = ref<UploadItem[]>([])
+// --- Uploads: resumable chunks, folders, retries (see utils/uploader) ---
+const UPLOAD_EXEC_KEY = 'fm_upload_exec'
+// Uploaded files are executable by default (755): uploaded programs and
+// scripts run without a chmod; switch off for plain 644.
+const uploadExecutable = ref(localStorage.getItem(UPLOAD_EXEC_KEY) !== '0')
+watch(uploadExecutable, (on) => {
+  try { localStorage.setItem(UPLOAD_EXEC_KEY, on ? '1' : '0') } catch { /* private mode */ }
+})
 const uploadPanelOpen = ref(true)
-const uploadActive = computed(() => uploadQueue.value.some((u) => u.status === 'waiting' || u.status === 'uploading'))
-const uploadDoneCount = computed(() => uploadQueue.value.filter((u) => u.status === 'done').length)
-const uploadTotalBytes = computed(() => uploadQueue.value.filter((u) => u.status !== 'canceled').reduce((n, u) => n + u.file.size, 0))
-const uploadLoadedBytes = computed(() => uploadQueue.value.filter((u) => u.status !== 'canceled').reduce((n, u) => n + (u.status === 'done' ? u.file.size : u.loaded), 0))
-const uploadOverallPercent = computed(() => uploadTotalBytes.value ? Math.min(100, Math.round((uploadLoadedBytes.value / uploadTotalBytes.value) * 100)) : 100)
-let uploadRunning = false
+const uploader = createUploader((item) => {
+  const top = item.name.split('/')[0]
+  if (normPath(item.dir) === normPath(currentPath.value) && top) scheduleUploadRefresh()
+})
+const uploadQueue = uploader.queue
+const uploadActive = uploader.active
+watch(uploadActive, (on) => { uploadingFiles.value = on })
+/** Large folder uploads: show what matters, not thousands of rows. */
+const visibleUploads = computed(() => {
+  const list = uploadQueue
+  const urgent = list.filter((u) => u.status === 'uploading' || u.status === 'retrying' || u.status === 'failed')
+  const waiting = list.filter((u) => u.status === 'waiting').slice(0, 20)
+  const finished = list.filter((u) => u.status === 'done' || u.status === 'canceled').slice(-20)
+  return [...urgent, ...waiting, ...finished]
+})
+const uploadHidden = computed(() => uploadQueue.length - visibleUploads.value.length)
 
 function uploadPercent(item: UploadItem) {
   if (item.status === 'done') return 100
   return item.file.size ? Math.min(100, Math.floor((item.loaded / item.file.size) * 100)) : 0
 }
 
-async function uploadPickedFiles(fileList: File[] | FileList) {
-  const picked = Array.from(fileList || [])
-  if (picked.length === 0) return
+function uploadErrorText(item: UploadItem) {
+  if (item.error === 'session') return t('fm.uploadSession')
+  if (item.error === 'network') return t('fm.uploadNetwork')
+  return localizeApiMessage(item.error) || t('fm.uploadFailed')
+}
+
+/** Queues files (name = path relative to the current folder). */
+async function queueUploads(entries: { file: File; name: string }[]) {
+  if (entries.length === 0) return
   if (isVirtualDriveView.value) {
     ElMessage.warning(t('fm.uploadNeedDir'))
     return
   }
   const dir = currentPath.value
-  const existing = new Set(files.value.filter((f: any) => !f.is_dir).map((f: any) => f.name))
-  const clashes = picked.filter((f) => existing.has(f.name))
-  if (clashes.length) {
+  const existing = new Map(files.value.map((f: any) => [f.name, f]))
+  const tops = [...new Set(entries.map((e) => e.name.split('/')[0]))]
+  const clashFiles = tops.filter((name) => existing.get(name) && !existing.get(name).is_dir && entries.some((e) => e.name === name))
+  const clashDirs = tops.filter((name) => existing.get(name)?.is_dir && entries.some((e) => e.name.startsWith(`${name}/`)))
+  if (clashFiles.length || clashDirs.length) {
+    const names = [...clashDirs.map((n) => `${n}/`), ...clashFiles]
     try {
       await ElMessageBox.confirm(
-        t('fm.uploadOverwrite', { n: clashes.length, names: clashes.slice(0, 3).map((f) => f.name).join(', ') }),
+        t('fm.uploadOverwrite', { n: names.length, names: names.slice(0, 3).join(', ') }),
         t('fm.uploadFiles'),
         { type: 'warning', confirmButtonText: t('fm.overwrite') },
       )
@@ -694,90 +793,12 @@ async function uploadPickedFiles(fileList: File[] | FileList) {
       return
     }
   }
-  for (const file of picked) {
-    uploadQueue.value.push({ id: ++uploadSeq, file, dir, loaded: 0, speed: 0, status: 'waiting', error: '' })
-  }
+  uploader.add(entries, dir, uploadExecutable.value ? '755' : '644')
   uploadPanelOpen.value = true
-  void runUploadQueue()
 }
 
-async function runUploadQueue() {
-  if (uploadRunning) return
-  uploadRunning = true
-  uploadingFiles.value = true
-  try {
-    for (;;) {
-      const item = uploadQueue.value.find((u) => u.status === 'waiting')
-      if (!item) break
-      await uploadOne(item)
-      if (item.status === 'done' && normPath(item.dir) === normPath(currentPath.value)) scheduleUploadRefresh()
-    }
-  } finally {
-    uploadRunning = false
-    uploadingFiles.value = false
-  }
-  const failed = uploadQueue.value.filter((u) => u.status === 'failed').length
-  if (!failed && uploadQueue.value.every((u) => u.status === 'done' || u.status === 'canceled')) {
-    ElMessage.success(t('fm.uploadedN', { n: uploadDoneCount.value }))
-  }
-}
-
-async function uploadOne(item: UploadItem) {
-  item.status = 'uploading'
-  item.loaded = 0
-  item.error = ''
-  item.controller = new AbortController()
-  let lastAt = performance.now()
-  let lastLoaded = 0
-  try {
-    const res: any = await uploadFileApi(item.dir, item.file, item.controller.signal, (loaded) => {
-      item.loaded = loaded
-      const now = performance.now()
-      if (now - lastAt >= 500) {
-        item.speed = ((loaded - lastLoaded) * 1000) / (now - lastAt)
-        lastAt = now
-        lastLoaded = loaded
-      }
-    })
-    if (res?.success) {
-      item.status = 'done'
-      item.loaded = item.file.size
-    } else {
-      item.status = 'failed'
-      item.error = res?.message || t('fm.uploadFailed')
-    }
-  } catch (err: any) {
-    if ((item.status as UploadItem['status']) === 'canceled' || err?.code === 'ERR_CANCELED') {
-      item.status = 'canceled'
-    } else {
-      item.status = 'failed'
-      item.error = err?.response?.data?.message || err?.message || t('fm.uploadFailed')
-    }
-  } finally {
-    item.controller = undefined
-  }
-}
-
-function cancelUpload(item: UploadItem) {
-  if (item.status === 'uploading') {
-    item.status = 'canceled'
-    item.controller?.abort()
-  } else if (item.status === 'waiting') {
-    item.status = 'canceled'
-  }
-}
-
-function retryUpload(item: UploadItem) {
-  item.status = 'waiting'
-  void runUploadQueue()
-}
-
-function cancelAllUploads() {
-  uploadQueue.value.forEach(cancelUpload)
-}
-
-function clearFinishedUploads() {
-  uploadQueue.value = uploadQueue.value.filter((u) => u.status === 'waiting' || u.status === 'uploading')
+async function uploadPickedFiles(fileList: File[] | FileList) {
+  await queueUploads(Array.from(fileList || []).map((file) => ({ file, name: file.name })))
 }
 
 let uploadRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -786,7 +807,32 @@ function scheduleUploadRefresh() {
   uploadRefreshTimer = setTimeout(() => {
     uploadRefreshTimer = null
     void loadFiles()
-  }, 400)
+  }, 600)
+}
+
+function triggerFolderUpload() {
+  if (isVirtualDriveView.value) {
+    ElMessage.warning(t('fm.uploadNeedDir'))
+    return
+  }
+  folderInputRef.value?.click()
+}
+
+async function onFolderInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const picked = input.files ? pickedFolderFiles(input.files) : []
+  input.value = ''
+  if (!picked.length) {
+    ElMessage.warning(t('fm.folderEmpty'))
+    return
+  }
+  await queueUploads(picked)
+}
+
+function onUploadCommand(command: string) {
+  if (command === 'files') triggerUpload()
+  else if (command === 'folder') triggerFolderUpload()
+  else if (command === 'exec') uploadExecutable.value = !uploadExecutable.value
 }
 
 async function onUploadInputChange(event: Event) {
@@ -798,18 +844,6 @@ async function onUploadInputChange(event: Event) {
 
 function hasDraggedFiles(event: DragEvent) {
   return Array.from(event.dataTransfer?.types || []).includes('Files')
-}
-
-function getDroppedFiles(event: DragEvent) {
-  const dataTransfer = event.dataTransfer
-  if (!dataTransfer) return [] as File[]
-  if (dataTransfer.items?.length) {
-    return Array.from(dataTransfer.items)
-      .filter((item) => item.kind === 'file')
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file)
-  }
-  return Array.from(dataTransfer.files || [])
 }
 
 function resetUploadDragState() {
@@ -850,7 +884,9 @@ async function onUploadDrop(event: DragEvent) {
     ElMessage.warning(t('fm.uploadNeedDir'))
     return
   }
-  await uploadPickedFiles(getDroppedFiles(event))
+  const transfer = event.dataTransfer
+  if (!transfer) return
+  await queueUploads(await droppedFiles(transfer))
 }
 
 async function loadFileRoots() {
@@ -1026,6 +1062,165 @@ function shiftSelect(f: any) {
   for (let i = lo; i <= hi; i++) selectedSet.add(paths[i])
 }
 function selectAll() { sortedVisibleFiles.value.forEach(f => selectedSet.add(f.path)) }
+
+// --- Copy / cut / paste ---
+const ARCHIVE_RE = /\.(zip|jar|war|tar|tgz|tbz2?|txz|tzst|7z|rar|gz)$/i
+function isArchive(name: string) { return ARCHIVE_RE.test(name || '') }
+
+// Kept for the browser session, so a page refresh does not lose it.
+const CLIPBOARD_KEY = 'fm_clipboard'
+function loadClipboard() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(CLIPBOARD_KEY) || 'null')
+    return value && (value.mode === 'copy' || value.mode === 'cut') && Array.isArray(value.paths) ? value : null
+  } catch {
+    return null
+  }
+}
+const clipboard = ref<{ mode: 'copy' | 'cut'; paths: string[] } | null>(props.pickerMode ? null : loadClipboard())
+watch(clipboard, (value) => {
+  if (props.pickerMode) return
+  try {
+    if (value) sessionStorage.setItem(CLIPBOARD_KEY, JSON.stringify(value))
+    else sessionStorage.removeItem(CLIPBOARD_KEY)
+  } catch { /* private mode */ }
+})
+function setClipboard(mode: 'copy' | 'cut', targets: any[]) {
+  const paths = targets.filter((f) => f?.path && !f.is_virtual_drive).map((f) => String(f.path))
+  if (!paths.length) return
+  clipboard.value = { mode, paths }
+  ElMessage.success(t(mode === 'cut' ? 'fm.cutN' : 'fm.clipCopiedN', { n: paths.length }))
+}
+
+const pasteDialog = ref(false)
+const pasteConflict = ref<'rename' | 'overwrite' | 'skip'>('rename')
+const pasteClashes = ref<string[]>([])
+const pasteDest = ref('')
+async function paste(into?: string) {
+  const clip = clipboard.value
+  if (!clip || isVirtualDriveView.value) return
+  const dest = normPath(into || currentPath.value)
+  const sameDir = clip.paths.every((p) => normPath(parentPath(p)) === dest)
+  if (clip.mode === 'cut' && sameDir) {
+    ElMessage.info(t('fm.pasteSameDir'))
+    return
+  }
+  let existing: Set<string>
+  if (dest === normPath(currentPath.value)) {
+    existing = new Set(files.value.map((f: any) => f.name))
+  } else {
+    const res: any = await listFiles(dest).catch(() => null)
+    existing = new Set(res?.success ? res.data.map((f: any) => f.name) : [])
+  }
+  const clashes = sameDir ? [] : clip.paths.map(fileNameOfPath).filter((n) => existing.has(n))
+  pasteDest.value = dest
+  if (clashes.length) {
+    pasteClashes.value = clashes
+    pasteConflict.value = 'rename'
+    pasteDialog.value = true
+    return
+  }
+  await doPaste('rename')
+}
+async function doPaste(conflict: string) {
+  pasteDialog.value = false
+  const clip = clipboard.value
+  if (!clip) return
+  const moving = clip.mode === 'cut'
+  const res: any = await transferFiles(clip.paths, pasteDest.value, moving ? 'move' : 'copy', conflict).catch(() => null)
+  if (res?.success) {
+    if (moving) clipboard.value = null
+    const skipped = Number(res.data?.skipped || 0)
+    ElMessage.success(skipped ? t('fm.pastedSkipped', { n: res.data.files, s: skipped }) : t('fm.pastedN', { n: res.data?.files ?? clip.paths.length }))
+  }
+  await loadFiles()
+}
+
+// --- Compress / extract ---
+const compressDialog = ref(false)
+const compressForm = reactive({ names: [] as string[], name: '', format: 'zip' })
+const compressing = ref(false)
+function archiveExt(format: string) { return format === 'zip' ? '.zip' : '.tar.gz' }
+function openCompress(targets: any[]) {
+  const items = targets.filter((f) => f?.path && !f.is_virtual_drive)
+  if (!items.length) return
+  const names = items.map((f) => String(f.name || fileNameOfPath(f.path)))
+  const folder = fileNameOfPath(currentPath.value) || 'archive'
+  const base = names.length === 1 ? names[0].replace(/\.[^.]+$/, '') || names[0] : folder
+  Object.assign(compressForm, { names, name: base + archiveExt(compressForm.format) })
+  compressDialog.value = true
+}
+watch(() => compressForm.format, (format, previous) => {
+  const old = archiveExt(previous)
+  if (compressForm.name.endsWith(old)) compressForm.name = compressForm.name.slice(0, -old.length) + archiveExt(format)
+})
+async function doCompress() {
+  const name = compressForm.name.trim()
+  if (!name || name.includes('/')) return
+  if (files.value.some((f: any) => f.name === name)) {
+    ElMessage.error(t('fm.nameExists', { name }))
+    return
+  }
+  compressing.value = true
+  try {
+    const res: any = await compressFiles(currentPath.value, compressForm.names, name, compressForm.format)
+    if (res?.success) {
+      compressDialog.value = false
+      ElMessage.success(t('fm.compressed', { name }))
+    }
+  } finally {
+    compressing.value = false
+    await loadFiles()
+  }
+}
+
+const extractDialog = ref(false)
+const extractForm = reactive({ path: '', dest: '', intoFolder: false, overwrite: true })
+const extracting = ref(false)
+const extractBase = computed(() =>
+  fileNameOfPath(extractForm.path).replace(/\.(tar\.(gz|bz2|xz|zst)|tgz|tbz2?|txz|tzst|zip|jar|war|tar|7z|rar|gz)$/i, '') || 'extracted',
+)
+const extractTarget = computed(() => {
+  const dest = normPath(extractForm.dest.trim() || currentPath.value)
+  return extractForm.intoFolder ? normPath(`${dest}/${extractBase.value}`) : dest
+})
+function openExtract(f: any) {
+  Object.assign(extractForm, { path: f.path, dest: currentPath.value, intoFolder: false, overwrite: true })
+  extractDialog.value = true
+}
+async function doExtract() {
+  extracting.value = true
+  try {
+    const res: any = await extractArchive(extractForm.path, extractTarget.value, extractForm.overwrite)
+    if (res?.success) {
+      extractDialog.value = false
+      const skipped = Number(res.data?.skipped || 0)
+      ElMessage.success(skipped ? t('fm.extractedSkipped', { n: res.data.files, s: skipped }) : t('fm.extractedN', { n: res.data?.files ?? 0 }))
+    }
+  } finally {
+    extracting.value = false
+    await loadFiles()
+  }
+}
+
+// --- Keyboard: Ctrl+C / X / V / A, Delete, F2 (not while typing anywhere) ---
+function onFileKeys(event: KeyboardEvent) {
+  if (props.pickerMode || !fmBodyRef.value || fmBodyRef.value.offsetParent === null) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('input, textarea, select, [contenteditable="true"], .xterm, .el-dialog, .el-message-box')) return
+  if (document.querySelector('.el-overlay:not([style*="display: none"]) .el-dialog')) return
+  const mod = event.ctrlKey || event.metaKey
+  const key = event.key.toLowerCase()
+  const selected = getSelectedEntries()
+  if (mod && key === 'c' && selected.length) { setClipboard('copy', selected) }
+  else if (mod && key === 'x' && selected.length) { setClipboard('cut', selected) }
+  else if (mod && key === 'v' && clipboard.value) { void paste() }
+  else if (mod && key === 'a') { selectAll() }
+  else if (event.key === 'Delete' && selected.length) { void deleteTargets(selected) }
+  else if (event.key === 'F2' && selected.length === 1) { startRename(selected[0]) }
+  else return
+  event.preventDefault()
+}
 
 async function writeClipboardText(text: string): Promise<boolean> {
   if (!text) return false
@@ -1331,6 +1526,7 @@ async function confirmPath() {
 
 function handleOpen(f: any) {
   if (f.is_dir) { if (props.pickerMode) { emit('select', f.path); return }; navigate(f.path) }
+  else if (isArchive(f.name) && !props.pickerMode) openExtract(f)
   else openEditor(f.path)
 }
 
@@ -1393,6 +1589,11 @@ function ctxAction(action: string) {
   }
   else if (action === 'chmod') { openChmodDialog(actionTargets) }
   else if (action === 'props') { void openPropertiesDialog(actionTargets) }
+  else if (action === 'clipCopy') setClipboard('copy', actionTargets)
+  else if (action === 'clipCut') setClipboard('cut', actionTargets)
+  else if (action === 'pasteInto') void paste(f.path)
+  else if (action === 'extract') openExtract(f)
+  else if (action === 'compress') openCompress(actionTargets)
 }
 
 function onBodyContext(e: MouseEvent) {
@@ -1415,6 +1616,10 @@ function bgCtxAction(action: string) {
   else if (action === 'props') { void openPropertiesDialog(getSelectedEntries()) }
   else if (action === 'delete') { void deleteTargets(getSelectedEntries()) }
   else if (action === 'selectAll') selectAll()
+  else if (action === 'paste') void paste()
+  else if (action === 'clipCopy') setClipboard('copy', getSelectedEntries())
+  else if (action === 'clipCut') setClipboard('cut', getSelectedEntries())
+  else if (action === 'compress') openCompress(getSelectedEntries())
 }
 
 function getTerminalSelectionText() {
@@ -1837,6 +2042,7 @@ watch(() => route.fullPath, openRequestedTerminal)
 
 onMounted(async () => {
   document.addEventListener('click', closeAllCtx)
+  document.addEventListener('keydown', onFileKeys)
   await loadFileRoots()
   // Opened from a link to a directory that is not there yet.
   if (routePath.value && !props.initPath && currentPath.value === normPath(routePath.value)) {
@@ -1852,6 +2058,7 @@ onMounted(async () => {
 usePage(() => loadFiles())
 onUnmounted(() => {
   document.removeEventListener('click', closeAllCtx)
+  document.removeEventListener('keydown', onFileKeys)
   resetUploadDragState()
   stopTermResize()
   disconnectTerminal(true)
@@ -1980,6 +2187,27 @@ onUnmounted(() => {
 .fm-upload.is-done .fm-upload__meta { color: var(--el-color-success); }
 .fm-upload.is-failed .fm-upload__meta { color: var(--el-color-danger); }
 .fm-upload.is-canceled .fm-upload__name { text-decoration: line-through; color: var(--lp-text-secondary); }
+.fm-upload.is-retrying .fm-upload__meta { color: var(--el-color-warning); }
+.fm-upload--more { font-size: 12px; color: var(--lp-text-secondary); text-align: center; }
+.fm-exec-check { margin-right: 6px; pointer-events: none; }
+.fm-clip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 2px 6px 2px 10px;
+  border-radius: 999px;
+  background: var(--lp-primary-bg);
+  color: var(--lp-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.fm-clip__close { cursor: pointer; opacity: 0.7; }
+.fm-clip__close:hover { opacity: 1; }
+.fm-ctx-key { margin-left: auto; padding-left: 16px; font-size: 11px; color: var(--lp-text-secondary); }
+.fm-dialog-text { margin: 0 0 12px; font-size: 13px; color: var(--lp-text-secondary); word-break: break-all; }
+.fm-dialog-hint { margin: 10px 0 0; font-size: 12px; color: var(--lp-text-secondary); word-break: break-all; }
+.fm-radio-col { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .fm-body { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 .fm-list {
   flex: 1; background: var(--lp-card-bg); border-radius: var(--lp-radius-lg);

@@ -1,6 +1,6 @@
 [package]
 name = "linxpanel"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 description = "LinxPanel - Modern Linux Server Management Panel"
 license = "Apache-2.0"
@@ -34,6 +34,8 @@ tokio-util = { version = "0.7", features = ["io"] }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 flate2 = "1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
 
 [profile.release]
 # Smaller download for the one-click installer; symbols are not needed in production.

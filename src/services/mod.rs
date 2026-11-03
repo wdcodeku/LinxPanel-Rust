@@ -7,6 +7,7 @@ pub mod database;
 pub mod dbconf;
 pub mod dbnet;
 pub mod defense;
+pub mod fileops;
 pub mod firewall;
 pub mod ipban;
 pub mod metrics;

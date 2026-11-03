@@ -182,7 +182,7 @@ async fn off_runtime<T: Serialize + Send + 'static>(
         .unwrap_or_else(|err| Json(ApiResponse::err(&err.to_string())))
 }
 
-fn normalize_fs_path(path: &str) -> String {
+pub(super) fn normalize_fs_path(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     #[cfg(windows)]
     {
@@ -204,7 +204,7 @@ fn normalize_fs_path(path: &str) -> String {
     }
 }
 
-fn sanitize_upload_filename(raw: &str) -> Option<String> {
+pub(super) fn sanitize_upload_filename(raw: &str) -> Option<String> {
     let normalized = raw.replace('\\', "/");
     let base = normalized
         .rsplit('/')

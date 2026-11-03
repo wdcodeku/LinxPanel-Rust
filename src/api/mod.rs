@@ -8,6 +8,7 @@ pub mod database_api;
 pub mod defense_api;
 pub mod domains;
 pub mod files;
+pub mod files_ops;
 pub mod firewall_api;
 pub mod panel_api;
 pub mod processes;
@@ -41,6 +42,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(sites::routes())
         .merge(domains::routes())
         .merge(files::routes())
+        .merge(files_ops::routes())
         .merge(settings::routes())
         .merge(panel_api::routes())
         .merge(account_api::routes())
