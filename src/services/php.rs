@@ -110,9 +110,9 @@ fn ini_value(text: &str, key: &str) -> Option<String> {
     })
 }
 
-/// The newest installed FPM pool, if any.
-pub fn detect() -> Option<FpmPool> {
-    candidate_pools()
+/// Every installed FPM pool, newest PHP first.
+pub fn pools() -> Vec<FpmPool> {
+    let mut pools: Vec<FpmPool> = candidate_pools()
         .into_iter()
         .filter_map(|(conf, version, service)| {
             let text = std::fs::read_to_string(&conf).ok()?;
@@ -124,10 +124,26 @@ pub fn detect() -> Option<FpmPool> {
                 service,
             })
         })
-        .max_by(|a, b| version_key(&a.version).cmp(&version_key(&b.version)))
+        .collect();
+    pools.sort_by(|a, b| version_key(&b.version).cmp(&version_key(&a.version)));
+    pools
 }
 
-fn version_key(version: &str) -> Vec<u32> {
+/// The pool of one PHP version ("8.1"), if installed.
+pub fn pool_for(version: &str) -> Option<FpmPool> {
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    pools().into_iter().find(|p| p.version == version)
+}
+
+/// The newest installed FPM pool, if any.
+pub fn detect() -> Option<FpmPool> {
+    pools().into_iter().next()
+}
+
+pub fn version_key(version: &str) -> Vec<u32> {
     version
         .split('.')
         .map(|part| part.parse().unwrap_or(0))

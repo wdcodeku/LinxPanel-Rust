@@ -341,7 +341,9 @@ fn detect_one(spec: &RuntimeSpec) -> RuntimeStatus {
         .components
         .iter()
         .map(
-            |component| match probe_version(component.binary, component.version_args) {
+            |component| match probe_version(component.binary, component.version_args)
+                .or_else(|| versioned_fpm(component.binary))
+            {
                 Some((version, path)) => RuntimeComponent {
                     name: component.name.to_string(),
                     installed: true,
@@ -701,6 +703,49 @@ fn php_extensions(manager: &str) -> &'static [&'static str] {
     }
 }
 
+/// Debian / Ubuntu name FPM per version (`php-fpm8.3`): probe the newest pool's
+/// binary when the unversioned name is absent.
+fn versioned_fpm(binary: &str) -> Option<(String, String)> {
+    if binary != "php-fpm" {
+        return None;
+    }
+    super::php::pools()
+        .into_iter()
+        .filter(|pool| !pool.version.is_empty())
+        .find_map(|pool| probe_version(&format!("php-fpm{}", pool.version), &["--version"]))
+}
+
+/// The PHP version a Debian / Ubuntu repair works on: the one the `php`
+/// command runs if it has an FPM pool, else the newest pool.
+fn apt_php_version(cli_version: &str) -> Option<String> {
+    if !super::phpver::multi_supported() {
+        return None;
+    }
+    let pools = super::php::pools();
+    let cli: String = cli_version.split('.').take(2).collect::<Vec<_>>().join(".");
+    pools
+        .iter()
+        .find(|pool| pool.version == cli)
+        .or_else(|| pools.iter().find(|pool| !pool.version.is_empty()))
+        .map(|pool| pool.version.clone())
+}
+
+/// Installs or repairs one versioned PHP with the side-by-side script, so the
+/// distribution's unversioned metapackages never pull in another version
+/// from the multi-version repository.
+fn run_php_script(spec: &RuntimeSpec, version: &str, mut log: String) -> RuntimeInstallResult {
+    match super::phpver::run_script("install", version) {
+        Ok(text) => log.push_str(&text),
+        Err(err) => log.push_str(&format!("[LinxPanel] {}\n", err)),
+    }
+    let status = detect_one(spec);
+    RuntimeInstallResult {
+        changed: status.installed,
+        status,
+        log,
+    }
+}
+
 /// After PHP is present: add extensions, open the FPM socket to nginx and start it.
 fn finish_php_install(manager: &str, log: &mut String) {
     for package in php_extensions(manager) {
@@ -737,8 +782,13 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
     let before = detect_one(spec);
     // Installing PHP again repairs it: missing extensions, FPM socket, FPM not running.
     if before.installed && kind == "php" {
-        let mut log =
-            String::from("[LinxPanel] PHP is installed; checking extensions and PHP-FPM\n");
+        let log = String::from("[LinxPanel] PHP is installed; checking extensions and PHP-FPM\n");
+        if let Some(version) = apt_php_version(&before.version) {
+            let mut result = run_php_script(spec, &version, log);
+            result.changed = false;
+            return Ok(result);
+        }
+        let mut log = log;
         finish_php_install(package_manager(), &mut log);
         return Ok(RuntimeInstallResult {
             changed: false,
@@ -755,6 +805,17 @@ pub fn install(kind: &str) -> Result<RuntimeInstallResult, String> {
             ),
             status: before,
         });
+    }
+
+    // Once the multi-version repository is configured, `php-fpm` would mean
+    // its newest (possibly unreleased-for-production) PHP: pick a version.
+    if kind == "php"
+        && super::phpver::multi_supported()
+        && Path::new("/etc/apt/sources.list.d/linxpanel-php.list").exists()
+    {
+        let version = super::phpver::VERSIONS[0];
+        let log = format!("[LinxPanel] Installing PHP {}\n", version);
+        return Ok(run_php_script(spec, version, log));
     }
 
     match kind {

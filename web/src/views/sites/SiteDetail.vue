@@ -84,6 +84,13 @@
             <el-radio value="php">{{ t('si.typePhp') }}</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item v-if="site.site_type === 'php' && editForm.site_type === 'php'" :label="t('pv.siteLabel')">
+          <el-select v-model="phpVersion" class="php-select" :loading="phpSaving" @change="changePhp">
+            <el-option value="" :label="t('pv.followDefault', { v: phpDefault || '—' })" />
+            <el-option v-for="v in phpInstalled" :key="v" :value="v" :label="`PHP ${v}`" />
+          </el-select>
+          <div class="form-tip">{{ t('pv.siteTip') }}</div>
+        </el-form-item>
         <el-form-item :label="t('si.rootDir')">
           <el-input v-model="editForm.doc_root" />
         </el-form-item>
@@ -265,6 +272,8 @@ import {
   removeDomain,
   getOpenRestyStatus,
   quickInstallOpenResty,
+  getPhpOverview,
+  setSitePhp,
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Edit, Delete, Check, Close, WarningFilled } from '@element-plus/icons-vue'
@@ -371,10 +380,41 @@ async function handleQuickInstallOpenResty() {
   }
 }
 
+// PHP version of a PHP site: applied as soon as it is picked.
+const phpVersion = ref('')
+const phpDefault = ref('')
+const phpInstalled = ref<string[]>([])
+const phpSaving = ref(false)
+async function loadPhp() {
+  const res: any = await getPhpOverview().catch(() => null)
+  if (res?.success) {
+    phpDefault.value = res.data.default
+    phpInstalled.value = res.data.installed.map((i: any) => i.version)
+  }
+}
+async function changePhp(version: string) {
+  phpSaving.value = true
+  try {
+    const res: any = await setSitePhp(siteId, version)
+    if (res.success) {
+      ElMessage.success(t('pv.siteChanged', { v: version || phpDefault.value }))
+      site.value.php_version = version
+    } else {
+      phpVersion.value = site.value.php_version || ''
+    }
+  } catch {
+    phpVersion.value = site.value.php_version || ''
+  } finally {
+    phpSaving.value = false
+  }
+}
+
 async function loadSite() {
   const siteRes: any = await getSite(siteId)
   if (siteRes.success && siteRes.data) {
     site.value = siteRes.data
+    phpVersion.value = siteRes.data.php_version || ''
+    if (siteRes.data.site_type === 'php') void loadPhp()
     Object.assign(editForm, {
       name: siteRes.data.name,
       site_type: siteRes.data.site_type,
@@ -861,6 +901,7 @@ async function handleRemoveDomain(id: number) {
 .config-actions {
   margin-top: 12px;
 }
+.php-select { width: 260px; }
 </style>
 
 <style scoped lang="scss">

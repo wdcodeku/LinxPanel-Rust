@@ -69,7 +69,10 @@
             <span class="version__label">{{ v.label }}</span>
             <span class="version__tags">
               <span v-if="v.default" class="lp-pill lp-pill--ok">{{ t('dbm.recommended') }}</span>
-              <span v-if="v.id === 'mysql'" class="lp-pill lp-pill--accent">{{ t('dbm.mysqlCompat') }}</span>
+              <span v-if="v.source === 'official'" class="lp-pill lp-pill--accent">{{ t('dbm.sourceOfficial') }}</span>
+              <span v-else-if="current.engine === 'mysql'" class="lp-pill">{{ t('dbm.sourceDistro') }}</span>
+              <span v-if="v.lts" class="lp-pill lp-pill--ok">LTS</span>
+              <span v-if="v.id === 'mysql' || v.id.startsWith('mysql-')" class="lp-pill lp-pill--accent">{{ t('dbm.mysqlCompat') }}</span>
               <span v-if="current.engine === 'mongodb' && v.default" class="lp-pill lp-pill--accent">{{ t('dbm.lts') }}</span>
             </span>
             <span class="version__full lp-mono">{{ v.version }}</span>
@@ -513,7 +516,7 @@ interface TableRow {
   comment: string | null
   updated: string | null
 }
-interface VersionOption { id: string; label: string; version: string; default: boolean }
+interface VersionOption { id: string; label: string; version: string; default: boolean; source?: string; lts?: boolean }
 interface NetworkInfo {
   port: number
   listeners: { address: string; process: string }[]

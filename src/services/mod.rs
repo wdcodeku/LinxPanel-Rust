@@ -17,6 +17,7 @@ pub mod notify;
 pub mod openresty;
 pub mod panel_access;
 pub mod php;
+pub mod phpver;
 pub mod recycle;
 pub mod remote_backup;
 pub mod runtime;

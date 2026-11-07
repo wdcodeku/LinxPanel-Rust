@@ -2486,19 +2486,16 @@ onUnmounted(() => {
 }
 .fm-list-body { flex: 1; overflow-y: auto; }
 .fm-col-check {
-  /* A real column: aligned with the header, clear of the row edge. */
+  /* A real column, always visible: aligned with the header, clear of the row edge. */
   flex: 0 0 32px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   margin-right: 4px;
   :deep(.el-checkbox) { margin-right: 0; height: 18px; }
+  :deep(.el-checkbox__inner) { width: 16px; height: 16px; border-width: 1.5px; }
+  :deep(.el-checkbox__inner::after) { left: 5px; top: 2px; }
 }
-/* Row checkboxes appear on hover, and stay once anything is selected. */
-.fm-row .fm-col-check { opacity: 0; transition: opacity 0.12s; }
-.fm-row:hover .fm-col-check,
-.fm-row.selected .fm-col-check,
-.has-selection .fm-row .fm-col-check { opacity: 1; }
 .fm-col-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .fm-col-name-header,
 .fm-col-header-sortable {
@@ -2549,10 +2546,8 @@ onUnmounted(() => {
   &.selected { background: var(--lp-primary-bg); outline: 1px solid var(--lp-primary); }
   &.drop-target { background: var(--lp-primary-bg); outline: 2px solid var(--lp-primary); }
   &.is-dragged { opacity: 0.5; }
-  .fm-grid-check { opacity: 0; transition: opacity 0.12s; }
-  &:hover .fm-grid-check, &.selected .fm-grid-check { opacity: 1; }
+  .fm-grid-check :deep(.el-checkbox__inner) { width: 16px; height: 16px; border-width: 1.5px; }
 }
-.has-selection .fm-grid-item .fm-grid-check { opacity: 1; }
 .fm-grid-check {
   position: absolute;
   top: 8px;

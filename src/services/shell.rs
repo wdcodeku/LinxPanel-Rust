@@ -72,6 +72,54 @@ pub fn run_command(
     run_command_inner(command, input, timeout, true)
 }
 
+/// Runs a bash script embedded in the binary (written to a private temp file)
+/// with `env`. Output streams into a background task's log. On failure the
+/// error is the script's last `[LinxPanel] ` line, or `fallback`.
+pub fn run_embedded_script(
+    name: &str,
+    script: &str,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    fallback: &str,
+) -> Result<String, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = std::env::temp_dir().join(format!(
+        "linxpanel-{}-{}.sh",
+        name,
+        uuid::Uuid::new_v4().simple()
+    ));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        file.write_all(script.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    let mut command = Command::new("bash");
+    command.arg(&path);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = run_command(command, None, timeout);
+    let _ = std::fs::remove_file(&path);
+    let output = output?;
+    let text = format!("{}{}", output.stdout, output.stderr);
+    if output.ok() {
+        Ok(text)
+    } else {
+        Err(text
+            .lines()
+            .rev()
+            .find_map(|l| l.trim().strip_prefix("[LinxPanel] "))
+            .unwrap_or(fallback)
+            .to_string())
+    }
+}
+
 /// Like `run_command`, but a background task's log does not show the command
 /// line: for programs that take a secret as a plain positional argument.
 pub fn run_command_private(command: Command, timeout: Duration) -> Result<CmdOutput, String> {

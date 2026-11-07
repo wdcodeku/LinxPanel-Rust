@@ -79,6 +79,9 @@
         </ul>
       </section>
 
+      <!-- PHP: versions side by side -->
+      <PhpVersions v-if="loaded && current.key === 'php' && current.runtime?.installed" @changed="loadAll" />
+
       <!-- Applications of this language -->
       <section v-if="loaded" class="lp-card">
         <header class="lp-card-head">
@@ -277,6 +280,7 @@ import type { FormRules } from 'element-plus'
 import { FolderOpened, Monitor, Plus, Refresh } from '@element-plus/icons-vue'
 import DirPicker from '@/components/DirPicker.vue'
 import TerminalDialog from '@/components/TerminalDialog.vue'
+import PhpVersions from './PhpVersions.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
   getOwnerChoices, installAppDeps, createAppFromSample, installRuntime, listFiles, mkdirApi, pathState, updateApp,

@@ -13,6 +13,7 @@ pub mod files_ops;
 pub mod firewall_api;
 pub mod notify_api;
 pub mod panel_api;
+pub mod php_api;
 pub mod processes;
 pub mod realtime;
 pub mod recycle_api;
@@ -51,6 +52,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(files_dl::routes())
         .merge(recycle_api::routes())
         .merge(notify_api::routes())
+        .merge(php_api::routes())
         .merge(settings::routes())
         .merge(panel_api::routes())
         .merge(account_api::routes())

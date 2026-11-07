@@ -388,6 +388,18 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
         }
     }
 
+    // PHP version per site ("" = the panel's default PHP).
+    let has_php_version: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM pragma_table_info('sites') WHERE name = 'php_version' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if has_php_version.is_none() {
+        sqlx::query("ALTER TABLE sites ADD COLUMN php_version TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await?;
+    }
+
     tracing::info!("Database migration completed");
     Ok(())
 }

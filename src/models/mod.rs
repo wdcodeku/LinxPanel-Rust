@@ -67,6 +67,10 @@ pub struct Site {
     pub force_https: bool,
     /// Emit Strict-Transport-Security on the TLS server block.
     pub hsts: bool,
+    /// PHP version for PHP sites ("8.1"); empty uses the default PHP.
+    #[sqlx(default)]
+    #[serde(default)]
+    pub php_version: String,
     pub created_at: String,
     pub updated_at: String,
 }

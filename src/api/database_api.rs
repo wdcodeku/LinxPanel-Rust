@@ -264,7 +264,7 @@ async fn install_task(
     engine: Engine,
     version: String,
 ) -> ApiResponse<LogResult> {
-    let (log, created_admin) = match tasks::blocking(move || {
+    let (mut log, created_admin) = match tasks::blocking(move || {
         database::install(engine, Some(version.as_str()).filter(|v| !v.is_empty()))
     })
     .await
@@ -272,6 +272,7 @@ async fn install_task(
         Ok(result) => result,
         Err(err) => return ApiResponse::err(&err.to_string()),
     };
+    let created_admin_missing = created_admin.is_none();
     if let Some(admin) = created_admin {
         if let Err(err) = database::save_admin(&state.db, engine, &admin).await {
             return ApiResponse::err(&format!(
@@ -282,6 +283,17 @@ async fn install_task(
         }
     }
     let admin = admin(&state, engine).await;
+    // A reinstall over kept data: the panel's saved login still works there.
+    if engine == Engine::Mysql && created_admin_missing {
+        if let Some(saved) = admin.clone() {
+            if let Ok(Ok(())) = tasks::blocking(move || database::verify_mysql_admin(&saved)).await
+            {
+                let line = "[LinxPanel] The kept databases accept the panel's saved login\n";
+                tasks::note(line);
+                log.push_str(line);
+            }
+        }
+    }
     let success = tasks::blocking(move || database::status(engine, admin.as_ref()).running)
         .await
         .unwrap_or(false);

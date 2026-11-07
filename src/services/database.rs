@@ -511,6 +511,14 @@ pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAd
         log.push_str(line);
         return (log, None);
     }
+    if engine == Engine::Mysql && manager == "apt-get" {
+        if let Err(err) = prepare_mysql_source(version, &mut log) {
+            let line = format!("[LinxPanel] {}\n", err);
+            super::tasks::note(&line);
+            log.push_str(&line);
+            return (log, None);
+        }
+    }
     let chosen = super::dbnet::packages_for(engine, manager, version);
     let chosen_refs: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
     let packages: &[&str] = if chosen.is_some() {
@@ -525,6 +533,9 @@ pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAd
     if !runtime::install_packages(packages, &mut log) {
         log.push_str("\n[LinxPanel] Package installation failed\n");
         return (log, None);
+    }
+    if engine == Engine::Mysql && manager == "apt-get" {
+        use_mysql_option_file();
     }
 
     // Distros that do not initialise the data directory on install.
@@ -571,6 +582,143 @@ pub fn install(engine: Engine, version: Option<&str>) -> (String, Option<MysqlAd
     super::tasks::note(&ready);
     log.push_str(&ready);
     (log, admin)
+}
+
+const MYSQL_REPO_SCRIPT: &str = include_str!("../../scripts/mysql-repo.sh");
+const MYSQL_DATA_DIR: &str = "/var/lib/mysql";
+
+/// Which server wrote a kept data directory, and its version when recorded:
+/// ("mysql" | "mariadb", "8.0.46").
+fn mysql_data_owner(dir: &Path) -> Option<(&'static str, String)> {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+    // MariaDB: "11.8.3-MariaDB" in mysql_upgrade_info; Aria's control file.
+    let info = read("mysql_upgrade_info");
+    if info.contains("MariaDB") || dir.join("aria_log_control").exists() {
+        let version = info
+            .split('-')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        return Some(("mariadb", version));
+    }
+    // MySQL 8+: the data dictionary; the upgrade history names versions.
+    if dir.join("mysql.ibd").exists() {
+        let history = read("mysql_upgrade_history");
+        let version = history
+            .rsplit("\"version\":")
+            .next()
+            .filter(|_| history.contains("\"version\":"))
+            .and_then(|rest| rest.trim().trim_start_matches('"').split('"').next())
+            .unwrap_or_default()
+            .to_string();
+        return Some(("mysql", version));
+    }
+    None
+}
+
+/// "11.8" > "10.11" > "8.4"
+fn series_key(version: &str) -> (u32, u32) {
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+/// Before MySQL / MariaDB packages go in on Debian / Ubuntu: add the vendor's
+/// repository for an official series (or drop one the panel added before, so
+/// the distribution's packages install), and refuse kept data the chosen
+/// server cannot open.
+fn prepare_mysql_source(version: Option<&str>, log: &mut String) -> Result<(), String> {
+    let official = version.and_then(super::dbnet::official_series);
+    let flavor = match (official, version) {
+        (Some((flavor, _)), _) => Some(flavor),
+        (None, Some("mysql")) => Some("mysql"),
+        (None, Some("mariadb")) => Some("mariadb"),
+        _ => None,
+    };
+    if let (Some(flavor), Some((owner, data_version))) =
+        (flavor, mysql_data_owner(Path::new(MYSQL_DATA_DIR)))
+    {
+        let name = |f: &str| if f == "mysql" { "MySQL" } else { "MariaDB" };
+        if owner != flavor {
+            return Err(format!(
+                "{} holds {} data, which {} cannot open. Install {} again, or uninstall with \"delete data\" first (back up your databases)",
+                MYSQL_DATA_DIR,
+                name(owner),
+                name(flavor),
+                name(owner)
+            ));
+        }
+        if let Some((_, series)) = official {
+            if !data_version.is_empty() && series_key(&data_version) > series_key(series) {
+                return Err(format!(
+                    "{} was last used by {} {}; {} {} cannot downgrade it. Choose {} or later",
+                    MYSQL_DATA_DIR,
+                    name(owner),
+                    data_version,
+                    name(owner),
+                    series,
+                    super::dbnet::major_minor(&data_version)
+                ));
+            }
+        }
+    }
+    let added = ["mysql", "mariadb"]
+        .iter()
+        .any(|f| Path::new(&format!("/etc/apt/sources.list.d/linxpanel-{}.list", f)).exists());
+    let (flavor, series) = match official {
+        Some(pair) => pair,
+        None if added => ("none", ""),
+        None => return Ok(()),
+    };
+    let text = shell::run_embedded_script(
+        "mysql-repo",
+        MYSQL_REPO_SCRIPT,
+        &[("DB_FLAVOR", flavor), ("DB_SERIES", series)],
+        Duration::from_secs(15 * 60),
+        "Adding the database repository failed",
+    )?;
+    log.push_str(&text);
+    Ok(())
+}
+
+/// Oracle MySQL registers its /etc/mysql/mysql.cnf as an alternative for
+/// my.cnf; make it the active one when a MariaDB left another choice behind.
+fn use_mysql_option_file() {
+    const MYSQL_CNF: &str = "/etc/mysql/mysql.cnf";
+    if Path::new("/usr/sbin/mariadbd").exists()
+        || !Path::new("/usr/sbin/mysqld").exists()
+        || !Path::new(MYSQL_CNF).exists()
+        || !shell::has_binary("update-alternatives")
+    {
+        return;
+    }
+    let listed = shell::run("update-alternatives", &["--list", "my.cnf"])
+        .map(|o| o.stdout.lines().any(|l| l.trim() == MYSQL_CNF))
+        .unwrap_or(false);
+    let current = std::fs::read_link("/etc/alternatives/my.cnf").unwrap_or_default();
+    if listed && current != Path::new(MYSQL_CNF) {
+        let _ = shell::run_privileged("update-alternatives", &["--set", "my.cnf", MYSQL_CNF]);
+    }
+}
+
+/// Removes the vendor repository the panel added for MySQL / MariaDB.
+pub(crate) fn remove_mysql_repo() -> Option<String> {
+    let added = ["mysql", "mariadb"]
+        .iter()
+        .any(|f| Path::new(&format!("/etc/apt/sources.list.d/linxpanel-{}.list", f)).exists());
+    if !added {
+        return None;
+    }
+    Some(
+        shell::run_embedded_script(
+            "mysql-repo",
+            MYSQL_REPO_SCRIPT,
+            &[("DB_FLAVOR", "none")],
+            Duration::from_secs(10 * 60),
+            "Removing the database repository failed",
+        )
+        .unwrap_or_else(|e| format!("[LinxPanel] {}\n", e)),
+    )
 }
 
 /// MongoDB comes from MongoDB's own repository (distributions do not ship
@@ -1740,5 +1888,32 @@ mod tests {
         assert_eq!(tables[0].rows, Some(42));
         assert_eq!(tables[1].rows, None);
         assert_eq!(tables[1].comment.as_deref(), Some("new one"));
+    }
+
+    #[test]
+    fn kept_mysql_data_is_recognised() {
+        let dir = std::env::temp_dir().join(format!("lp-mysql-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(mysql_data_owner(&dir), None);
+        std::fs::write(dir.join("mysql.ibd"), "").unwrap();
+        assert_eq!(mysql_data_owner(&dir), Some(("mysql", String::new())));
+        std::fs::write(
+            dir.join("mysql_upgrade_history"),
+            r#"{"file_format":"1","upgrade_history":[{"date":"2026-11-07","version":"8.4.13","maturity":"LTS","update_history":[{"date":"2026-11-07","version_with_update":"8.4.13.0"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            mysql_data_owner(&dir),
+            Some(("mysql", "8.4.13".to_string()))
+        );
+        std::fs::remove_file(dir.join("mysql.ibd")).unwrap();
+        std::fs::write(dir.join("mysql_upgrade_info"), "11.8.3-MariaDB").unwrap();
+        assert_eq!(
+            mysql_data_owner(&dir),
+            Some(("mariadb", "11.8.3".to_string()))
+        );
+        assert!(series_key("11.8.3") > series_key("10.11"));
+        assert!(series_key("9.7.1") > series_key("8.4"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

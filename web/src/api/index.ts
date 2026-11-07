@@ -153,6 +153,22 @@ export const getAppLogs = (id: number, lines = 300) =>
   request.get(`/apps/${id}/logs`, { params: { lines } })
 export const clearAppLogs = (id: number) => request.delete(`/apps/${id}/logs`)
 
+// PHP versions
+export const getPhpOverview = () => request.get('/php')
+export const installPhp = (version: string) =>
+  runTask(t('task.install', { name: `PHP ${version}` }), () => request.post('/php/install', { version }), { closeOnSuccess: true })
+export const uninstallPhp = (version: string) =>
+  runTask(t('task.uninstall', { name: `PHP ${version}` }), () => request.post('/php/uninstall', { version }), { closeOnSuccess: true })
+export const setPhpDefault = (version: string) => request.post('/php/default', { version })
+export const restartPhp = (version: string) => request.post(`/php/${version}/restart`)
+export const getPhpExtensions = (version: string) => request.get(`/php/${version}/extensions`)
+export const setPhpExtension = (version: string, name: string, install: boolean) =>
+  runTask(`${install ? '+' : '-'} php${version}-${name}`, () => request.post(`/php/${version}/extensions`, { name, install }), { closeOnSuccess: true })
+export const getPhpSettings = (version: string) => request.get(`/php/${version}/settings`)
+export const savePhpSettings = (version: string, data: { ini: Record<string, string>; pool: Record<string, string> }) =>
+  request.post(`/php/${version}/settings`, data)
+export const setSitePhp = (id: number, version: string) => request.post(`/sites/${id}/php`, { version })
+
 // Sites
 export const getSites = () => request.get('/sites')
 export const getSite = (id: number) => request.get(`/sites/${id}`)

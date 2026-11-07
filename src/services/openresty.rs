@@ -1561,7 +1561,11 @@ async fn render_site_config(
                     "        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n",
                 );
                 blocks.push_str(&format!("        fastcgi_index {};\n", php_index_file));
-                blocks.push_str(&format!("        fastcgi_pass {};\n", runtime.php_fpm_addr));
+                // The site's own PHP version when it has one (and it is installed).
+                let fpm_addr = crate::services::php::pool_for(&site.php_version)
+                    .map(|pool| pool.fastcgi_addr())
+                    .unwrap_or_else(|| runtime.php_fpm_addr.clone());
+                blocks.push_str(&format!("        fastcgi_pass {};\n", fpm_addr));
                 // Imports, updates and installers routinely exceed nginx's 60s default.
                 blocks.push_str("        fastcgi_read_timeout 300s;\n");
                 blocks.push_str("    }\n");
@@ -2097,7 +2101,13 @@ async fn load_runtime(db: &SqlitePool) -> Result<OpenRestyRuntime> {
     };
     // Without an explicit setting, use the installed PHP-FPM pool's own address:
     // distros listen on a unix socket, so a fixed 127.0.0.1:9000 gave every PHP site a 502.
-    let detected_fpm = crate::services::php::detect()
+    // The default PHP version chosen in the panel, else the newest installed.
+    let default_version = settings
+        .get(crate::services::phpver::SETTING_DEFAULT)
+        .cloned()
+        .unwrap_or_default();
+    let detected_fpm = crate::services::php::pool_for(&default_version)
+        .or_else(crate::services::php::detect)
         .map(|pool| pool.fastcgi_addr())
         .unwrap_or_else(|| "127.0.0.1:9000".to_string());
     let php_fpm_addr = setting_or_env(

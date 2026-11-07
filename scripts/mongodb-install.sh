@@ -42,14 +42,14 @@ else
 fi
 
 id="" codename="" version_id=""
-if [ -r /etc/os-release ]; then
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  id="${ID:-}"
-  codename="${VERSION_CODENAME:-}"
-  version_id="${VERSION_ID:-}"
-fi
-say "System: ${PRETTY_NAME:-unknown}"
+# Read in subshells: sourcing os-release here would overwrite our own
+# variables (it defines VERSION, among others).
+os_field() { [ -r /etc/os-release ] && (. /etc/os-release && eval "printf '%s' \"\${$1:-}\""); }
+id="$(os_field ID)"
+codename="$(os_field VERSION_CODENAME)"
+[ -n "${codename}" ] || codename="$(os_field UBUNTU_CODENAME)"
+version_id="$(os_field VERSION_ID)"
+say "System: $(os_field PRETTY_NAME)"
 
 KEYRING="/usr/share/keyrings/mongodb-server-${VERSION}.gpg"
 LIST="/etc/apt/sources.list.d/mongodb-org-${VERSION}.list"

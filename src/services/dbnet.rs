@@ -26,6 +26,11 @@ pub struct VersionOption {
     /// Full package version, for display.
     pub version: String,
     pub default: bool,
+    /// "distro": this server's package sources; "official": the vendor's
+    /// repository, added at install time.
+    pub source: &'static str,
+    /// A long-term support series.
+    pub lts: bool,
 }
 
 /// Candidate version of an apt package, or None when not available.
@@ -92,6 +97,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
         (Engine::Mysql, "apt-get") => {
             if let Some(v) = apt_candidate("mariadb-server") {
                 options.push(VersionOption {
+                    source: "distro",
+                    lts: false,
                     id: "mariadb".into(),
                     label: format!("MariaDB {}", major_minor(&v)),
                     version: v,
@@ -102,6 +109,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
             if let Some(v) = apt_candidate("mysql-server") {
                 if !v.contains("mariadb") {
                     options.push(VersionOption {
+                        source: "distro",
+                        lts: false,
                         id: "mysql".into(),
                         label: format!("MySQL {}", major_minor(&v)),
                         version: v,
@@ -109,6 +118,7 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
                     });
                 }
             }
+            options.extend(official_mysql_options());
         }
         (Engine::Mysql, "dnf" | "yum") => {
             for (id, package, name) in [
@@ -117,6 +127,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
             ] {
                 if let Some(v) = dnf_available(manager, package) {
                     options.push(VersionOption {
+                        source: "distro",
+                        lts: false,
                         id: id.into(),
                         label: format!("{} {}", name, major_minor(&v)),
                         version: v,
@@ -133,6 +145,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
                     continue;
                 }
                 options.push(VersionOption {
+                    source: "distro",
+                    lts: false,
                     default: default.as_deref() == Some(major.as_str()),
                     label: format!("PostgreSQL {}", major),
                     id: major,
@@ -145,6 +159,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
         (Engine::Redis, "apt-get") => {
             if let Some(v) = apt_candidate("redis-server") {
                 options.push(VersionOption {
+                    source: "distro",
+                    lts: false,
                     id: "default".into(),
                     label: format!("Redis {}", major_minor(&v)),
                     version: v,
@@ -156,6 +172,8 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
         (Engine::Mongodb, _) => {
             for (id, default) in [("8.0", true), ("7.0", false)] {
                 options.push(VersionOption {
+                    source: "distro",
+                    lts: false,
                     id: id.into(),
                     label: format!("MongoDB {}", id),
                     version: format!("{}.x", id),
@@ -166,6 +184,51 @@ pub fn versions(engine: Engine) -> Vec<VersionOption> {
         _ => {}
     }
     options
+}
+
+/// Release series from the vendors' own repositories: (id, label, lts).
+/// Oracle builds MySQL for Debian / Ubuntu on amd64 only.
+const OFFICIAL_MYSQL: &[(&str, &str, bool)] = &[
+    ("mysql-8.4", "MySQL 8.4", true),
+    ("mysql-9.7", "MySQL 9.7", true),
+    ("mariadb-11.8", "MariaDB 11.8", true),
+    ("mariadb-11.4", "MariaDB 11.4", true),
+    ("mariadb-10.11", "MariaDB 10.11", true),
+    ("mariadb-12.3", "MariaDB 12.3", false),
+];
+
+/// Official series this server can use (Debian / Ubuntu).
+fn official_mysql_options() -> Vec<VersionOption> {
+    let os = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let id = os
+        .lines()
+        .find_map(|l| l.strip_prefix("ID="))
+        .map(|v| v.trim_matches('"'))
+        .unwrap_or_default();
+    if id != "ubuntu" && id != "debian" {
+        return Vec::new();
+    }
+    let amd64 = std::env::consts::ARCH == "x86_64";
+    OFFICIAL_MYSQL
+        .iter()
+        .filter(|(id, _, _)| amd64 || id.starts_with("mariadb-"))
+        .map(|(id, label, lts)| VersionOption {
+            id: id.to_string(),
+            label: label.to_string(),
+            version: format!("{}.x", label.rsplit(' ').next().unwrap_or_default()),
+            default: false,
+            source: "official",
+            lts: *lts,
+        })
+        .collect()
+}
+
+/// For an official series id ("mysql-8.4"): (flavor, series).
+pub fn official_series(id: &str) -> Option<(&'static str, &'static str)> {
+    OFFICIAL_MYSQL.iter().find(|(known, _, _)| *known == id).map(|(known, _, _)| {
+        let (flavor, series) = known.split_once('-').unwrap_or_default();
+        (flavor, series)
+    })
 }
 
 fn dnf_available(manager: &str, package: &str) -> Option<String> {
@@ -193,6 +256,13 @@ pub fn packages_for(engine: Engine, manager: &str, version: Option<&str>) -> Opt
         (_, _, None | Some("") | Some("default")) => None,
         (Engine::Mysql, "apt-get", Some("mariadb")) => owned(&["mariadb-server", "mariadb-client"]),
         (Engine::Mysql, "apt-get", Some("mysql")) => owned(&["mysql-server", "mysql-client"]),
+        // Official repositories: the same names, pinned to the vendor's packages.
+        (Engine::Mysql, "apt-get", Some(id)) if official_series(id).is_some() => {
+            match official_series(id) {
+                Some(("mysql", _)) => owned(&["mysql-server", "mysql-client"]),
+                _ => owned(&["mariadb-server", "mariadb-client"]),
+            }
+        }
         (Engine::Mysql, "dnf" | "yum", Some("mariadb")) => owned(&["mariadb-server", "mariadb"]),
         (Engine::Mysql, "dnf" | "yum", Some("mysql")) => owned(&["mysql-server", "mysql"]),
         (Engine::Postgresql, "apt-get", Some(major))
@@ -213,20 +283,8 @@ pub fn packages_for(engine: Engine, manager: &str, version: Option<&str>) -> Opt
 /// its settings win.
 const DROP_IN: &str = "zz-linxpanel.cnf";
 
-fn mysql_conf_dir() -> Option<PathBuf> {
-    [
-        "/etc/mysql/mariadb.conf.d",
-        "/etc/mysql/mysql.conf.d",
-        "/etc/my.cnf.d",
-        "/etc/mysql/conf.d",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|dir| dir.is_dir())
-}
-
 fn drop_in_path() -> Option<PathBuf> {
-    mysql_conf_dir().map(|dir| dir.join(DROP_IN))
+    super::dbconf::mysql_conf_dir().map(|dir| dir.join(DROP_IN))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -371,7 +429,7 @@ pub fn set_mysql_remote(enabled: bool, allow_from: Option<&str>) -> Result<Strin
         return Err(format!(
             "{}MySQL still listens on localhost only; check {} for another bind-address",
             log,
-            mysql_conf_dir()
+            super::dbconf::mysql_conf_dir()
                 .map(|d| d.display().to_string())
                 .unwrap_or_default()
         ));
@@ -415,6 +473,13 @@ mod tests {
             packages_for(Engine::Mysql, "apt-get", Some("percona")),
             None
         );
+        assert_eq!(
+            packages_for(Engine::Mysql, "apt-get", Some("mariadb-11.8")).unwrap(),
+            vec!["mariadb-server", "mariadb-client"]
+        );
+        assert_eq!(official_series("mysql-8.4"), Some(("mysql", "8.4")));
+        assert_eq!(official_series("mariadb-10.11"), Some(("mariadb", "10.11")));
+        assert_eq!(official_series("mysql-5.7"), None);
     }
 
     #[test]

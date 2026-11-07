@@ -208,6 +208,9 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   --el-border-color-lighter: var(--lp-line-soft);
   --el-border-color-extra-light: var(--lp-line-soft);
   --el-border-color-hover: var(--lp-accent);
+  /* The generic border is too faint for a control you must find (dark mode
+     especially): checkboxes and radios get their own outline colour. */
+  --el-checkbox-input-border: 1px solid var(--lp-check-border);
   --el-border-radius-base: var(--lp-r-sm);
   --el-border-radius-small: var(--lp-r-sm);
 

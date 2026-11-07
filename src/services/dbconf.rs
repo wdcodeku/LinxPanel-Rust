@@ -226,6 +226,9 @@ fn check_value(kind: &str, options: &[&str], value: &str) -> Result<String, Stri
 const MYSQL_DROP_IN: &str = "zz-linxpanel.cnf";
 
 pub(crate) fn mysql_conf_dir() -> Option<PathBuf> {
+    // A MariaDB that was replaced by MySQL can leave mariadb.conf.d behind,
+    // which MySQL never reads.
+    let mariadb = Path::new("/usr/sbin/mariadbd").exists();
     [
         "/etc/mysql/mariadb.conf.d",
         "/etc/mysql/mysql.conf.d",
@@ -233,6 +236,7 @@ pub(crate) fn mysql_conf_dir() -> Option<PathBuf> {
         "/etc/mysql/conf.d",
     ]
     .iter()
+    .filter(|dir| mariadb || !dir.contains("mariadb"))
     .map(PathBuf::from)
     .find(|dir| dir.is_dir())
 }
@@ -1517,6 +1521,8 @@ fn installed_packages(engine: Engine) -> Vec<String> {
                     "mysql-client",
                     "mariadb-plugin-",
                     "mariadb-backup",
+                    // Oracle's packages behind mysql-server / mysql-client.
+                    "mysql-community-",
                 ]
                 .iter()
                 .any(|p| name.starts_with(p))
@@ -1547,10 +1553,12 @@ fn installed_packages(engine: Engine) -> Vec<String> {
             .map(|o| {
                 o.stdout
                     .lines()
+                    // Installed, or left half-configured by a failed install.
                     .filter(|l| {
                         l.split_whitespace()
                             .nth(1)
-                            .is_some_and(|s| s.starts_with("ii"))
+                            .and_then(|s| s.chars().nth(1))
+                            .is_some_and(|state| "iUFHWt".contains(state))
                     })
                     .filter_map(|l| l.split_whitespace().next().map(String::from))
                     .collect::<Vec<_>>()
@@ -1579,10 +1587,41 @@ fn data_dirs(engine: Engine) -> &'static [&'static str] {
     }
 }
 
+/// Sends the MySQL / MariaDB server SIGTERM (a clean shutdown) when it still
+/// runs and waits for it; true when something had to be stopped.
+fn stop_mysql_processes() -> bool {
+    const NAMES: [&str; 4] = ["mariadbd-safe", "mysqld_safe", "mariadbd", "mysqld"];
+    let running = || {
+        NAMES.iter().any(|name| {
+            shell::run("pgrep", &["-x", name])
+                .map(|o| o.ok())
+                .unwrap_or(false)
+        })
+    };
+    if !running() {
+        return false;
+    }
+    // The *_safe wrappers first, or they restart the server.
+    for name in NAMES {
+        let _ = shell::run_privileged("pkill", &["-TERM", "-x", name]);
+    }
+    for _ in 0..60 {
+        if !running() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    for name in NAMES {
+        let _ = shell::run_privileged("pkill", &["-KILL", "-x", name]);
+    }
+    true
+}
+
 /// Removes the engine. Data stays unless `purge_data`; the log goes to the
 /// task window as it happens.
 pub fn uninstall(engine: Engine, purge_data: bool) -> Result<String, String> {
     let mut log = String::new();
+    let mut repo_log = String::new();
     let mut note = |line: String| {
         super::tasks::note(&line);
         log.push_str(&line);
@@ -1594,6 +1633,11 @@ pub fn uninstall(engine: Engine, purge_data: bool) -> Result<String, String> {
     let service = database::service_name(engine);
     if let Ok(text) = sysservice::stop(&service, true) {
         note(text);
+    }
+    // Without systemd an init script can fail to stop the server (stale
+    // maintenance credentials): end it cleanly before its files go.
+    if engine == Engine::Mysql && stop_mysql_processes() {
+        note("[LinxPanel] Stopped the remaining server process\n".into());
     }
     let packages = installed_packages(engine);
     if packages.is_empty() {
@@ -1622,6 +1666,8 @@ pub fn uninstall(engine: Engine, purge_data: bool) -> Result<String, String> {
         if let Some(path) = mysql_drop_in() {
             let _ = std::fs::remove_file(path);
         }
+        // Its output already streamed into the task log; kept for the result.
+        repo_log = database::remove_mysql_repo().unwrap_or_default();
     }
     if engine == Engine::Mongodb {
         // The package source the panel added at install time.
@@ -1646,6 +1692,7 @@ pub fn uninstall(engine: Engine, purge_data: bool) -> Result<String, String> {
         note("[LinxPanel] Data directories were kept\n".into());
     }
     note(format!("[LinxPanel] {} removed\n", engine.display_name()));
+    log.push_str(&repo_log);
     Ok(log)
 }
 
@@ -1657,13 +1704,17 @@ pub async fn forget(pool: &SqlitePool, engine: Engine, purge_data: bool) {
             .execute(pool)
             .await;
     }
+    // Kept data keeps its users and passwords, so the logins stay valid for
+    // a reinstall (of the same or a newer version).
     let keys: &[&str] = match engine {
-        Engine::Mysql => &[
+        Engine::Mysql if purge_data => &[
             database::SETTING_MYSQL_ADMIN_USER,
             database::SETTING_MYSQL_ADMIN_PASSWORD,
             SETTING_MYSQL_ROOT_PASSWORD,
         ],
-        Engine::Postgresql => &[SETTING_POSTGRES_PASSWORD],
+        Engine::Mysql => &[],
+        Engine::Postgresql if purge_data => &[SETTING_POSTGRES_PASSWORD],
+        Engine::Postgresql => &[],
         Engine::Redis => &[],
         // Kept data keeps its users, so the logins stay valid for a reinstall.
         Engine::Mongodb if purge_data => &[
