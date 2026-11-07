@@ -321,6 +321,12 @@ async fn main() -> anyhow::Result<()> {
     // Alert notifications: resources, crashed apps, expiring certificates.
     tokio::spawn(services::notify::run(state.clone(), state.shutdown.subscribe()));
 
+    // Rotate, compress and expire website access logs.
+    tokio::spawn(services::accesslog::run(
+        state.clone(),
+        state.shutdown.subscribe(),
+    ));
+
     // Purge recycle-bin items past their retention period.
     tokio::spawn(services::recycle::run(
         state.db.clone(),

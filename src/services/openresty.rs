@@ -1623,6 +1623,23 @@ async fn load_site_domains(db: &SqlitePool, site: &Site) -> Result<Vec<String>> 
         .collect())
 }
 
+/// Makes a running OpenResty write to fresh log files after they were
+/// renamed (log rotation). Nothing to do when it is not running.
+pub async fn reopen_logs(db: &SqlitePool) -> Result<()> {
+    let runtime = load_runtime(db).await?;
+    if !runtime.enabled {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(move || {
+        match run_openresty(&runtime, ["-s", "reopen"].as_slice()) {
+            Err(err) if not_running(&err.to_string()) => Ok(()),
+            other => other,
+        }
+    })
+    .await
+    .map_err(|e| anyhow!(e.to_string()))?
+}
+
 fn test_openresty(runtime: &OpenRestyRuntime) -> Result<()> {
     run_openresty(runtime, ["-t"].as_slice())
 }

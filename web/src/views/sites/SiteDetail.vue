@@ -70,6 +70,14 @@
       >
         {{ t('sb.tab') }}
       </button>
+      <button
+        type="button"
+        class="section-item"
+        :class="{ active: activeTab === 'logs' }"
+        @click="activeTab = 'logs'"
+      >
+        {{ t('al.tab') }}
+      </button>
     </div>
 
     <el-card v-if="activeTab === 'info'" shadow="hover" class="detail-card">
@@ -236,6 +244,8 @@
       <SiteBackups :site-id="siteId" />
     </el-card>
 
+    <SiteLogs v-else-if="activeTab === 'logs'" :site-id="siteId" />
+
     <el-card v-else shadow="hover" class="detail-card">
       <el-input v-model="editForm.extra_config" type="textarea" :rows="16" :placeholder="t('si.configPlaceholder')" />
       <div class="config-actions">
@@ -278,13 +288,14 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Edit, Delete, Check, Close, WarningFilled } from '@element-plus/icons-vue'
 import SiteBackups from './SiteBackups.vue'
+import SiteLogs from './SiteLogs.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const siteId = Number(route.params.id)
 const loading = ref(false)
-const activeTab = ref('info')
+const activeTab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'info')
 const site = ref<any>({})
 const domains = ref<any[]>([])
 const newDomain = ref('')

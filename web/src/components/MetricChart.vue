@@ -28,6 +28,8 @@ const props = withDefaults(
     /** Formats y-axis labels and tooltip values. */
     formatter?: (value: number) => string
     showLegend?: boolean
+    /** Formats the tooltip's time (default: time of day). */
+    timeLabel?: (ms: number) => string
   }>(),
   { height: 200, percent: false, showLegend: false },
 )
@@ -80,7 +82,8 @@ function buildOption(): echarts.EChartsCoreOption {
       formatter: (params: any) => {
         const rows = Array.isArray(params) ? params : [params]
         if (!rows.length) return ''
-        const time = new Date(rows[0].value[0]).toLocaleTimeString()
+        const ms = rows[0].value[0]
+        const time = props.timeLabel ? props.timeLabel(ms) : new Date(ms).toLocaleTimeString()
         const lines = rows
           .map(
             (row: any) =>

@@ -1020,20 +1020,9 @@ ${INSTALL_ROOT}/logs/*.log {
     notifempty
     copytruncate
 }
-
-# Per-site access logs written by nginx (read by the auto-ban engine). Under
-# attack they grow fast, so rotate by size as well.
-${INSTALL_ROOT}/logs/web/*.log {
-    daily
-    rotate 7
-    maxsize 100M
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
 EOF
+  # Per-site access logs (logs/web) are rotated, compressed and expired by
+  # the panel itself (Website → Access logs), which also analyses them.
 }
 
 harden_kernel() {

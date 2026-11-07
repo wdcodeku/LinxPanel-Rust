@@ -1,3 +1,4 @@
+pub mod accesslog;
 pub mod appproc;
 pub mod appstore;
 pub mod audit;

@@ -153,6 +153,17 @@ export const getAppLogs = (id: number, lines = 300) =>
   request.get(`/apps/${id}/logs`, { params: { lines } })
 export const clearAppLogs = (id: number) => request.delete(`/apps/${id}/logs`)
 
+// Website access logs
+export const getAccessLogReport = (siteId: number, params: { range?: string; from?: number; to?: number }) =>
+  request.get(`/sites/${siteId}/access-logs/report`, { params, timeout: 120000 })
+export const getAccessLogTail = (siteId: number, params: { lines?: number; q?: string }) =>
+  request.get(`/sites/${siteId}/access-logs/tail`, { params })
+export const clearAccessLog = (siteId: number, archives: boolean) =>
+  request.post(`/sites/${siteId}/access-logs/clear`, { archives })
+export const getAccessLogSettings = () => request.get('/access-logs/settings')
+export const saveAccessLogSettings = (data: { keep_days: number; max_mb: number }) =>
+  request.post('/access-logs/settings', data)
+
 // PHP versions
 export const getPhpOverview = () => request.get('/php')
 export const installPhp = (version: string) =>

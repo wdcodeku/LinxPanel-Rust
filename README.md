@@ -158,7 +158,7 @@ LinxPanel 在构建时会将 `web/dist` 内嵌进 Rust 可执行文件，部署�
 
 防误封：本机回环与服务器自身地址永不封禁；白名单支持 IP / CIDR；登录过面板或 SSH 的地址 24 小时内豁免；手动封禁时拒绝封禁当前访问者自己的 IP。被封后可在服务器控制台执行 `Lp unban all` 恢复。
 
-注意：网站使用 CDN 时访问日志里是 CDN 节点 IP，请把 CDN 的 IP 段加入白名单（或在网站配置中启用 real_ip）。每个网站的访问日志位于 `安装目录/logs/web/site-<ID>.log`，由 logrotate 按天 / 按大小轮转。
+注意：网站使用 CDN 时访问日志里是 CDN 节点 IP，请把 CDN 的 IP 段加入白名单（或在网站配置中启用 real_ip）。每个网站的访问日志位于 `安装目录/logs/web/site-<ID>.log`，由面板按天 / 按大小切割、gzip 压缩，默认保留 30 天（网站详情 → 访问日志 → 日志设置）。
 
 ### 会话持久化
 
@@ -184,6 +184,7 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 ### 数据库、应用商店与备份
 
 - **数据库**（侧边栏「数据库」）：MySQL（MariaDB）、PostgreSQL、Redis 一键安装、启动并开机自启
+  - MySQL 版本可选：系统源的 MariaDB / MySQL，或官方源的 MySQL 8.4 LTS / 9.7 LTS（x86_64）与 MariaDB 10.11 / 11.4 / 11.8 LTS、12.3（自动添加并锁定官方软件源，官方源不可达时用国内镜像）；在 MySQL 与 MariaDB 之间切换时自动清理冲突的共享包与配置；卸载时保留的数据若与所选版本不兼容（MySQL ↔ MariaDB、降级）会在安装前拦截，同系列升级（如 MySQL 8.0 → 8.4）原地完成
   - 新建数据库同时创建同名用户与随机密码，可选访问权限（本机 / 所有 / 指定 IP）；密码可查看、复制、重置
   - 安装 MySQL 时自动创建面板专用管理账号；已有 MySQL 可输入 root 密码接管
   - 备份为 `.sql.gz`（mysqldump / pg_dump），支持下载、一键恢复、删除
@@ -203,12 +204,14 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 - **操作日志**（面板设置 → 操作日志）：记录所有修改类操作的用户、IP、操作、对象（文件路径、域名等，不记录密码与文件内容）和结果，含登录成功 / 失败；可搜索、只看失败，保留 180 天
 - **远程备份存储**（面板设置 → 备份存储）：S3 兼容对象存储（AWS S3、阿里云 OSS、腾讯云 COS、Cloudflare R2、MinIO 等，SigV4 签名）、WebDAV、FTP / FTPS；计划备份完成后自动上传，远程按份数保留；可测试连接；上传失败会告警
 - **PHP 网站开箱即用**：安装 PHP 时自动安装常用扩展（mysql、gd、curl、mbstring、zip、intl 等）、启动 PHP-FPM，并自动识别其 socket 地址、放开 socket 权限（此前固定 `127.0.0.1:9000`，在 Debian/Ubuntu/RHEL 上 PHP 站点会 502）；已安装的 PHP 可在「运行环境」中一键「检查修复」
+- **多 PHP 版本共存**（Debian / Ubuntu，运行环境 → PHP）：PHP 5.6 – 8.4 可同时安装（Ondřej Surý 软件源，国内自动用镜像），每个版本独立的 PHP-FPM；可设默认版本（同时切换命令行 `php`），每个网站单独选择 PHP 版本（网站详情 → 基本信息，立即生效）；按版本安装 / 卸载扩展、修改 php.ini 常用项（上传大小、内存、超时、时区、禁用函数等）与 FPM 进程池参数（保存前 `php-fpm -t` 校验，失败自动还原）；不会因发行版的元包悄悄装上其它版本
 - **站点默认加固**：上传上限 256MB、禁止访问 `.env` / `.git` 等隐藏文件、FastCGI 超时 300 秒；服务器未启用 IPv6 时不再生成 `listen [::]`（否则 nginx 无法启动）
 - **项目依赖**（运行环境 → 应用 →「安装依赖」）：Python 自动创建 `.venv` 并 `pip install -r requirements.txt`；Node 按锁文件使用 npm / pnpm / yarn 安装并执行 build；PHP 执行 `composer install`。可在应用环境变量中设置 `PIP_INDEX_URL`、`npm_config_registry` 使用镜像
   - 启动入口支持 `main.py`、`-m uvicorn main:app`、`gunicorn app:app`、`npm start`、`next start` 等写法，自动使用项目的 `.venv` 与 `node_modules/.bin`
 - **文件管理**：断点续传上传（分块上传，网络中断自动重试并从断点继续，经过 nginx 等反向代理的请求体限制也能自动适配；可上传整个文件夹或直接拖入，保留目录结构；上传的文件默认 755 可执行，可在上传菜单中关闭；新文件的属主跟随所在目录）；解压 zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz，7z / rar 需安装 7-Zip 或 unrar（防路径穿越，不跟随指向目录外的链接）；压缩为 zip / tar.gz；复制、剪切、粘贴（同名可选保留两者 / 覆盖 / 跳过），支持 Ctrl+C / X / V、Delete、F2 快捷键；逐个文件显示进度、速度，可取消与重试；可视化权限编辑（读写执行勾选、所有者 / 用户组、可应用到子目录）；记住上次浏览的目录；输入或跳转到不存在的目录时提示创建；拖拽移动（按住 Ctrl / Alt 复制）到文件夹或路径栏，悬停文件夹自动打开，移动后可撤销；回收站（删除移到同一磁盘的 .Recycle_bin，可恢复 / 彻底删除 / 自动清理，Shift+Delete 或勾选可直接永久删除，系统目录禁止删除）；下载由浏览器直接接管，立即弹出保存并显示进度、支持断点续传，文件夹打包为 .tar.gz 边压缩边下载；时间按浏览者的语言和时区显示；在线编辑器基于 CodeMirror 6（约 30 种语言高亮含 nginx / shell / ini / yaml、查找替换、折叠、多光标、Ctrl+S、保留 CRLF、原子保存保留权限属主、他人修改后保存会提示冲突，拒绝打开二进制和非 UTF-8 文件）
 - **运行环境**：应用目录可一键在文件管理或终端中打开；新建应用时可浏览选择目录、目录不存在时提示创建、启动文件按语言自动提示；端口可选；终端直接弹窗打开，不离开当前页面；九种语言均可「从示例新建」：生成可运行的 Web 示例，自动编译 / 安装依赖、启动并检查端口
 - **高负载下依然流畅**：外部命令改为即时等待（原先每条命令至少多等 20ms），程序查找不再启动子进程，运行环境 / 数据库版本信息缓存，文件操作移出异步线程，面板数据库写入不再逐次 fsync；面板管理的应用和长任务以普通优先级运行，不与面板争抢
+- **访问日志分析**（网站详情 → 访问日志）：访问量 PV、独立访客 UV、流量、平均响应时间、按小时 / 按天趋势图，热门页面、访问最多的 IP（可一键封禁）、状态码、外部来源、浏览器与系统、搜索引擎与爬虫、404 与 5xx 页面、慢请求（>1 秒）、可疑请求（SQL 注入 / XSS / 路径穿越 / 代码执行 / 敏感文件扫描）；时间范围今天 / 昨天 / 7 天 / 30 天 / 本月，自动读取已压缩的历史日志；原始日志按关键字筛选；日志每天自动切割、gzip 压缩、按天数清理，超过大小上限提前切割
 - **备份**：站点详情「备份」页可立即备份整站目录（`.tar.gz`）、下载、恢复（恢复失败自动还原原目录）；计划任务新增「备份网站 / 备份数据库」类型，可设置保留份数（底层为 `linxpanel backup site|db ... --keep N`）
 
 ### 网站类型与伪静态
@@ -300,13 +303,12 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### 生产环境就绪度
 
-已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理（含 SQLite 数据编辑与 SQL 控制台）、WordPress 等网站程序与 File Browser / frp / DDNS-GO / Gitea 等服务一键安装、网站与数据库定时备份（可自动上传 S3 / WebDAV / FTP）、告警通知（钉钉 / 企业微信 / 飞书 / Telegram / 邮件 / Webhook）、操作日志、防火墙、计划任务、文件管理（回收站、在线代码编辑器）、终端。
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理（含 SQLite 数据编辑与 SQL 控制台）、WordPress 等网站程序与 File Browser / frp / DDNS-GO / Gitea 等服务一键安装、网站与数据库定时备份（可自动上传 S3 / WebDAV / FTP）、告警通知（钉钉 / 企业微信 / 飞书 / Telegram / 邮件 / Webhook）、操作日志、多 PHP 版本共存与每站点 PHP 版本、MySQL / MariaDB 官方版本选择、网站访问日志分析与自动切割、防火墙、计划任务、文件管理（回收站、在线代码编辑器）、终端。
 
 与宝塔 / 1Panel 相比仍缺少（后续计划）：
 
 - Docker 与容器应用商店（1Panel 的核心能力）
-- 多 PHP 版本共存（目前使用发行版默认版本）、MySQL 版本选择
-- 网站访问日志分析、规则型 WAF（SQL 注入 / XSS 特征拦截）
+- 规则型 WAF（SQL 注入 / XSS 特征拦截，目前访问日志只做识别与统计）
 - 多用户与权限管理
 
 ## English
@@ -466,7 +468,7 @@ Built for servers that attacks used to bring down. The rule is **reject as early
 
 Lockout safety: loopback and the server's own addresses are never banned; the whitelist takes IPs and CIDRs; addresses that logged in to the panel or SSH are exempt for 24 hours; a manual ban of your own current IP is refused. If you do get banned, run `Lp unban all` from the server console.
 
-Behind a CDN the access logs show CDN addresses: whitelist the CDN's ranges (or enable real_ip for the site). Each site logs to `<install dir>/logs/web/site-<ID>.log`, rotated daily / by size by logrotate.
+Behind a CDN the access logs show CDN addresses: whitelist the CDN's ranges (or enable real_ip for the site). Each site logs to `<install dir>/logs/web/site-<ID>.log`; the panel rotates it daily / by size, compresses it with gzip and keeps 30 days by default (site → Access logs → Log settings).
 
 ### Session Persistence
 
@@ -492,6 +494,7 @@ The panel detects and installs language runtimes, and supervises application pro
 ### Databases, App Store and Backups
 
 - **Databases** (sidebar → Databases): one-click MySQL (MariaDB), PostgreSQL and Redis - installed, started and enabled at boot
+  - MySQL version choice: the system's MariaDB / MySQL, or from the vendors' repositories MySQL 8.4 LTS / 9.7 LTS (x86_64) and MariaDB 10.11 / 11.4 / 11.8 LTS, 12.3 (the repository is added and pinned, with mirrors when the official host is unreachable); switching between MySQL and MariaDB cleans up conflicting shared packages and configuration; kept data the chosen server cannot open (MySQL ↔ MariaDB, a downgrade) is refused before installing, and an upgrade within a line (e.g. MySQL 8.0 → 8.4) happens in place
   - New databases get a same-named user with a random password and an access scope (localhost / anywhere / IP); passwords can be shown, copied and reset
   - Installing MySQL creates a panel-owned admin login; an existing MySQL can be connected with its root password
   - Backups as `.sql.gz` (mysqldump / pg_dump) with download, one-click restore and delete
@@ -511,12 +514,14 @@ The panel detects and installs language runtimes, and supervises application pro
 - **Operation log** (Settings → Operation log): every change with user, IP, action, target (file paths, domains...; never passwords or file contents) and result, logins included; search, failed-only filter, kept 180 days
 - **Remote backup storage** (Settings → Backup storage): S3-compatible storage (AWS S3, Aliyun OSS, Tencent COS, Cloudflare R2, MinIO... with SigV4 signing), WebDAV, FTP / FTPS; scheduled backups are uploaded after they finish, with remote retention; connection test; failed uploads raise an alert
 - **PHP sites work out of the box**: installing PHP adds common extensions (mysql, gd, curl, mbstring, zip, intl...), starts PHP-FPM, detects its socket and opens it to nginx (the fixed `127.0.0.1:9000` used before gave every PHP site a 502 on Debian/Ubuntu/RHEL); an installed PHP can be repaired with "Check & repair" under Runtimes
+- **Multiple PHP versions** (Debian / Ubuntu, Runtimes → PHP): PHP 5.6 – 8.4 side by side (Ondřej Surý's packages, mirrors as fallback), each with its own PHP-FPM; a default version (also the command-line `php`) and a PHP version per website (site → Info, applied at once); extensions per version, common php.ini settings (upload size, memory, timeouts, time zone, disabled functions...) and FPM pool tuning, checked with `php-fpm -t` and rolled back on failure; the distribution's metapackages can no longer pull in versions nobody asked for
 - **Hardened site defaults**: 256MB uploads, dotfiles (`.env`, `.git`) denied, 300s FastCGI timeout; no `listen [::]` on hosts without IPv6 (nginx would refuse to start)
 - **Project dependencies** (Runtimes → Apps → "Install dependencies"): Python gets a `.venv` and `pip install -r requirements.txt`; Node uses npm / pnpm / yarn per lockfile and runs the build script; PHP runs `composer install`. Set `PIP_INDEX_URL` / `npm_config_registry` in the app's environment for mirrors
   - Entries such as `main.py`, `-m uvicorn main:app`, `gunicorn app:app`, `npm start` or `next start` work, using the project's `.venv` and `node_modules/.bin`
 - **Files**: resumable uploads (sent in chunks: a dropped connection is retried and continues where it stopped; adapts to request-size limits of a reverse proxy such as nginx; whole folders by picker or drag-and-drop with their structure; uploads are 755 by default, switchable in the upload menu; new files take the owner of their folder); extract zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz, and 7z / rar with 7-Zip or unrar installed (path traversal refused, links pointing outside removed); compress to zip / tar.gz; copy, cut and paste (keep both / replace / skip on name clashes) with Ctrl+C / X / V, Delete and F2; per-file progress and speed with cancel and retry; a visual permission editor (read / write / execute boxes, owner and group, optionally recursive); the last directory is remembered; a missing directory typed or linked to is offered for creation; drag and drop to move (Ctrl / Alt copies) onto folders or the path bar, folders open on hover, undo after a move; a recycle bin (items move to .Recycle_bin on their own disk; restore, delete for good, automatic expiry; Shift+Delete or the dialog option skips it; system directories cannot be deleted); downloads handed to the browser at once with progress and resume, folders streamed as .tar.gz; times in the viewer's language and time zone; a CodeMirror 6 editor (about 30 languages incl. nginx / shell / ini / yaml, find/replace, folding, multi-cursor, Ctrl+S, CRLF kept, atomic saves keeping mode and owner, a warning when the file changed on disk meanwhile; binary and non-UTF-8 files refused)
 - **Runtimes**: open an app's directory in the file manager or a terminal in one click; browse for the directory when creating an app, create it when missing, entry files suggested per language; the port is optional; the terminal opens in a dialog without leaving the page; every language can start "from a sample": a runnable web app written, built, started and checked
 - **Smooth under heavy load**: external commands are awaited exactly (each used to cost at least 20 ms more), binaries are found without spawning processes, runtime and database versions are cached, file operations run off the async workers and panel database writes no longer fsync one by one; managed apps and long jobs run at normal priority instead of competing with the panel
+- **Access-log analytics** (site → Access logs): requests (PV), visitors (UV), traffic, average response time, an hourly / daily timeline, top pages, top IPs (ban with one click), status codes, referrers, browsers and systems, search engines and crawlers, 404 and 5xx pages, slow requests (> 1 s) and suspicious requests (SQL injection / XSS / traversal / code execution / sensitive-file scans); ranges today / yesterday / 7 days / 30 days / this month, reading compressed archives too; the raw log can be filtered; logs are rotated daily, gzipped and expired automatically, and early when they pass the size limit
 - **Backups**: the site's Backups tab archives the whole directory (`.tar.gz`), downloads and restores it (a failed restore puts the old files back); cron gains "Back up website / database" job types with retention (`linxpanel backup site|db ... --keep N` underneath)
 
 ### Site Types and Rewrite Rules
@@ -608,11 +613,10 @@ Runtime keys (panel settings / `settings` table / env):
 
 ### Production Readiness
 
-In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management (with a SQLite data editor and SQL console); one-click WordPress and other website programs plus File Browser / frp / DDNS-GO / Gitea services; scheduled website and database backups (uploaded to S3 / WebDAV / FTP); alert notifications (DingTalk / WeCom / Feishu / Telegram / e-mail / webhook); an operation log; firewall, cron, file manager (recycle bin, code editor) and terminal.
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management (with a SQLite data editor and SQL console); one-click WordPress and other website programs plus File Browser / frp / DDNS-GO / Gitea services; scheduled website and database backups (uploaded to S3 / WebDAV / FTP); alert notifications (DingTalk / WeCom / Feishu / Telegram / e-mail / webhook); an operation log; multiple PHP versions with a PHP version per site; official MySQL / MariaDB versions; access-log analytics with automatic rotation; firewall, cron, file manager (recycle bin, code editor) and terminal.
 
 Still missing compared with BaoTa / 1Panel (planned):
 
 - Docker and a container app store (1Panel's core)
-- Multiple PHP versions side by side (the distro's version is used), MySQL version choice
-- Access-log analytics, a signature WAF (SQL injection / XSS rules)
+- A signature WAF (SQL injection / XSS rules; access logs currently detect and report them)
 - Multiple users and roles
