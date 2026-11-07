@@ -10,7 +10,7 @@
     <template #header>
       <div class="sqb-head">
         <span class="sqb-head__title lp-mono">{{ fileName }}</span>
-        <span class="lp-dim lp-mono sqb-head__path">{{ path }}</span>
+        <router-link :to="locateTarget" class="lp-dim lp-mono sqb-head__path" :title="t('sql.locate')" @click="emit('update:modelValue', false)">{{ path }}</router-link>
       </div>
     </template>
 
@@ -260,6 +260,10 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void; (e: 'chan
 const { t } = useI18n()
 
 const fileName = computed(() => props.path.slice(props.path.lastIndexOf('/') + 1))
+const locateTarget = computed(() => ({
+  path: '/files',
+  query: { path: props.path.slice(0, props.path.lastIndexOf('/')) || '/', select: fileName.value },
+}))
 const tables = ref<{ name: string; rows: number | null; engine: string | null }[]>([])
 const tablesLoading = ref(false)
 const tableKeyword = ref('')
@@ -566,7 +570,7 @@ watch(
 <style scoped lang="scss">
 .sqb-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sqb-head__title { font-size: var(--lp-text-lg); font-weight: 600; color: var(--lp-text); }
-.sqb-head__path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sqb-head__path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; &:hover { color: var(--lp-accent); text-decoration: underline; } }
 .sqb { display: flex; gap: var(--lp-4); height: 100%; min-height: 0; }
 .sqb-side { width: 230px; flex-shrink: 0; display: flex; flex-direction: column; gap: var(--lp-2); min-height: 0; }
 .sqb-side__list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }

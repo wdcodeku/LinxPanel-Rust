@@ -252,6 +252,21 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // File manager recycle bin: where each deleted item came from and lies now.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS recycle_bin (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            original TEXT NOT NULL,
+            stored TEXT NOT NULL,
+            is_dir INTEGER NOT NULL DEFAULT 0,
+            size INTEGER,
+            deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Service programs installed from the app store (run as managed apps).
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS service_installs (

@@ -14,7 +14,8 @@
 
     <el-tabs v-model="tab">
       <!-- ============ General ============ -->
-      <el-tab-pane :label="t('st.tabGeneral')" name="general">
+      <el-tab-pane name="general">
+        <template #label><span class="st-tab"><el-icon><Setting /></el-icon>{{ t('st.tabGeneral') }}</span></template>
         <div class="setting-stack">
           <section class="lp-card">
             <header class="lp-card-head">
@@ -69,17 +70,20 @@
       </el-tab-pane>
 
       <!-- ============ Security ============ -->
-      <el-tab-pane :label="t('st.tabSecurity')" name="security" lazy>
+      <el-tab-pane name="security" lazy>
+        <template #label><span class="st-tab"><el-icon><Lock /></el-icon>{{ t('st.tabSecurity') }}</span></template>
         <PanelSecurity />
       </el-tab-pane>
 
       <!-- ============ Update ============ -->
-      <el-tab-pane :label="t('upd.tab')" name="update" lazy>
+      <el-tab-pane name="update" lazy>
+        <template #label><span class="st-tab"><el-icon><Promotion /></el-icon>{{ t('upd.tab') }}</span></template>
         <PanelUpdate />
       </el-tab-pane>
 
       <!-- ============ Alerts ============ -->
-      <el-tab-pane :label="t('st.tabAlerts')" name="alerts">
+      <el-tab-pane name="alerts">
+        <template #label><span class="st-tab"><el-icon><Bell /></el-icon>{{ t('st.tabAlerts') }}</span></template>
         <section class="lp-card">
           <header class="lp-card-head">
             <h2 class="lp-card-title"><el-icon><Bell /></el-icon>{{ t('st.alertTitle') }}</h2>
@@ -108,7 +112,8 @@
       </el-tab-pane>
 
       <!-- ============ About ============ -->
-      <el-tab-pane :label="t('st.tabAbout')" name="about">
+      <el-tab-pane name="about">
+        <template #label><span class="st-tab"><el-icon><InfoFilled /></el-icon>{{ t('st.tabAbout') }}</span></template>
         <section class="lp-card">
           <header class="lp-card-head">
             <h2 class="lp-card-title"><el-icon><InfoFilled /></el-icon>{{ t('st.aboutTitle') }}</h2>
@@ -272,4 +277,5 @@ onMounted(load)
   dt { font-size: var(--lp-text-xs); color: var(--lp-text-dim); margin-bottom: 3px; }
   dd { margin: 0; font-size: var(--lp-text-base); font-weight: 500; color: var(--lp-text); }
 }
+.st-tab { display: inline-flex; align-items: center; gap: 6px; }
 </style>

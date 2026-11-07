@@ -25,10 +25,12 @@
       <div class="fm-path-bar" @click="startEditPath">
         <template v-if="!editingPath">
           <el-icon class="fm-path-icon fm-path-icon-clickable" :size="14" :title="pathIconTooltip" @click.stop="onPathIconClick"><FolderOpened /></el-icon>
-          <span v-if="showRootLabel" class="fm-path-root" @click.stop="goTo(rootPath)">{{ rootLabel }}</span>
+          <span v-if="showRootLabel" class="fm-path-root" :class="{ 'drop-target': dropTarget === rootPath }" @click.stop="goTo(rootPath)"
+            @dragover="onFolderDragOver($event, rootPath, false)" @dragleave="onFolderDragLeave($event, rootPath)" @drop="onFolderDrop($event, rootPath)">{{ rootLabel }}</span>
           <template v-for="(seg, i) in pathSegments" :key="i">
             <el-icon v-if="showRootLabel || i > 0" :size="10" class="fm-path-arrow"><ArrowRight /></el-icon>
-            <span class="fm-path-seg" @click.stop="goTo(segmentPath(i))">{{ seg }}</span>
+            <span class="fm-path-seg" :class="{ 'drop-target': dropTarget === segmentPath(i) }" @click.stop="goTo(segmentPath(i))"
+              @dragover="onFolderDragOver($event, segmentPath(i), false)" @dragleave="onFolderDragLeave($event, segmentPath(i))" @drop="onFolderDrop($event, segmentPath(i))">{{ seg }}</span>
           </template>
         </template>
         <input v-else ref="pathInputRef" v-model="pathInputVal" class="fm-path-input"
@@ -61,6 +63,7 @@
           <el-button size="small" @click="toggleView"><el-icon :size="14"><Grid v-if="viewMode === 'list'" /><List v-else /></el-icon></el-button>
         </el-tooltip>
         <el-tooltip :content="t('terminal')" :show-after="400"><el-button size="small" @click="toggleTerminal"><el-icon :size="14"><Monitor /></el-icon></el-button></el-tooltip>
+        <el-tooltip v-if="!pickerMode" :content="t('rb.title')" :show-after="400"><el-button size="small" @click="openRecycleBin"><el-icon :size="14"><Delete /></el-icon></el-button></el-tooltip>
       </div>
       <input ref="uploadInputRef" class="fm-upload-input" type="file" multiple @change="onUploadInputChange" />
       <input ref="folderInputRef" class="fm-upload-input" type="file" webkitdirectory multiple @change="onFolderInputChange" />
@@ -78,14 +81,14 @@
     >
       <div v-if="viewMode === 'list'" class="fm-list" ref="listRef">
         <div class="fm-list-header">
-          <span v-if="showSelectionCheckboxes" class="fm-col-check" @click.stop @mousedown.stop>
+          <span class="fm-col-check" @click.stop @mousedown.stop>
             <el-checkbox
               :model-value="allVisibleSelected"
               :indeterminate="indeterminateVisibleSelected"
               @change="toggleAllVisibleSelection"
             />
           </span>
-          <span class="fm-col-name fm-col-name-header" :class="{ 'with-check': showSelectionCheckboxes }" @click="setSort('name')">
+          <span class="fm-col-name fm-col-name-header" @click="setSort('name')">
             {{ t('fm.name') }}
             <el-icon v-if="sortKey === 'name'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
           </span>
@@ -103,16 +106,21 @@
             <el-icon v-if="sortKey === 'permissions'" class="fm-sort-icon"><CaretTop v-if="sortOrder === 'asc'" /><CaretBottom v-else /></el-icon>
           </span>
         </div>
-        <div class="fm-list-body" ref="scrollRef" v-loading="loading">
+        <div class="fm-list-body" :class="{ 'has-selection': selectedSet.size > 0 }" ref="scrollRef" v-loading="loading" @dragover="onListDragOver">
           <div v-for="f in sortedVisibleFiles" :key="f.path" class="fm-row"
-            :class="{ selected: selectedSet.has(f.path) }" :data-path="f.path"
-            @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
+            :class="{ selected: selectedSet.has(f.path), 'drop-target': dropTarget === f.path, 'is-dragged': draggedPaths.includes(f.path) }" :data-path="f.path"
+            :draggable="canDrag"
+            @dragstart="onItemDragStart($event, f)" @dragend="onItemDragEnd"
+            @dragover="f.is_dir && onFolderDragOver($event, f.path)"
+            @dragleave="f.is_dir && onFolderDragLeave($event, f.path)"
+            @drop="f.is_dir && onFolderDrop($event, f.path)"
+            @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.meta.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
             @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
             @mousedown.left.stop="onRowMouseDown($event, f)">
-            <span v-if="showSelectionCheckboxes" class="fm-col-check" @click.stop @mousedown.stop>
+            <span class="fm-col-check" @click.stop @mousedown.stop>
               <el-checkbox :model-value="selectedSet.has(f.path)" @change="(checked) => setSelectedByCheckbox(f, checked)" />
             </span>
-            <span class="fm-col-name" :class="{ 'with-check': showSelectionCheckboxes }">
+            <span class="fm-col-name">
               <el-icon :size="18" :color="f.is_dir ? 'var(--lp-warning)' : fileIconColor(f.name)">
                 <Folder v-if="f.is_dir" /><Document v-else />
               </el-icon>
@@ -129,7 +137,7 @@
               </span>
               <span v-else>{{ fmtSize(f.size) }}</span>
             </span>
-            <span class="fm-col-time">{{ f.modified }}</span>
+            <span class="fm-col-time" :title="timeTitle(f)">{{ formatShortTime(f.mtime) }}</span>
             <span class="fm-col-owner" :title="f.owner ? `${f.owner}:${f.group}` : ''">{{ f.owner ? `${f.owner}:${f.group}` : '-' }}</span>
             <span class="fm-col-perm">{{ permissionDigits(f.permissions) }}</span>
           </div>
@@ -139,14 +147,18 @@
         </div>
       </div>
 
-      <div v-else class="fm-grid" ref="scrollRef" v-loading="loading">
+      <div v-else class="fm-grid" :class="{ 'has-selection': selectedSet.size > 0 }" ref="scrollRef" v-loading="loading" @dragover="onListDragOver">
         <div v-for="f in sortedVisibleFiles" :key="f.path" class="fm-grid-item"
-          :class="{ selected: selectedSet.has(f.path) }" :data-path="f.path"
-          @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
+          :class="{ selected: selectedSet.has(f.path), 'drop-target': dropTarget === f.path, 'is-dragged': draggedPaths.includes(f.path) }" :data-path="f.path"
+          :draggable="canDrag" :title="`${f.name}\n${timeTitle(f)}`"
+          @dragstart="onItemDragStart($event, f)" @dragend="onItemDragEnd"
+          @dragover="f.is_dir && onFolderDragOver($event, f.path)"
+          @dragleave="f.is_dir && onFolderDragLeave($event, f.path)"
+          @drop="f.is_dir && onFolderDrop($event, f.path)"
+          @click.exact="selectOne(f)" @click.ctrl.exact="toggleSelect(f)" @click.meta.exact="toggleSelect(f)" @click.shift.exact="shiftSelect(f)"
           @dblclick="handleOpen(f)" @contextmenu.prevent.stop="onContext($event, f)"
           @mousedown.left.stop="onRowMouseDown($event, f)">
           <el-checkbox
-            v-if="showSelectionCheckboxes"
             class="fm-grid-check"
             :model-value="selectedSet.has(f.path)"
             @change="(checked) => setSelectedByCheckbox(f, checked)"
@@ -301,16 +313,31 @@
     </teleport>
 
     <!-- Dialogs -->
-    <el-dialog v-model="showEditor" :title="editingFile" width="75%" top="3vh" destroy-on-close v-drag :modal="false" :close-on-click-modal="false">
-      <div class="fm-editor-wrap">
-        <textarea v-model="editContent" class="fm-editor" spellcheck="false" @keydown.tab.prevent="insertTab"></textarea>
-      </div>
+    <el-dialog v-model="deleteDialog" :title="t('fm.deleteTitle', { n: deleteItems.length })" width="480px" append-to-body>
+      <ul class="fm-del-list">
+        <li v-for="f in deleteItems.slice(0, 8)" :key="f.path">
+          <el-icon :color="f.is_dir ? 'var(--lp-warning)' : undefined"><Folder v-if="f.is_dir" /><Document v-else /></el-icon>
+          <span class="lp-truncate" :title="f.path">{{ f.name }}</span>
+        </li>
+        <li v-if="deleteItems.length > 8" class="fm-del-more">{{ t('fm.andMore', { n: deleteItems.length - 8 }) }}</li>
+      </ul>
+      <template v-if="deleteInBin"><p class="fm-del-note is-danger">{{ t('fm.deleteInBin') }}</p></template>
+      <template v-else-if="recycleEnabled">
+        <el-checkbox v-model="deletePermanent">{{ t('fm.deletePermanent') }}</el-checkbox>
+        <p class="fm-del-note" :class="{ 'is-danger': deletePermanent }">{{ deletePermanent ? t('fm.deletePermanentHint') : t('fm.deleteToBinHint') }}</p>
+      </template>
+      <p v-else class="fm-del-note is-danger">{{ t('fm.recycleOff') }}</p>
       <template #footer>
-        <span class="fm-editor-info">{{ editContent.split('\n').length }} {{ t('fm.lines') }} {{ fmtSize(editContent.length) }}</span>
-        <el-button @click="showEditor = false">{{ t('cancel') }}</el-button>
-        <el-button type="primary" :loading="saving" @click="saveFile">{{ t('save') }}</el-button>
+        <el-button @click="deleteDialog = false">{{ t('cancel') }}</el-button>
+        <el-button type="danger" :loading="deleting" @click="confirmDelete">
+          {{ deletePermanent || !recycleEnabled || deleteInBin ? t('fm.deleteForever') : t('fm.moveToBin') }}
+        </el-button>
       </template>
     </el-dialog>
+    <RecycleBin v-if="recycleMounted" v-model="recycleOpen" @restored="loadFiles()" />
+
+    <!-- Loaded on first use: CodeMirror is a separate chunk. -->
+    <FileEditor v-if="editorMounted" v-model="showEditor" :path="editingFile" @saved="loadFiles()" />
     <el-dialog v-model="showMkdir" :title="t('fm.newFolder')" width="400px" v-drag :modal="false" :close-on-click-modal="false">
       <el-input v-model="newDirName" :placeholder="t('fm.folderName')" @keyup.enter="doMkdir" autofocus />
       <template #footer><el-button @click="showMkdir = false">{{ t('cancel') }}</el-button><el-button type="primary" @click="doMkdir">{{ t('create') }}</el-button></template>
@@ -379,7 +406,7 @@
           <el-descriptions-item :label="t('fm.path')">{{ propsData.path }}</el-descriptions-item>
           <el-descriptions-item :label="t('fm.type')">{{ propsData.is_dir ? t('fm.folder') : t('fm.file') }}</el-descriptions-item>
           <el-descriptions-item :label="t('fm.size')">{{ fmtSize(propsData.size || 0) }}</el-descriptions-item>
-          <el-descriptions-item :label="t('fm.modified')">{{ propsData.modified }}</el-descriptions-item>
+          <el-descriptions-item :label="t('fm.modified')">{{ propsData.mtime ? `${formatFullTime(propsData.mtime)} (${formatRelative(propsData.mtime)})` : propsData.modified }}</el-descriptions-item>
           <el-descriptions-item :label="t('fm.permissions')">{{ permissionDigits(propsData.permissions) }}</el-descriptions-item>
         </template>
         <template v-else>
@@ -399,7 +426,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted, h } from 'vue'
 import { usePage } from '@/utils/page'
 import { useRoute } from 'vue-router'
 import PermissionDialog from '@/components/PermissionDialog.vue'
@@ -408,8 +435,12 @@ import { localizeApiMessage } from '@/utils/request'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
-import { listFiles, getFileRoots, readFileContent, getDirectorySize, downloadFileApi, writeFileContent, mkdirApi, pathState, extractArchive, compressFiles, transferFiles, deletePathApi, renamePathApi, fileInfo } from '@/api'
+import { listFiles, getFileRoots, getDirectorySize, downloadFileApi, writeFileContent, mkdirApi, pathState, extractArchive, compressFiles, transferFiles, deletePaths, getRecycleBin, renamePathApi, fileInfo } from '@/api'
 import { useI18n } from '@/i18n'
+import { defineAsyncComponent } from 'vue'
+const FileEditor = defineAsyncComponent(() => import('@/components/editor/FileEditor.vue'))
+import RecycleBin from './RecycleBin.vue'
+import { formatFullTime, formatRelative, formatShortTime } from '@/utils/format'
 import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -463,7 +494,6 @@ let uploadDragDepth = 0
 
 const showEditor = ref(false)
 const editingFile = ref('')
-const editContent = ref('')
 const saving = ref(false)
 const showMkdir = ref(false)
 const newDirName = ref('')
@@ -635,6 +665,11 @@ function parentPath(path: string) {
   return normalized.slice(0, index)
 }
 
+function joinPath(dir: string, name: string) {
+  const base = normPath(dir)
+  return base.endsWith('/') ? `${base}${name}` : `${base}/${name}`
+}
+
 function fileNameOfPath(path: string) {
   if (path === WINDOWS_ROOTS_VIEW) return t('fm.allDrives')
   const normalized = normPath(path)
@@ -697,7 +732,7 @@ const sortedVisibleFiles = computed(() => {
       const rightSize = right.is_dir ? Number(dirSizeCache.value[right.path] ?? -1) : Number(right.size || 0)
       result = compareNumber(leftSize, rightSize)
     } else if (currentSort === 'modified') {
-      result = compareNumber(modifiedTime(String(left.modified || '')), modifiedTime(String(right.modified || '')))
+      result = compareNumber(Number(left.mtime || 0) || modifiedTime(String(left.modified || '')), Number(right.mtime || 0) || modifiedTime(String(right.modified || '')))
     } else {
       result = compareNumber(
         Number(permissionDigits(String(left.permissions || '')) || '0'),
@@ -712,7 +747,11 @@ const sortedVisibleFiles = computed(() => {
   })
   return items
 })
-const showSelectionCheckboxes = computed(() => selectedSet.size > 1)
+/** Tooltip: full date with time zone, and how long ago. */
+function timeTitle(f: any) {
+  if (!f?.mtime) return f?.modified || ''
+  return `${formatFullTime(f.mtime)} · ${formatRelative(f.mtime)}`
+}
 const selectableVisibleFiles = computed(() => visibleFiles.value.filter((item) => !item?.is_virtual_drive))
 const allVisibleSelected = computed(
   () => selectableVisibleFiles.value.length > 0 && selectableVisibleFiles.value.every((item) => selectedSet.has(item.path)),
@@ -770,14 +809,19 @@ function uploadErrorText(item: UploadItem) {
 }
 
 /** Queues files (name = path relative to the current folder). */
-async function queueUploads(entries: { file: File; name: string }[]) {
+async function queueUploads(entries: { file: File; name: string }[], into?: string) {
   if (entries.length === 0) return
   if (isVirtualDriveView.value) {
     ElMessage.warning(t('fm.uploadNeedDir'))
     return
   }
-  const dir = currentPath.value
-  const existing = new Map(files.value.map((f: any) => [f.name, f]))
+  const dir = into || currentPath.value
+  let listing: any[] = files.value
+  if (normPath(dir) !== normPath(currentPath.value)) {
+    const res: any = await listFiles(dir).catch(() => null)
+    listing = res?.success ? res.data : []
+  }
+  const existing = new Map(listing.map((f: any) => [f.name, f]))
   const tops = [...new Set(entries.map((e) => e.name.split('/')[0]))]
   const clashFiles = tops.filter((name) => existing.get(name) && !existing.get(name).is_dir && entries.some((e) => e.name === name))
   const clashDirs = tops.filter((name) => existing.get(name)?.is_dir && entries.some((e) => e.name.startsWith(`${name}/`)))
@@ -1030,7 +1074,7 @@ function resolveActionTargets(primary?: any) {
 const ctxRenameDisabled = computed(() => resolveActionTargets(ctxFile.value).length > 1)
 const ctxDownloadDisabled = computed(() => {
   const targets = resolveActionTargets(ctxFile.value)
-  return targets.length === 0 || targets.every((item) => item.is_dir)
+  return targets.length === 0 || targets.every((item) => item.is_virtual_drive)
 })
 
 function setSelectedByCheckbox(file: any, checked: string | number | boolean) {
@@ -1096,15 +1140,28 @@ const pasteDialog = ref(false)
 const pasteConflict = ref<'rename' | 'overwrite' | 'skip'>('rename')
 const pasteClashes = ref<string[]>([])
 const pasteDest = ref('')
+/** The transfer waiting on the conflict dialog (from the clipboard or a drop). */
+let pendingTransfer: { paths: string[]; mode: 'copy' | 'move'; fromClipboard: boolean } | null = null
 async function paste(into?: string) {
   const clip = clipboard.value
   if (!clip || isVirtualDriveView.value) return
-  const dest = normPath(into || currentPath.value)
-  const sameDir = clip.paths.every((p) => normPath(parentPath(p)) === dest)
-  if (clip.mode === 'cut' && sameDir) {
+  await transferTo(clip.paths, clip.mode === 'cut' ? 'move' : 'copy', into || currentPath.value, true)
+}
+/** Copies or moves `paths` into `destination`, asking first when names clash. */
+async function transferTo(paths: string[], mode: 'copy' | 'move', destination: string, fromClipboard = false) {
+  const dest = normPath(destination)
+  const sameDir = paths.every((p) => normPath(parentPath(p)) === dest)
+  if (mode === 'move' && sameDir) {
     ElMessage.info(t('fm.pasteSameDir'))
     return
   }
+  // A folder cannot go into itself or one of its own subfolders.
+  if (paths.some((p) => dest === normPath(p) || dest.startsWith(normPath(p).replace(/\/?$/, '/')))) {
+    ElMessage.warning(t('fm.intoItself'))
+    return
+  }
+  pendingTransfer = { paths, mode, fromClipboard }
+  pasteClashes.value = []
   let existing: Set<string>
   if (dest === normPath(currentPath.value)) {
     existing = new Set(files.value.map((f: any) => f.name))
@@ -1112,7 +1169,7 @@ async function paste(into?: string) {
     const res: any = await listFiles(dest).catch(() => null)
     existing = new Set(res?.success ? res.data.map((f: any) => f.name) : [])
   }
-  const clashes = sameDir ? [] : clip.paths.map(fileNameOfPath).filter((n) => existing.has(n))
+  const clashes = sameDir ? [] : paths.map(fileNameOfPath).filter((n) => existing.has(n))
   pasteDest.value = dest
   if (clashes.length) {
     pasteClashes.value = clashes
@@ -1124,16 +1181,153 @@ async function paste(into?: string) {
 }
 async function doPaste(conflict: string) {
   pasteDialog.value = false
-  const clip = clipboard.value
-  if (!clip) return
-  const moving = clip.mode === 'cut'
-  const res: any = await transferFiles(clip.paths, pasteDest.value, moving ? 'move' : 'copy', conflict).catch(() => null)
+  const job = pendingTransfer
+  pendingTransfer = null
+  const hadClashes = pasteClashes.value.length > 0
+  if (!job) return
+  const moving = job.mode === 'move'
+  const dest = pasteDest.value
+  const res: any = await transferFiles(job.paths, dest, job.mode, conflict).catch(() => null)
   if (res?.success) {
-    if (moving) clipboard.value = null
+    if (moving && job.fromClipboard) clipboard.value = null
     const skipped = Number(res.data?.skipped || 0)
-    ElMessage.success(skipped ? t('fm.pastedSkipped', { n: res.data.files, s: skipped }) : t('fm.pastedN', { n: res.data?.files ?? clip.paths.length }))
+    const text = skipped ? t('fm.pastedSkipped', { n: res.data.files, s: skipped }) : t(moving ? 'fm.movedN' : 'fm.pastedN', { n: res.data?.files ?? job.paths.length })
+    // A move whose names were kept can be put back.
+    // Only a move that kept every name can be put back exactly.
+    if (moving && !skipped && !hadClashes) offerUndoMove(job.paths, dest, text)
+    else ElMessage.success(text)
   }
+  pasteClashes.value = []
   await loadFiles()
+}
+
+/** "Moved 3 items · Undo": moves them back where they came from. */
+function offerUndoMove(paths: string[], dest: string, text: string) {
+  const groups = new Map<string, string[]>()
+  for (const p of paths) {
+    const from = parentPath(p)
+    const now = joinPath(dest, fileNameOfPath(p))
+    groups.set(from, [...(groups.get(from) || []), now])
+  }
+  const message = ElMessage({
+    type: 'success',
+    duration: 6000,
+    showClose: true,
+    message: h('span', { class: 'fm-undo-msg' }, [
+      text,
+      h('button', {
+        type: 'button',
+        class: 'fm-undo-btn',
+        onClick: async () => {
+          message.close()
+          for (const [from, moved] of groups) {
+            await transferFiles(moved, from, 'move', 'skip').catch(() => null)
+          }
+          ElMessage.info(t('fm.undone'))
+          await loadFiles()
+        },
+      }, t('fm.undo')),
+    ]),
+  })
+}
+
+// --- Drag and drop: move (Ctrl / Alt: copy) onto folders and the path bar ---
+const DRAG_TYPE = 'application/x-linxpanel-paths'
+const draggedPaths = ref<string[]>([])
+const dropTarget = ref('')
+let springTimer: ReturnType<typeof setTimeout> | null = null
+const canDrag = computed(() => !props.pickerMode && !isVirtualDriveView.value)
+
+function isInternalDrag(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types || []).includes(DRAG_TYPE)
+}
+function clearSpring() {
+  if (springTimer) clearTimeout(springTimer)
+  springTimer = null
+}
+function onItemDragStart(event: DragEvent, f: any) {
+  if (!canDrag.value || !event.dataTransfer) return
+  if (!selectedSet.has(f.path)) {
+    selectedSet.clear()
+    selectedSet.add(f.path)
+  }
+  const paths = sortedVisibleFiles.value.filter((x: any) => selectedSet.has(x.path)).map((x: any) => String(x.path))
+  draggedPaths.value = paths
+  event.dataTransfer.effectAllowed = 'copyMove'
+  event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(paths))
+  event.dataTransfer.setData('text/plain', paths.join('\n'))
+  // A compact badge instead of a ghost of the whole row.
+  const badge = document.createElement('div')
+  badge.className = 'fm-drag-badge'
+  badge.textContent = paths.length === 1 ? fileNameOfPath(paths[0]) : t('fm.dragN', { n: paths.length })
+  document.body.appendChild(badge)
+  event.dataTransfer.setDragImage(badge, -12, -12)
+  setTimeout(() => badge.remove(), 0)
+}
+function onItemDragEnd() {
+  draggedPaths.value = []
+  dropTarget.value = ''
+  clearSpring()
+}
+/** Why `dest` cannot take the dragged items, or '' when it can. */
+function dropRefused(dest: string) {
+  const target = normPath(dest)
+  const dragged = draggedPaths.value.map(normPath)
+  if (!dragged.length) return ''
+  if (dragged.some((p) => target === p || target.startsWith(p.replace(/\/?$/, '/')))) return 'self'
+  if (dragged.every((p) => normPath(parentPath(p)) === target)) return 'same'
+  return ''
+}
+function onFolderDragOver(event: DragEvent, dest: string, spring = true) {
+  const internal = isInternalDrag(event)
+  if (!internal && !hasDraggedFiles(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (!event.dataTransfer) return
+  if (internal && dropRefused(dest)) {
+    event.dataTransfer.dropEffect = 'none'
+    dropTarget.value = ''
+    return
+  }
+  event.dataTransfer.dropEffect = !internal || event.ctrlKey || event.altKey ? 'copy' : 'move'
+  if (dropTarget.value !== dest) {
+    dropTarget.value = dest
+    clearSpring()
+    // Hovering a folder opens it, so a drop can go deeper.
+    if (spring) springTimer = setTimeout(() => { springTimer = null; if (dropTarget.value === dest) void goTo(dest) }, 900)
+  }
+}
+function onFolderDragLeave(event: DragEvent, dest: string) {
+  const related = event.relatedTarget as Node | null
+  if (related && (event.currentTarget as HTMLElement).contains(related)) return
+  if (dropTarget.value === dest) dropTarget.value = ''
+  clearSpring()
+}
+async function onFolderDrop(event: DragEvent, dest: string) {
+  event.preventDefault()
+  event.stopPropagation()
+  clearSpring()
+  dropTarget.value = ''
+  resetUploadDragState()
+  if (isInternalDrag(event)) {
+    let paths: string[] = []
+    try { paths = JSON.parse(event.dataTransfer?.getData(DRAG_TYPE) || '[]') } catch { paths = [] }
+    draggedPaths.value = []
+    if (paths.length) await transferTo(paths, event.ctrlKey || event.altKey ? 'copy' : 'move', dest)
+    return
+  }
+  if (hasDraggedFiles(event) && event.dataTransfer) {
+    await queueUploads(await droppedFiles(event.dataTransfer), dest)
+  }
+}
+/** Dragging near the top or bottom edge of the list scrolls it. */
+function onListDragOver(event: DragEvent) {
+  const el = scrollRef.value as HTMLElement | undefined
+  if (!el || !isInternalDrag(event)) return
+  const rect = el.getBoundingClientRect()
+  const edge = 40
+  if (event.clientY < rect.top + edge) el.scrollTop -= 12
+  else if (event.clientY > rect.bottom - edge) el.scrollTop += 12
 }
 
 // --- Compress / extract ---
@@ -1216,7 +1410,7 @@ function onFileKeys(event: KeyboardEvent) {
   else if (mod && key === 'x' && selected.length) { setClipboard('cut', selected) }
   else if (mod && key === 'v' && clipboard.value) { void paste() }
   else if (mod && key === 'a') { selectAll() }
-  else if (event.key === 'Delete' && selected.length) { void deleteTargets(selected) }
+  else if (event.key === 'Delete' && selected.length) { void deleteTargets(selected, event.shiftKey) }
   else if (event.key === 'F2' && selected.length === 1) { startRename(selected[0]) }
   else return
   event.preventDefault()
@@ -1275,21 +1469,20 @@ async function copyPathTargets(targets: any[]) {
 }
 
 async function downloadTargets(targets: any[]) {
-  const fileTargets = targets.filter((item) => !item.is_dir)
-  if (fileTargets.length === 0) {
-    ElMessage.warning(t('api.downloadFileOnly'))
-    return
-  }
-
-  for (const target of fileTargets) {
+  // Files download as they are; folders as a .tar.gz built while it downloads.
+  const items = targets.filter((item) => item?.path && !item.is_virtual_drive)
+  if (items.length === 0) return
+  for (const [index, target] of items.entries()) {
     try {
+      // Browsers drop rapid back-to-back downloads; space them out a little.
+      if (index > 0) await new Promise((resolve) => setTimeout(resolve, 400))
       await downloadFileApi(String(target.path || ''), String(target.name || 'download'))
     } catch (error: any) {
       ElMessage.error(String(error?.message || t('api.requestFailed')))
       return
     }
   }
-  ElMessage.success(t('fm.downloadedN', { n: fileTargets.length }))
+  ElMessage.success(t('fm.downloadStarted', { n: items.length }))
 }
 
 const chmodItems = ref<any[]>([])
@@ -1353,30 +1546,48 @@ async function openPropertiesDialog(targets: any[]) {
   showProps.value = true
 }
 
-async function deleteTargets(targets: any[]) {
-  if (targets.length === 0) return
+// --- Delete: to the recycle bin, or permanently ---
+const deleteDialog = ref(false)
+const deleteItems = ref<any[]>([])
+const deletePermanent = ref(false)
+const deleting = ref(false)
+const recycleEnabled = ref(true)
+const recycleOpen = ref(false)
+const recycleMounted = ref(false)
+/** Whether these items would skip the bin anyway (they are in it already). */
+const deleteInBin = computed(() => deleteItems.value.every((f) => /\/\.Recycle_bin(\/|$)/.test(String(f.path))))
+async function deleteTargets(targets: any[], permanent = false) {
+  const items = targets.filter((f) => f?.path && !f.is_virtual_drive)
+  if (items.length === 0) return
+  deleteItems.value = items
+  deletePermanent.value = permanent
+  deleteDialog.value = true
+  // The bin may have been switched off since this page loaded.
+  const res: any = await getRecycleBin().catch(() => null)
+  if (res?.success) recycleEnabled.value = !!res.data.settings.enabled
+}
+async function confirmDelete() {
+  const items = deleteItems.value
+  const permanent = deletePermanent.value || !recycleEnabled.value || deleteInBin.value
+  deleting.value = true
   try {
-    if (targets.length === 1) {
-      await ElMessageBox.confirm(t('fm.confirmDeleteMsg', { name: targets[0].name }), t('confirm'), { type: 'warning' })
-    } else {
-      await ElMessageBox.confirm(t('fm.confirmDeleteN', { n: targets.length }), t('confirm'), { type: 'warning' })
+    const res: any = await deletePaths(items.map((f) => String(f.path)), permanent)
+    if (res?.success) {
+      deleteDialog.value = false
+      const n = res.data?.deleted ?? items.length
+      ElMessage.success(res.data?.recycled ? t('fm.recycledN', { n }) : t('fm.deletedN', { n }))
+      selectedSet.clear()
     }
   } catch {
-    return
+    // Interceptor reports it.
+  } finally {
+    deleting.value = false
+    await loadFiles()
   }
-
-  let ok = 0
-  for (const item of targets) {
-    try {
-      const result: any = await deletePathApi(item.path)
-      if (result.success) ok++
-    } catch {}
-  }
-
-  if (targets.length === 1) ElMessage.success(ok ? t('fm.deleted') : t('failed'))
-  else ElMessage.success(t('fm.deletedN', { n: ok }))
-  selectedSet.clear()
-  await loadFiles()
+}
+function openRecycleBin() {
+  recycleMounted.value = true
+  recycleOpen.value = true
 }
 
 async function batchDelete() {
@@ -1687,26 +1898,11 @@ function termCtxAction(action: 'copy' | 'paste' | 'clear') {
 }
 function closeAllCtx() { ctxVisible.value = false; bgCtxVisible.value = false; termCtxVisible.value = false }
 
-async function openEditor(path: string) {
-  try {
-    const res: any = await readFileContent(path)
-    if (res.success) { editingFile.value = path; editContent.value = res.data.content; showEditor.value = true }
-    else ElMessage.error(res.message)
-  } catch { ElMessage.error(t('fm.readFailed')) }
-}
-function insertTab(e: KeyboardEvent) {
-  const ta = e.target as HTMLTextAreaElement
-  const s = ta.selectionStart, end = ta.selectionEnd
-  editContent.value = editContent.value.substring(0, s) + '  ' + editContent.value.substring(end)
-  nextTick(() => { ta.selectionStart = ta.selectionEnd = s + 2 })
-}
-async function saveFile() {
-  saving.value = true
-  try {
-    const res: any = await writeFileContent(editingFile.value, editContent.value)
-    if (res.success) { ElMessage.success(t('fm.saved')); showEditor.value = false; loadFiles() }
-    else ElMessage.error(res.message)
-  } finally { saving.value = false }
+const editorMounted = ref(false)
+function openEditor(path: string) {
+  editingFile.value = path
+  editorMounted.value = true
+  showEditor.value = true
 }
 async function doMkdir() {
   if (!newDirName.value.trim()) return
@@ -1996,6 +2192,29 @@ function fmtSize(b: number) {
   return (b / Math.pow(1024, i)).toFixed(1) + ' ' + u[i]
 }
 
+// ?select=name highlights that entry once the folder has loaded (used by
+// "locate in file manager" links elsewhere in the panel).
+let pendingSelect = typeof route.query.select === 'string' ? route.query.select : ''
+watch(() => route.query.select, (name) => {
+  pendingSelect = typeof name === 'string' ? name : ''
+  applyPendingSelect()
+})
+function applyPendingSelect() {
+  if (!pendingSelect) return
+  const entry = files.value.find((f: any) => f.name === pendingSelect)
+  if (!entry) return
+  pendingSelect = ''
+  selectedSet.clear()
+  selectedSet.add(entry.path)
+  nextTick(() => {
+    const el = scrollRef.value?.querySelector(`[data-path="${CSS.escape(entry.path)}"]`) as HTMLElement | null
+    el?.scrollIntoView({ block: 'center' })
+    el?.classList.add('fm-flash')
+    setTimeout(() => el?.classList.remove('fm-flash'), 1600)
+  })
+}
+watch(files, applyPendingSelect)
+
 watch(
   () => route.query.path,
   async (newPath) => {
@@ -2079,6 +2298,47 @@ onUnmounted(() => {
 })
 </script>
 
+<style lang="scss">
+/* Appended to <body> / teleported, so not scoped. */
+.fm-drag-badge {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  max-width: 260px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--lp-primary, #4f46e5);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.25);
+}
+.fm-undo-msg { display: inline-flex; align-items: center; gap: 12px; }
+@keyframes fm-flash { 0%, 60% { box-shadow: inset 0 0 0 2px var(--lp-primary, #4f46e5); } 100% { box-shadow: none; } }
+.fm-flash { animation: fm-flash 1.6s ease-out; }
+.fm-del-list {
+  margin: 0 0 12px; padding: 8px 10px; list-style: none; max-height: 220px; overflow: auto;
+  border-radius: 8px; background: var(--lp-muted-soft, rgba(127,127,127,.08));
+  li { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; min-width: 0; }
+}
+.fm-del-more { color: var(--lp-text-secondary); font-size: 12px; }
+.fm-del-note { margin: 6px 0 0; font-size: 12px; color: var(--lp-text-secondary); line-height: 1.6; }
+.fm-del-note.is-danger { color: var(--el-color-danger); }
+.fm-undo-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  &:hover { text-decoration: underline; }
+}
+</style>
+
 <style scoped lang="scss">
 .file-manager {
   height: calc(100vh - var(--lp-header-h));
@@ -2137,6 +2397,8 @@ onUnmounted(() => {
   &:hover { color: var(--lp-primary); background: var(--lp-primary-bg); }
 }
 .fm-path-arrow { color: var(--lp-text-placeholder); flex-shrink: 0; }
+.fm-path-root.drop-target,
+.fm-path-seg.drop-target { color: var(--lp-primary); background: var(--lp-primary-bg); box-shadow: inset 0 0 0 1px var(--lp-primary); }
 .fm-path-seg {
   color: var(--lp-text-secondary); cursor: pointer; white-space: nowrap;
   max-width: 138px; overflow: hidden; text-overflow: ellipsis;
@@ -2224,28 +2486,20 @@ onUnmounted(() => {
 }
 .fm-list-body { flex: 1; overflow-y: auto; }
 .fm-col-check {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
+  /* A real column: aligned with the header, clear of the row edge. */
+  flex: 0 0 32px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  z-index: 2;
-  pointer-events: auto;
-  :deep(.el-checkbox) {
-    margin-right: 0;
-    line-height: 1;
-    height: 16px;
-  }
-  :deep(.el-checkbox__input) { line-height: 1; }
-  :deep(.el-checkbox__inner) {
-    width: 14px;
-    height: 14px;
-  }
+  justify-content: flex-start;
+  margin-right: 4px;
+  :deep(.el-checkbox) { margin-right: 0; height: 18px; }
 }
+/* Row checkboxes appear on hover, and stay once anything is selected. */
+.fm-row .fm-col-check { opacity: 0; transition: opacity 0.12s; }
+.fm-row:hover .fm-col-check,
+.fm-row.selected .fm-col-check,
+.has-selection .fm-row .fm-col-check { opacity: 1; }
 .fm-col-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.fm-col-name.with-check { padding-left: 18px; }
 .fm-col-name-header,
 .fm-col-header-sortable {
   cursor: pointer;
@@ -2273,6 +2527,8 @@ onUnmounted(() => {
   &:last-child { border-bottom: none; }
   &:hover { background: var(--lp-table-row-hover); }
   &.selected { background: var(--lp-primary-bg); }
+  &.drop-target { background: var(--lp-primary-bg); box-shadow: inset 0 0 0 2px var(--lp-primary); }
+  &.is-dragged { opacity: 0.5; }
   .fm-col-size, .fm-col-time, .fm-col-perm, .fm-col-owner { color: var(--lp-text-secondary); font-size: 12px; }
 }
 .fm-fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lp-text-primary); font-weight: 500; }
@@ -2291,7 +2547,12 @@ onUnmounted(() => {
   position: relative;
   &:hover { background: var(--lp-table-row-hover); }
   &.selected { background: var(--lp-primary-bg); outline: 1px solid var(--lp-primary); }
+  &.drop-target { background: var(--lp-primary-bg); outline: 2px solid var(--lp-primary); }
+  &.is-dragged { opacity: 0.5; }
+  .fm-grid-check { opacity: 0; transition: opacity 0.12s; }
+  &:hover .fm-grid-check, &.selected .fm-grid-check { opacity: 1; }
 }
+.has-selection .fm-grid-item .fm-grid-check { opacity: 1; }
 .fm-grid-check {
   position: absolute;
   top: 8px;

@@ -8,11 +8,13 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CodeEditor: typeof import('./src/components/editor/CodeEditor.vue')['default']
     CommandPalette: typeof import('./src/components/CommandPalette.vue')['default']
     DirPicker: typeof import('./src/components/DirPicker.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAutocomplete: typeof import('element-plus/es')['ElAutocomplete']
     ElButton: typeof import('element-plus/es')['ElButton']
+    ElButtonGroup: typeof import('element-plus/es')['ElButtonGroup']
     ElCard: typeof import('element-plus/es')['ElCard']
     ElCheckbox: typeof import('element-plus/es')['ElCheckbox']
     ElCollapse: typeof import('element-plus/es')['ElCollapse']
@@ -40,6 +42,7 @@ declare module 'vue' {
     ElRadio: typeof import('element-plus/es')['ElRadio']
     ElRadioButton: typeof import('element-plus/es')['ElRadioButton']
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
+    ElResult: typeof import('element-plus/es')['ElResult']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElSkeletonItem: typeof import('element-plus/es')['ElSkeletonItem']
@@ -52,6 +55,7 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTimeSelect: typeof import('element-plus/es')['ElTimeSelect']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
+    FileEditor: typeof import('./src/components/editor/FileEditor.vue')['default']
     Layout: typeof import('./src/components/Layout.vue')['default']
     MetricChart: typeof import('./src/components/MetricChart.vue')['default']
     OperationLogDialog: typeof import('./src/components/OperationLogDialog.vue')['default']
@@ -60,6 +64,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     StatTile: typeof import('./src/components/StatTile.vue')['default']
     TaskCenter: typeof import('./src/components/TaskCenter.vue')['default']
+    TerminalDialog: typeof import('./src/components/TerminalDialog.vue')['default']
     TerminalPane: typeof import('./src/components/TerminalPane.vue')['default']
   }
   export interface GlobalDirectives {

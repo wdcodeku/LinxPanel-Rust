@@ -758,7 +758,7 @@ impl Conflict {
 }
 
 /// "name (2).ext" style alternative that does not exist yet.
-fn free_name(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn free_name(dir: &Path, name: &str) -> PathBuf {
     let (stem, ext) = match name.rfind('.') {
         Some(at) if at > 0 => (&name[..at], &name[at..]),
         _ => (name, ""),

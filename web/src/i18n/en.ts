@@ -44,7 +44,66 @@ export default {
   },
 
   // File Manager
+  ed: {
+    unsaved: 'Unsaved changes',
+    search: 'Find / replace (Ctrl+F)',
+    gotoLine: 'Go to line (Ctrl+G)',
+    wrap: 'Word wrap',
+    reload: 'Reload',
+    cannotOpen: 'This file cannot be opened',
+    position: 'Ln {line}, Col {col}',
+    selected: '{n} selected',
+    lines: '{n} lines',
+    keys: 'Ctrl+F find · Ctrl+H replace · Ctrl+/ comment · Alt+click multi-cursor',
+    conflict: 'The file was changed on disk after you opened it (by another program or person). Overwriting loses those changes; or discard yours and reload the version on disk.',
+    conflictTitle: 'File changed on disk',
+    overwrite: 'Overwrite anyway',
+    reloadTheirs: 'Reload from disk',
+    discard: 'Discard unsaved changes and reload?',
+    closeUnsaved: 'Save your changes before closing?',
+    saveAndClose: 'Save and close',
+    discardChanges: "Don't save",
+  },
+  rb: {
+    title: 'Recycle bin',
+    enabled: 'Recycle bin on',
+    keep: 'Keep for',
+    days: 'days',
+    hintDays: 'Deleted items move to .Recycle_bin on their own disk and are removed for good after {n} days.',
+    hintForever: 'Deleted items move to .Recycle_bin on their own disk and stay until emptied.',
+    search: 'Search name or original location',
+    from: 'Original location',
+    deletedAt: 'Deleted',
+    restore: 'Restore',
+    restoreN: 'Restore ({n})',
+    purgeN: 'Delete permanently ({n})',
+    empty: 'Empty recycle bin',
+    emptyText: 'The recycle bin is empty',
+    total: '{n} item(s), {size}',
+    settingsSaved: 'Recycle bin settings saved',
+    restoredN: 'Restored {n} item(s)',
+    restoredRenamed: 'Restored {n} item(s); {m} renamed because the name was taken',
+    purgeConfirm: 'Delete these {n} item(s) permanently? This cannot be undone.',
+    purgedN: 'Deleted {n} item(s) permanently',
+    emptyConfirm: 'Delete all {n} item(s) in the recycle bin permanently? This cannot be undone.',
+  },
   fm: {
+    recycledN: 'Moved {n} item(s) to the recycle bin',
+    deleteTitle: 'Delete {n} item(s)',
+    andMore: '…and {n} more',
+    deleteInBin: 'These items are in the recycle bin already and will be deleted for good.',
+    deletePermanent: 'Delete permanently (skip the recycle bin)',
+    deletePermanentHint: 'Permanently deleted items cannot be recovered.',
+    deleteToBinHint: 'Items go to the recycle bin and can be restored. Shift+Delete deletes permanently.',
+    recycleOff: 'The recycle bin is off: deleted items cannot be recovered.',
+    deleteForever: 'Delete permanently',
+    moveToBin: 'Move to recycle bin',
+    downloadStarted: 'Download of {n} item(s) started — see your browser\'s downloads',
+    intoItself: 'A folder cannot go into itself',
+    movedN: 'Moved {n} item(s)',
+    undo: 'Undo',
+    undone: 'Undone',
+    dragN: '{n} items',
     name: 'Name',
     size: 'Size',
     modified: 'Modified',
@@ -563,6 +622,7 @@ export default {
     openrestyInstallAllMethodsFailed: 'All quick install methods failed. Please check install logs.',
   },
 
+  time: { today: 'Today', yesterday: 'Yesterday' },
   unit: {
     day: 'd',
     hour: 'h',
@@ -876,6 +936,7 @@ export default {
   },
 
   task: {
+    sample: 'Create sample app {name}',
     upgrade: 'Upgrade {name}',
     extract: 'Extract {name}',
     compress: 'Compress {name}',
@@ -1010,6 +1071,11 @@ export default {
   },
 
   rt: {
+    modeExisting: 'Existing project',
+    modeSample: 'From a sample',
+    sampleHint: 'Creates a ready-to-run web sample (Hello World) in the directory, builds it / installs dependencies and starts it, so you can build on it.',
+    portRequired: 'Enter a port',
+    sampleReady: 'The sample is running on port {port}',
     installName: 'Install {name}',
     appsOf: '{name} apps',
     newAppOf: 'New {name} app',
@@ -1115,6 +1181,8 @@ export default {
 
   tm: {
     connected: 'Connected',
+    maximize: 'Maximize',
+    restore: 'Restore',
     disconnected: 'Disconnected',
     clear: 'Clear',
     disconnect: 'Disconnect',
@@ -1314,6 +1382,7 @@ export default {
 
   // SQLite (database files)
   sql: {
+    locate: 'Show in file manager',
     title: 'SQLite database files',
     cardSub: 'File based · nothing to install',
     intro: 'An SQLite database is a single file that the application reads and writes itself; there is no server. Add files here to see their tables, back them up and restore them.',

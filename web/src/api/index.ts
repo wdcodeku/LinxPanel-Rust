@@ -146,6 +146,9 @@ export const updateApp = (id: number, data: AppPayload) => request.post(`/apps/$
 export const deleteApp = (id: number) => request.delete(`/apps/${id}`)
 export const appAction = (id: number, action: 'start' | 'stop' | 'restart') =>
   request.post(`/apps/${id}/${action}`)
+/** Writes a sample project, builds it if needed and starts it (as a task). */
+export const createAppFromSample = (data: { name: string; runtime: string; work_dir: string; port: number; run_user: string }) =>
+  runTask(t('task.sample', { name: data.name }), () => request.post('/apps/from-sample', data), { closeOnSuccess: true })
 export const getAppLogs = (id: number, lines = 300) =>
   request.get(`/apps/${id}/logs`, { params: { lines } })
 export const clearAppLogs = (id: number) => request.delete(`/apps/${id}/logs`)
@@ -349,39 +352,24 @@ export const listFiles = (path: string) => request.get('/files/list', { params: 
 export const getFileRoots = () => request.get('/files/roots')
 export const readFileContent = (path: string) => request.get('/files/read', { params: { path } })
 export const getDirectorySize = (path: string) => request.get('/files/dir-size', { params: { path } })
-export const downloadFileApi = async (path: string, fallbackName?: string) => {
-  const token = localStorage.getItem('token')
-  const response = await fetch(`/api/files/download?path=${encodeURIComponent(path)}`, {
-    method: 'GET',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
-
-  if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const data = await response.json() as { message?: string }
-      if (data?.message) message = data.message
-    } catch {
-      try {
-        const text = (await response.text()).trim()
-        if (text) message = text
-      } catch {}
-    }
-    throw new Error(message)
-  }
-
-  const blob = await response.blob()
-  const suggestedName = fallbackName || path.split('/').filter(Boolean).pop() || 'download'
-  const url = URL.createObjectURL(blob)
+/**
+ * Starts a download in the browser's own download manager: the panel mints a
+ * short-lived link and the browser fetches it directly, so the save dialog and
+ * progress appear at once (no waiting for the whole file). Folders download as .tar.gz.
+ */
+export const downloadFileApi = async (path: string, _fallbackName?: string) => {
+  const res: any = await request.post('/files/download-link', { path })
+  if (!res?.success) throw new Error(res?.message || 'Download failed')
   const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = suggestedName
+  anchor.href = res.data.url
+  anchor.download = res.data.name
+  anchor.rel = 'noopener'
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  URL.revokeObjectURL(url)
 }
-export const writeFileContent = (path: string, content: string) => request.post('/files/write', { path, content })
+export const writeFileContent = (path: string, content: string, options: { expected_version?: string; force?: boolean } = {}) =>
+  request.post('/files/write', { path, content, ...options })
 /** One file per request so each has its own progress and can be canceled. */
 export const uploadFileApi = (path: string, file: File, signal: AbortSignal, onProgress: (loaded: number) => void) => {
   const formData = new FormData()
@@ -397,7 +385,15 @@ export const uploadFileApi = (path: string, file: File, signal: AbortSignal, onP
 export const mkdirApi = (path: string) => request.post('/files/mkdir', { path })
 /** { exists, is_dir } - never an error toast for a missing path. */
 export const pathState = (path: string) => request.get('/files/exists', { params: { path } })
-export const deletePathApi = (path: string) => request.post('/files/delete', { path })
+export const deletePathApi = (path: string, permanent = false) => request.post('/files/delete', { path, permanent })
+/** Deletes several paths in one request; to the recycle bin unless `permanent`. */
+export const deletePaths = (paths: string[], permanent = false) => request.post('/files/delete', { paths, permanent })
+// Recycle bin
+export const getRecycleBin = () => request.get('/files/recycle')
+export const restoreRecycled = (ids: number[]) => request.post('/files/recycle/restore', { ids })
+export const purgeRecycled = (ids: number[]) => request.post('/files/recycle/delete', { ids })
+export const emptyRecycleBin = () => request.post('/files/recycle/empty')
+export const saveRecycleSettings = (data: { enabled: boolean; keep_days: number }) => request.post('/files/recycle/settings', data)
 export const renamePathApi = (from: string, to: string) => request.post('/files/rename', { from, to })
 export const execCmd = (cmd: string, cwd?: string) => request.post('/files/exec', { cmd, cwd })
 export type ExecStreamChunk = { type: 'out' | 'err' | 'exit'; data?: string; exit_code?: number; done?: boolean }

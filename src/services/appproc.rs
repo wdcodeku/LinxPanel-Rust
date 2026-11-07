@@ -393,6 +393,11 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
             runtime::interpreter_path("php").unwrap_or_else(|| "php".into()),
             tokens.clone(),
         ),
+        // A .java file runs straight from source (Java 11+); anything else is a jar.
+        "java" if first.ends_with(".java") => (
+            runtime::interpreter_path("java").unwrap_or_else(|| "java".into()),
+            tokens.clone(),
+        ),
         "java" => (
             runtime::interpreter_path("java").unwrap_or_else(|| "java".into()),
             vec!["-jar".to_string(), entry],
@@ -406,7 +411,15 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
                 .unwrap_or_else(|| "cargo".into()),
             rest,
         ),
-        "go" | "binary" | "rust" => (entry, Vec::new()),
+        // A bare name like "app" means the file in the project, not one on PATH.
+        "go" | "binary" | "rust" => {
+            let local = work_dir.join(&entry);
+            if !entry.contains('/') && local.is_file() {
+                (local.to_string_lossy().to_string(), Vec::new())
+            } else {
+                (entry, Vec::new())
+            }
+        }
         // App.dll runs on the dotnet host; a published apphost runs directly;
         // a project file runs with `dotnet run` (development).
         "dotnet" => {
@@ -664,6 +677,16 @@ pub fn install_dependencies(record: &AppRecord, build: bool) -> Result<String, S
                 rockspec.as_str(),
             ]);
             step(&luarocks, &args)
+        }
+        // Builds ./app from the module in the working directory.
+        "go" => {
+            if !has("go.mod") {
+                return Err("No go.mod in the working directory".into());
+            }
+            let go = shell::which("go")
+                .map(|p| p.to_string_lossy().to_string())
+                .ok_or("Go is not installed")?;
+            step(&go, &["build", "-o", "app", "."])
         }
         _ => Err("This runtime has no dependency step".into()),
     };

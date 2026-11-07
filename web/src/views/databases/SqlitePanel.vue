@@ -35,7 +35,9 @@
           </button>
           <el-tag v-if="!row.exists" size="small" type="danger" class="ml">{{ t('sql.missing') }}</el-tag>
           <el-tag v-else-if="row.error" size="small" type="warning" class="ml" :title="row.error">{{ t('sql.unreadable') }}</el-tag>
-          <div class="lp-dim lp-mono path">{{ row.path }}</div>
+          <router-link :to="locate(row.path)" class="lp-dim lp-mono path path-link" :title="t('sql.locate')">
+            <el-icon class="path-link__icon"><FolderOpened /></el-icon>{{ row.path }}
+          </router-link>
         </template>
       </el-table-column>
       <el-table-column :label="t('dbm.tablesSize')" min-width="130">
@@ -156,6 +158,12 @@
 </template>
 
 <script setup lang="ts">
+import { FolderOpened } from '@element-plus/icons-vue'
+/** File manager opened at the database's folder with the file highlighted. */
+function locate(path: string) {
+  const at = path.lastIndexOf('/')
+  return { path: '/files', query: { path: path.slice(0, at) || '/', select: path.slice(at + 1) } }
+}
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Aim, Coin, CopyDocument, InfoFilled, Plus, Refresh, Search } from '@element-plus/icons-vue'
@@ -416,6 +424,8 @@ load()
 .strong { font-weight: 600; }
 .ml { margin-left: var(--lp-2); }
 .path { font-size: 11px; margin-top: 2px; word-break: break-all; }
+.path-link { display: inline-flex; align-items: flex-start; gap: 4px; text-decoration: none; &:hover { color: var(--lp-accent); text-decoration: underline; } }
+.path-link__icon { flex-shrink: 0; margin-top: 1px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--lp-2); padding: 40px var(--lp-4); text-align: center; }
 .empty__icon { color: var(--lp-text-faint); }
 .empty__title { margin: 0; font-weight: 600; }

@@ -4,7 +4,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        DefaultBodyLimit, Multipart, Query,
+        DefaultBodyLimit, Multipart, Query, State,
     },
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -60,6 +60,30 @@ const UPLOAD_LIMIT: usize = {
     }
 };
 
+/// Identifies one state of a file: nanosecond mtime plus size.
+fn file_version(meta: Option<&std::fs::Metadata>) -> String {
+    let nanos = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", nanos, meta.map(|m| m.len()).unwrap_or(0))
+}
+
+/// Modification time as server-local text and as Unix seconds.
+fn modified_of(meta: Option<&std::fs::Metadata>) -> (String, i64) {
+    match meta.and_then(|m| m.modified().ok()) {
+        Some(time) => {
+            let local: chrono::DateTime<chrono::Local> = time.into();
+            (
+                local.format("%Y-%m-%d %H:%M:%S").to_string(),
+                local.timestamp(),
+            )
+        }
+        None => (String::new(), 0),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct PathQuery {
     path: String,
@@ -71,7 +95,11 @@ struct FileEntry {
     path: String,
     is_dir: bool,
     size: u64,
+    /// Server-local time, for display without the browser's help.
     modified: String,
+    /// Unix seconds (0 when unknown): the browser shows it in the viewer's
+    /// own time zone and language.
+    mtime: i64,
     permissions: String,
     owner: String,
     group: String,
@@ -82,6 +110,13 @@ struct FileContent {
     path: String,
     content: String,
     size: u64,
+    /// Unix seconds.
+    mtime: i64,
+    /// Changes whenever the file does (nanosecond mtime and size): sent back on
+    /// save to detect edits made by someone else meanwhile.
+    version: String,
+    /// "\r\n" when the file uses Windows line endings, else "\n".
+    line_ending: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +135,12 @@ struct UploadResult {
 struct WriteRequest {
     path: String,
     content: String,
+    /// The version the editor loaded; a different one on disk means someone
+    /// else changed the file, and the save is refused unless `force`.
+    #[serde(default)]
+    expected_version: Option<String>,
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,14 +351,7 @@ fn list_files_blocking(q: PathQuery) -> Json<ApiResponse<Vec<FileEntry>>> {
                     .replace('\\', "/");
                 let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                 let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .map(|t| {
-                        let dt: chrono::DateTime<chrono::Local> = t.into();
-                        dt.format("%Y-%m-%d %H:%M:%S").to_string()
-                    })
-                    .unwrap_or_default();
+                let (modified, mtime) = modified_of(meta.as_ref());
                 let permissions = meta.as_ref().map(format_permissions).unwrap_or_else(|| {
                     if is_dir {
                         "755".into()
@@ -332,6 +366,7 @@ fn list_files_blocking(q: PathQuery) -> Json<ApiResponse<Vec<FileEntry>>> {
                     is_dir,
                     size,
                     modified,
+                    mtime,
                     permissions,
                     owner,
                     group,
@@ -360,16 +395,43 @@ fn read_file_blocking(q: PathQuery) -> Json<ApiResponse<FileContent>> {
     let meta = std::fs::metadata(p).ok();
     let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
     if size > 10 * 1024 * 1024 {
-        return Json(ApiResponse::err("File too large (>10MB)"));
+        return Json(ApiResponse::err(
+            "File too large to edit online (over 10 MB); download it instead",
+        ));
     }
-    match std::fs::read_to_string(p) {
-        Ok(content) => Json(ApiResponse::ok(FileContent {
-            path: normalized_path,
-            content,
-            size,
-        })),
-        Err(e) => Json(ApiResponse::err(&format!("Cannot read: {}", e))),
+    let bytes = match std::fs::read(p) {
+        Ok(bytes) => bytes,
+        Err(e) => return Json(ApiResponse::err(&format!("Cannot read: {}", e))),
+    };
+    // A NUL byte early on: an image, archive or program, not text.
+    if bytes.iter().take(8192).any(|b| *b == 0) {
+        return Json(ApiResponse::err(
+            "This is a binary file and cannot be edited as text",
+        ));
     }
+    let content = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            return Json(ApiResponse::err(
+                "This file is not UTF-8 text (e.g. GBK); editing it here would damage it",
+            ))
+        }
+    };
+    let (_, mtime) = modified_of(meta.as_ref());
+    let version = file_version(meta.as_ref());
+    let line_ending = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    Json(ApiResponse::ok(FileContent {
+        path: normalized_path,
+        size,
+        mtime,
+        version,
+        line_ending: line_ending.into(),
+        content,
+    }))
 }
 
 async fn download_file(Query(q): Query<PathQuery>) -> Response<Body> {
@@ -439,19 +501,95 @@ async fn directory_size(Query(q): Query<PathQuery>) -> Json<ApiResponse<DirSizeP
     }))
 }
 
-async fn write_file(Json(req): Json<WriteRequest>) -> Json<ApiResponse<()>> {
+async fn write_file(Json(req): Json<WriteRequest>) -> Json<ApiResponse<WriteResult>> {
     off_runtime(move || write_file_blocking(req)).await
 }
 
-fn write_file_blocking(req: WriteRequest) -> Json<ApiResponse<()>> {
+#[derive(Serialize)]
+struct WriteResult {
+    mtime: i64,
+    version: String,
+    size: u64,
+}
+
+fn write_file_blocking(req: WriteRequest) -> Json<ApiResponse<WriteResult>> {
     let normalized_path = normalize_fs_path(&req.path);
-    if let Some(parent) = std::path::Path::new(&normalized_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let path = std::path::Path::new(&normalized_path);
+    let existing = std::fs::metadata(path).ok();
+    if let (Some(meta), Some(expected), false) = (&existing, &req.expected_version, req.force) {
+        if &file_version(Some(meta)) != expected {
+            return Json(ApiResponse::err("CHANGED_ON_DISK"));
+        }
     }
-    match std::fs::write(&normalized_path, &req.content) {
-        Ok(_) => Json(ApiResponse::ok_msg("File saved")),
+    if existing.as_ref().is_some_and(|m| m.is_dir()) {
+        return Json(ApiResponse::err("A folder with this name exists"));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            if let Err(e) = crate::services::fileops::create_dirs_like_parent(parent) {
+                return Json(ApiResponse::err(&e.to_string()));
+            }
+        }
+    }
+    match atomic_write(path, req.content.as_bytes(), existing.as_ref()) {
+        Ok(()) => {
+            let meta = std::fs::metadata(path).ok();
+            let (_, mtime) = modified_of(meta.as_ref());
+            Json(ApiResponse::ok(WriteResult {
+                mtime,
+                version: file_version(meta.as_ref()),
+                size: meta.map(|m| m.len()).unwrap_or(0),
+            }))
+        }
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
+}
+
+/// Writes through a temporary file renamed over the target, so a crash or a
+/// full disk never leaves a half-written file. Mode and owner are kept; a new
+/// file takes the owner of its folder.
+fn atomic_write(
+    path: &Path,
+    bytes: &[u8],
+    existing: Option<&std::fs::Metadata>,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().unwrap_or_else(|| Path::new("/"));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // A symlink is written through to its target, as an editor would.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return std::fs::write(path, bytes);
+    }
+    let temp = dir.join(format!(
+        ".{}.lp-save-{}",
+        name,
+        uuid::Uuid::new_v4().simple()
+    ));
+    let result = (|| {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        match existing {
+            Some(meta) => {
+                std::fs::set_permissions(&temp, meta.permissions())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let _ = std::os::unix::fs::chown(&temp, Some(meta.uid()), Some(meta.gid()));
+                }
+            }
+            None => crate::services::fileops::inherit_owner(&temp, dir),
+        }
+        std::fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 async fn mkdir(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
@@ -466,25 +604,78 @@ fn mkdir_blocking(req: PathQuery) -> Json<ApiResponse<()>> {
     }
 }
 
-async fn delete_path(Json(req): Json<PathQuery>) -> Json<ApiResponse<()>> {
-    off_runtime(move || delete_path_blocking(req)).await
+#[derive(Debug, Deserialize)]
+struct DeleteRequest {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    paths: Vec<String>,
+    /// Skip the recycle bin.
+    #[serde(default)]
+    permanent: bool,
 }
 
-fn delete_path_blocking(req: PathQuery) -> Json<ApiResponse<()>> {
-    let normalized_path = normalize_fs_path(&req.path);
-    let p = std::path::Path::new(&normalized_path);
-    if !p.exists() {
-        return Json(ApiResponse::err("Path not found"));
+#[derive(Serialize)]
+struct DeleteResult {
+    deleted: usize,
+    /// How many went to the recycle bin (the rest were deleted for good).
+    recycled: usize,
+}
+
+async fn delete_path(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DeleteRequest>,
+) -> Json<ApiResponse<DeleteResult>> {
+    use crate::services::recycle;
+    let mut targets: Vec<String> = req.paths;
+    if !req.path.trim().is_empty() {
+        targets.push(req.path);
     }
-    let result = if p.is_dir() {
-        std::fs::remove_dir_all(p)
-    } else {
-        std::fs::remove_file(p)
+    if targets.is_empty() {
+        return Json(ApiResponse::err("Nothing to delete"));
+    }
+    let use_bin = !req.permanent && recycle::load_settings(&state.db).await.enabled;
+    let mut result = DeleteResult {
+        deleted: 0,
+        recycled: 0,
     };
-    match result {
-        Ok(_) => Json(ApiResponse::ok_msg("Deleted")),
-        Err(e) => Json(ApiResponse::err(&e.to_string())),
+    for raw in targets {
+        let path = std::path::PathBuf::from(normalize_fs_path(&raw));
+        if recycle::is_protected(&path) {
+            return Json(ApiResponse::err(&format!(
+                "{} is a system directory and cannot be deleted",
+                path.display()
+            )));
+        }
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Json(ApiResponse::err(&format!(
+                "Path not found: {}",
+                path.display()
+            )));
+        }
+        let outcome = if use_bin && !recycle::in_bin(&path) {
+            recycle::move_to_bin(&state.db, path.clone())
+                .await
+                .map(|_| true)
+        } else {
+            let doomed = path.clone();
+            tokio::task::spawn_blocking(move || recycle::remove_now(&doomed))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .map(|_| false)
+        };
+        match outcome {
+            Ok(recycled) => {
+                result.deleted += 1;
+                if recycled {
+                    result.recycled += 1;
+                }
+            }
+            Err(err) => return Json(ApiResponse::err(&format!("{}: {}", path.display(), err))),
+        }
     }
+    Json(ApiResponse::ok(result))
 }
 
 async fn rename_path(Json(req): Json<RenameRequest>) -> Json<ApiResponse<()>> {
@@ -517,14 +708,7 @@ fn file_info_blocking(q: PathQuery) -> Json<ApiResponse<FileEntry>> {
         .unwrap_or_default();
     let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
     let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let modified = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .map(|t| {
-            let dt: chrono::DateTime<chrono::Local> = t.into();
-            dt.format("%Y-%m-%d %H:%M:%S").to_string()
-        })
-        .unwrap_or_default();
+    let (modified, mtime) = modified_of(meta.as_ref());
     let (owner, group) = owner_group(meta.as_ref());
     Json(ApiResponse::ok(FileEntry {
         name,
@@ -532,6 +716,7 @@ fn file_info_blocking(q: PathQuery) -> Json<ApiResponse<FileEntry>> {
         is_dir,
         size,
         modified,
+        mtime,
         owner,
         group,
         permissions: meta.as_ref().map(format_permissions).unwrap_or_else(|| {

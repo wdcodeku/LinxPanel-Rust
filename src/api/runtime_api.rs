@@ -24,6 +24,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/apps/{id}/stop", post(stop_app))
         .route("/apps/{id}/restart", post(restart_app))
         .route("/apps/{id}/install-deps", post(install_deps))
+        .route("/apps/from-sample", post(create_from_sample))
         .route("/apps/{id}/logs", get(app_logs).delete(clear_app_logs))
 }
 
@@ -189,6 +190,145 @@ async fn install_deps(
             Err(err) => ApiResponse::err(&err.to_string()),
         }
     })))
+}
+
+#[derive(Debug, Deserialize)]
+struct SampleRequest {
+    name: String,
+    runtime: String,
+    work_dir: String,
+    port: u16,
+    #[serde(default)]
+    run_user: String,
+}
+
+#[derive(Serialize)]
+struct SampleResult {
+    success: bool,
+    log: String,
+    id: Option<i64>,
+    port: u16,
+}
+
+/// Writes a sample project, registers it, builds it when needed, starts it
+/// and checks it answers - all as one background task.
+async fn create_from_sample(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SampleRequest>,
+) -> Json<ApiResponse<tasks::Started>> {
+    if req.name.trim().is_empty() {
+        return Json(ApiResponse::err("Application name is required"));
+    }
+    if req.port < 1024 {
+        return Json(ApiResponse::err("Choose a port of 1024 or above"));
+    }
+    let dir = std::path::PathBuf::from(req.work_dir.trim());
+    if !dir.is_absolute() {
+        return Json(ApiResponse::err("Working directory must be an absolute path"));
+    }
+    let title = format!("Sample app: {}", req.name.trim());
+    let task_state = state.clone();
+    Json(ApiResponse::ok(state.tasks.start("app-sample", &title, async move {
+        sample_task(task_state, req, dir).await
+    })))
+}
+
+async fn sample_task(state: Arc<AppState>, req: SampleRequest, dir: std::path::PathBuf) -> ApiResponse<SampleResult> {
+    let mut log = String::new();
+    let note = |log: &mut String, line: &str| {
+        tasks::note(line);
+        log.push_str(line);
+        log.push('\n');
+    };
+    let fail = |log: String| ApiResponse::ok(SampleResult { success: false, log, id: None, port: req.port });
+    if crate::services::svcapps::port_open(req.port).await {
+        return ApiResponse::err(&format!("Port {} is already in use", req.port));
+    }
+    let dotnet_major = if req.runtime == "dotnet" {
+        tasks::blocking(|| {
+            crate::services::shell::cached_version_output("dotnet", &["--version"])
+                .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
+        })
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    let sample = match crate::services::samples::sample(&req.runtime, &req.name, req.port, dotnet_major) {
+        Ok(sample) => sample,
+        Err(err) => return ApiResponse::err(&err),
+    };
+    note(&mut log, &format!("[LinxPanel] Writing the sample into {}", dir.display()));
+    {
+        let (dir, files) = (dir.clone(), sample.files.clone());
+        let written = tasks::blocking(move || {
+            crate::services::samples::write(&dir, &crate::services::samples::Sample { files, entry: String::new(), build: false })
+        })
+        .await;
+        match written {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return ApiResponse::err(&err),
+            Err(err) => return ApiResponse::err(&err.to_string()),
+        }
+    }
+    let request = appproc::SaveAppRequest {
+        name: req.name.trim().to_string(),
+        runtime: req.runtime.clone(),
+        work_dir: dir.to_string_lossy().to_string(),
+        entry: sample.entry.clone(),
+        args: String::new(),
+        env: String::new(),
+        port: req.port as i64,
+        autostart: true,
+        run_user: req.run_user.clone(),
+        chown_work_dir: !req.run_user.trim().is_empty(),
+    };
+    let id = match appproc::create(&state.db, &request).await {
+        Ok(id) => id,
+        Err(err) => {
+            note(&mut log, &format!("[LinxPanel] {}", err));
+            return fail(log);
+        }
+    };
+    if sample.build {
+        note(&mut log, "[LinxPanel] Building / installing dependencies");
+        let record = match appproc::get(&state.db, id).await {
+            Ok(record) => record,
+            Err(err) => return ApiResponse::err(&err),
+        };
+        match tasks::blocking(move || appproc::install_dependencies(&record, true)).await {
+            Ok(Ok(text)) => log.push_str(&text),
+            Ok(Err(text)) => {
+                log.push_str(&text);
+                note(&mut log, "[LinxPanel] The build failed; the app was created and can be rebuilt from the Runtimes page");
+                return ApiResponse::ok(SampleResult { success: false, log, id: Some(id), port: req.port });
+            }
+            Err(err) => return ApiResponse::err(&err.to_string()),
+        }
+    }
+    note(&mut log, "[LinxPanel] Starting");
+    if let Err(err) = appproc::start(state.supervisor.clone(), state.db.clone(), state.data_dir.clone(), id).await {
+        note(&mut log, &format!("[LinxPanel] {}", err));
+        return ApiResponse::ok(SampleResult { success: false, log, id: Some(id), port: req.port });
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if crate::services::svcapps::port_open(req.port).await {
+            note(&mut log, &format!("[LinxPanel] Done: the sample answers on port {}", req.port));
+            return ApiResponse::ok(SampleResult { success: true, log, id: Some(id), port: req.port });
+        }
+        let st = state.supervisor.state_of(id).await;
+        if st.restarts > 0 || std::time::Instant::now() >= deadline {
+            let tail = appproc::read_log(&state.data_dir, id, 20);
+            note(&mut log, &format!("[LinxPanel] The app did not come up: {}", st.last_error));
+            if !tail.trim().is_empty() {
+                note(&mut log, tail.trim_end());
+            }
+            return ApiResponse::ok(SampleResult { success: false, log, id: Some(id), port: req.port });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 #[derive(Debug, Deserialize)]

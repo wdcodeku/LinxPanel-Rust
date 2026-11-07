@@ -44,7 +44,66 @@ export default {
   },
 
   // File Manager
+  ed: {
+    unsaved: '有未保存的修改',
+    search: '查找 / 替换 (Ctrl+F)',
+    gotoLine: '跳转到行 (Ctrl+G)',
+    wrap: '自动换行',
+    reload: '重新加载',
+    cannotOpen: '无法打开此文件',
+    position: '行 {line}，列 {col}',
+    selected: '已选 {n}',
+    lines: '{n} 行',
+    keys: 'Ctrl+F 查找 · Ctrl+H 替换 · Ctrl+/ 注释 · Alt+点击 多光标',
+    conflict: '文件在你打开后已被修改（其他程序或其他人）。覆盖会丢失对方的修改；也可以放弃你的修改，重新加载磁盘上的版本。',
+    conflictTitle: '文件已在磁盘上更改',
+    overwrite: '仍然覆盖',
+    reloadTheirs: '重新加载磁盘版本',
+    discard: '放弃未保存的修改并重新加载？',
+    closeUnsaved: '有未保存的修改，关闭前要保存吗？',
+    saveAndClose: '保存并关闭',
+    discardChanges: '不保存',
+  },
+  rb: {
+    title: '回收站',
+    enabled: '启用回收站',
+    keep: '保留',
+    days: '天',
+    hintDays: '删除的文件移到所在磁盘的 .Recycle_bin 目录，{n} 天后自动永久删除。',
+    hintForever: '删除的文件移到所在磁盘的 .Recycle_bin 目录，保留到手动清空。',
+    search: '搜索文件名或原位置',
+    from: '原位置',
+    deletedAt: '删除时间',
+    restore: '恢复',
+    restoreN: '恢复 ({n})',
+    purgeN: '永久删除 ({n})',
+    empty: '清空回收站',
+    emptyText: '回收站是空的',
+    total: '共 {n} 项，{size}',
+    settingsSaved: '回收站设置已保存',
+    restoredN: '已恢复 {n} 项',
+    restoredRenamed: '已恢复 {n} 项，其中 {m} 项因原位置已有同名文件而改名',
+    purgeConfirm: '永久删除这 {n} 项？删除后无法恢复。',
+    purgedN: '已永久删除 {n} 项',
+    emptyConfirm: '永久删除回收站中的全部 {n} 项？删除后无法恢复。',
+  },
   fm: {
+    recycledN: '已将 {n} 项移入回收站',
+    deleteTitle: '删除 {n} 项',
+    andMore: '…以及另外 {n} 项',
+    deleteInBin: '这些项目已在回收站中，将被永久删除，无法恢复。',
+    deletePermanent: '永久删除（不进入回收站）',
+    deletePermanentHint: '永久删除后无法恢复。',
+    deleteToBinHint: '将移入回收站，可随时恢复。Shift+Delete 可直接永久删除。',
+    recycleOff: '回收站已关闭，删除后无法恢复。',
+    deleteForever: '永久删除',
+    moveToBin: '移入回收站',
+    downloadStarted: '已开始下载 {n} 项，进度见浏览器下载栏',
+    intoItself: '不能把文件夹移动或复制到它自己里面',
+    movedN: '已移动 {n} 项',
+    undo: '撤销',
+    undone: '已撤销',
+    dragN: '{n} 个项目',
     name: '\u540d\u79f0',
     size: '\u5927\u5c0f',
     modified: '\u4fee\u6539\u65f6\u95f4',
@@ -563,6 +622,7 @@ export default {
     openrestyInstallAllMethodsFailed: '\u6240\u6709\u5feb\u901f\u5b89\u88c5\u65b9\u5f0f\u5747\u5931\u8d25\uff0c\u8bf7\u67e5\u770b\u5b89\u88c5\u65e5\u5fd7',
   },
 
+  time: { today: '今天', yesterday: '昨天' },
   unit: {
     day: '天',
     hour: '小时',
@@ -876,6 +936,7 @@ export default {
   },
 
   task: {
+    sample: '创建示例应用 {name}',
     upgrade: '升级 {name}',
     extract: '解压 {name}',
     compress: '压缩 {name}',
@@ -1010,6 +1071,11 @@ export default {
   },
 
   rt: {
+    modeExisting: '已有项目',
+    modeSample: '从示例新建',
+    sampleHint: '在所选目录生成一个可直接运行的 Web 示例（Hello World），自动编译 / 安装依赖并启动，之后可在此基础上开发。',
+    portRequired: '请填写端口',
+    sampleReady: '示例已运行，访问端口 {port}',
     installName: '安装 {name}',
     appsOf: '{name} 应用',
     newAppOf: '新建 {name} 应用',
@@ -1115,6 +1181,8 @@ export default {
 
   tm: {
     connected: '已连接',
+    maximize: '最大化',
+    restore: '还原',
     disconnected: '已断开',
     clear: '清屏',
     disconnect: '断开',
@@ -1314,6 +1382,7 @@ export default {
 
   // SQLite (database files)
   sql: {
+    locate: '在文件管理中定位',
     title: 'SQLite 数据库文件',
     cardSub: '文件型 · 无需安装',
     intro: 'SQLite 数据库就是一个文件，由使用它的程序直接读写，不需要安装服务。在这里登记文件后，可以查看表、备份和恢复。',

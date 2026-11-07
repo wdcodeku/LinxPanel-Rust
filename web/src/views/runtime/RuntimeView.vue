@@ -102,7 +102,7 @@
                 <span class="dir-line">
                   <button type="button" class="dir-link lp-mono lp-truncate" :title="t('rt.openDir')" @click="openDir(row.work_dir)">{{ row.work_dir }}</button>
                   <button type="button" class="dir-icon" :title="t('rt.openDir')" :aria-label="t('rt.openDir')" @click="openDir(row.work_dir)"><el-icon><FolderOpened /></el-icon></button>
-                  <button type="button" class="dir-icon" :title="t('rt.openTerminal')" :aria-label="t('rt.openTerminal')" @click="openTerminalAt(row.work_dir)"><el-icon><Monitor /></el-icon></button>
+                  <button type="button" class="dir-icon" :title="t('rt.openTerminal')" :aria-label="t('rt.openTerminal')" @click="openTerminalAt(row.work_dir, row.name)"><el-icon><Monitor /></el-icon></button>
                 </span>
               </div>
             </template>
@@ -155,9 +155,14 @@
     <!-- App editor -->
     <el-dialog v-model="formVisible" :title="editing ? t('rt.editApp') : t('rt.newApp')" width="620px" top="6vh">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+        <el-radio-group v-if="!editing" v-model="useSample" class="mode-switch">
+          <el-radio-button :value="false">{{ t('rt.modeExisting') }}</el-radio-button>
+          <el-radio-button :value="true" :disabled="!SAMPLE_RUNTIMES.includes(form.runtime)">{{ t('rt.modeSample') }}</el-radio-button>
+        </el-radio-group>
+        <el-alert v-if="useSample && !editing" type="success" :closable="false" show-icon class="sample-note" :title="t('rt.sampleHint')" />
         <div class="form-row">
           <el-form-item :label="t('rt.appName')" prop="name" class="form-row__item">
-            <el-input v-model="form.name" :placeholder="t('rt.appNamePlaceholder')" maxlength="64" />
+            <el-input v-model="form.name" :placeholder="t('rt.appNamePlaceholder')" maxlength="64" @input="syncSampleDir" />
           </el-form-item>
           <el-form-item :label="t('rt.runtime')" prop="runtime" class="form-row__item form-row__item--narrow">
             <el-select v-model="form.runtime" style="width: 100%">
@@ -168,13 +173,13 @@
 
         <el-form-item :label="t('rt.workDir')" prop="work_dir">
           <div class="inline-row">
-            <el-input v-model="form.work_dir" placeholder="/opt/myapp" class="lp-mono" />
+            <el-input v-model="form.work_dir" placeholder="/opt/myapp" class="lp-mono" @input="workDirEdited = true" />
             <el-button :icon="FolderOpened" @click="dirPickerOpen = true">{{ t('rt.chooseDir') }}</el-button>
           </div>
         </el-form-item>
 
         <div class="form-row">
-          <el-form-item :label="entryLabel" prop="entry" class="form-row__item">
+          <el-form-item v-if="!sampleMode" :label="entryLabel" prop="entry" class="form-row__item">
             <el-autocomplete
               v-model="form.entry"
               :fetch-suggestions="suggestEntries"
@@ -189,7 +194,7 @@
             </el-autocomplete>
             <span v-if="entryHint" class="entry-hint">{{ entryHint }}</span>
           </el-form-item>
-          <el-form-item :label="t('rt.portOptional')" class="form-row__item form-row__item--narrow">
+          <el-form-item :label="sampleMode ? t('rt.port') : t('rt.portOptional')" :prop="sampleMode ? 'port' : undefined" class="form-row__item form-row__item--narrow">
             <el-input-number
               v-model="form.port"
               :min="1"
@@ -202,11 +207,11 @@
           </el-form-item>
         </div>
 
-        <el-form-item :label="t('rt.args')">
+        <el-form-item v-if="!sampleMode" :label="t('rt.args')">
           <el-input v-model="form.args" :placeholder="t('rt.argsPlaceholder')" class="lp-mono" />
         </el-form-item>
 
-        <el-form-item :label="t('rt.env')">
+        <el-form-item v-if="!sampleMode" :label="t('rt.env')">
           <el-input
             v-model="form.env"
             type="textarea"
@@ -239,6 +244,8 @@
       </template>
     </el-dialog>
 
+    <TerminalDialog v-model="terminalOpen" :cwd="terminalCwd" :title="terminalTitle" />
+
     <el-dialog v-model="dirPickerOpen" :title="t('rt.chooseDir')" width="760px" destroy-on-close append-to-body>
       <div class="dir-picker-shell">
         <DirPicker :init-path="form.work_dir || '/www/wwwroot'" @select="onDirPicked" />
@@ -262,16 +269,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
 import { FolderOpened, Monitor, Plus, Refresh } from '@element-plus/icons-vue'
 import DirPicker from '@/components/DirPicker.vue'
+import TerminalDialog from '@/components/TerminalDialog.vue'
 import {
   appAction, clearAppLogs, createApp, deleteApp, getAppLogs, getApps, getRuntimes,
-  getOwnerChoices, installAppDeps, installRuntime, listFiles, mkdirApi, pathState, updateApp,
+  getOwnerChoices, installAppDeps, createAppFromSample, installRuntime, listFiles, mkdirApi, pathState, updateApp,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatDuration } from '@/utils/format'
@@ -561,8 +569,52 @@ const entryPlaceholder = computed(
 const rules = computed<FormRules>(() => ({
   name: [{ required: true, message: t('rt.nameRequired'), trigger: 'blur' }],
   work_dir: [{ required: true, message: t('rt.workDirRequired'), trigger: 'blur' }],
-  entry: [{ required: true, message: t('rt.entryRequired'), trigger: 'blur' }],
+  entry: sampleMode.value ? [] : [{ required: true, message: t('rt.entryRequired'), trigger: 'blur' }],
+  port: sampleMode.value ? [{ required: true, message: t('rt.portRequired'), trigger: 'blur' }] : [],
 }))
+
+// --- Create from a sample project ---
+const SAMPLE_RUNTIMES = ['node', 'python', 'php', 'go', 'java', 'dotnet', 'rust', 'ruby', 'lua']
+const useSample = ref(false)
+const workDirEdited = ref(false)
+const sampleMode = computed(() => useSample.value && !editing.value && SAMPLE_RUNTIMES.includes(form.runtime))
+function sampleSlug(name: string) {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app'
+}
+function syncSampleDir() {
+  if (sampleMode.value && !workDirEdited.value) form.work_dir = `/www/wwwroot/apps/${sampleSlug(form.name)}`
+}
+watch(useSample, (on) => {
+  if (!on) return
+  workDirEdited.value = false
+  syncSampleDir()
+  // A free-looking port: above the ones apps already use.
+  if (!form.port) {
+    const used = apps.value.map((a: any) => Number(a.port) || 0)
+    form.port = Math.max(18080, ...used) + 1
+  }
+})
+async function submitSample() {
+  saving.value = true
+  formVisible.value = false
+  try {
+    const res: any = await createAppFromSample({
+      name: form.name.trim(),
+      runtime: form.runtime,
+      work_dir: form.work_dir.trim(),
+      port: Number(form.port) || 0,
+      run_user: form.run_user,
+    })
+    if (res.success && res.data?.success) {
+      ElMessage.success(t('rt.sampleReady', { port: res.data.port }))
+    }
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    saving.value = false
+    await loadAll()
+  }
+}
 
 // --- Entry: suggest matching files from the project directory ---
 const ENTRY_EXTENSIONS: Record<string, string[]> = {
@@ -616,8 +668,14 @@ async function entryCandidates(query: string): Promise<{ value: string }[]> {
 function openDir(path: string) {
   router.push({ path: '/files', query: { path } })
 }
-function openTerminalAt(path: string) {
-  router.push({ path: '/terminal', query: { cwd: path } })
+// The terminal opens over the page: no navigation, closing it ends the shell.
+const terminalOpen = ref(false)
+const terminalCwd = ref('')
+const terminalTitle = ref('')
+function openTerminalAt(path: string, title = '') {
+  terminalCwd.value = path
+  terminalTitle.value = title
+  terminalOpen.value = true
 }
 const dirPickerOpen = ref(false)
 function onDirPicked(path: string) {
@@ -640,6 +698,8 @@ function openCreate() {
     run_user: '',
     chown_work_dir: false,
   })
+  useSample.value = false
+  workDirEdited.value = false
   void loadSystemUsers()
   formVisible.value = true
 }
@@ -666,6 +726,10 @@ async function submit() {
   try {
     await formRef.value?.validate()
   } catch {
+    return
+  }
+  if (sampleMode.value) {
+    await submitSample()
     return
   }
   // A project directory that is not there yet: offer to create it.
@@ -1055,4 +1119,6 @@ onUnmounted(() => {
   color: var(--lp-text-dim);
   line-height: 1.5;
 }
+.mode-switch { margin-bottom: 12px; }
+.sample-note { margin-bottom: 12px; }
 </style>

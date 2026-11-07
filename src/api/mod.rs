@@ -8,11 +8,13 @@ pub mod database_api;
 pub mod defense_api;
 pub mod domains;
 pub mod files;
+pub mod files_dl;
 pub mod files_ops;
 pub mod firewall_api;
 pub mod panel_api;
 pub mod processes;
 pub mod realtime;
+pub mod recycle_api;
 pub mod runtime_api;
 pub mod services_api;
 pub mod settings;
@@ -29,7 +31,8 @@ use std::sync::Arc;
 pub fn routes(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .merge(auth::public_routes())
-        .merge(panel_api::public_routes());
+        .merge(panel_api::public_routes())
+        .merge(files_dl::public_routes());
 
     let protected = Router::new()
         .merge(system::routes())
@@ -44,6 +47,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(domains::routes())
         .merge(files::routes())
         .merge(files_ops::routes())
+        .merge(files_dl::routes())
+        .merge(recycle_api::routes())
         .merge(settings::routes())
         .merge(panel_api::routes())
         .merge(account_api::routes())

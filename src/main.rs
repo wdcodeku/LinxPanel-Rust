@@ -318,6 +318,12 @@ async fn main() -> anyhow::Result<()> {
         state.shutdown.subscribe(),
     ));
 
+    // Purge recycle-bin items past their retention period.
+    tokio::spawn(services::recycle::run(
+        state.db.clone(),
+        state.shutdown.subscribe(),
+    ));
+
     // Bring managed applications back up after a panel restart.
     tokio::spawn(services::appproc::start_autostart_apps(
         supervisor,
