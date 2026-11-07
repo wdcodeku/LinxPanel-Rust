@@ -321,6 +321,17 @@ export const uninstallService = (id: number, deleteData: boolean) =>
 
 // Settings
 export const getSettings = () => request.get('/settings')
+// Alert notifications and the operation log
+export const getNotify = () => request.get('/notify')
+export const saveNotify = (data: any) => request.post('/notify', data)
+export const testNotify = (channel: any) => request.post('/notify/test', channel)
+export const getAlertHistory = () => request.get('/notify/history')
+export const getRemoteBackup = () => request.get('/backups/remote')
+export const saveRemoteBackup = (data: any) => request.post('/backups/remote', data)
+export const testRemoteBackup = (data: any) => request.post('/backups/remote/test', data, { timeout: 120000 })
+export const getRemoteBackupHistory = () => request.get('/backups/remote/history')
+export const getAuditLog = (params: { q?: string; failed_only?: boolean; offset?: number; limit?: number }) =>
+  request.get('/audit', { params })
 export const saveSettingsApi = (data: any) => request.put('/settings', data)
 export const updateSettings = (data: Record<string, string>) => request.put('/settings', data)
 export const getPanelAccess = () => request.get('/settings/panel-access')

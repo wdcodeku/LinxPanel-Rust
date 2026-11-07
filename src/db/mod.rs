@@ -252,6 +252,50 @@ pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Backups copied to remote storage (for remote retention).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS remote_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            group_key TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            size INTEGER NOT NULL DEFAULT 0,
+            uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Alerts sent to the notification channels.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS alert_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            result TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Operation audit log.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            username TEXT NOT NULL DEFAULT '',
+            ip TEXT NOT NULL DEFAULT '',
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '',
+            ok INTEGER NOT NULL DEFAULT 1,
+            message TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // File manager recycle bin: where each deleted item came from and lies now.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS recycle_bin (

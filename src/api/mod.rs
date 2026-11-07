@@ -11,6 +11,7 @@ pub mod files;
 pub mod files_dl;
 pub mod files_ops;
 pub mod firewall_api;
+pub mod notify_api;
 pub mod panel_api;
 pub mod processes;
 pub mod realtime;
@@ -49,6 +50,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(files_ops::routes())
         .merge(files_dl::routes())
         .merge(recycle_api::routes())
+        .merge(notify_api::routes())
         .merge(settings::routes())
         .merge(panel_api::routes())
         .merge(account_api::routes())
@@ -59,6 +61,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .merge(defense_api::routes())
         .merge(update_api::routes())
         .merge(tasks_api::routes())
+        // Inside auth: records who did what once the caller is known.
+        .route_layer(axum_mw::from_fn(crate::services::audit::middleware))
         .route_layer(axum_mw::from_fn(crate::middleware::auth))
         .layer(axum::Extension(state.clone()));
 

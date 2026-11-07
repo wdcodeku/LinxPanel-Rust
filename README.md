@@ -199,12 +199,15 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
   - 已安装列表：运行状态、访问地址、访问信息（账号密码可显示 / 复制）、启动 / 停止 / 重启、日志；一键升级到最新或指定版本，新版本起不来自动回滚到旧版本；卸载可选择保留或删除数据，重装时旧数据自动另存
   - 任何一步失败都会回滚已创建的数据库、文件、进程和站点
   - 可填写自定义下载地址（国内镜像）
+- **告警通知**（面板设置 → 告警）：钉钉（支持加签）、企业微信、飞书（支持签名）、Telegram、邮件（SSL / STARTTLS）、通用 Webhook；CPU / 内存持续 3 分钟超过阈值、磁盘超过阈值、托管应用崩溃、SSL 证书即将到期、计划备份失败、登录失败过多、面板登录；同一告警可设冷却时间；可一键测试，保留最近告警与发送结果；密钥和密码不回显、不出现在进程列表
+- **操作日志**（面板设置 → 操作日志）：记录所有修改类操作的用户、IP、操作、对象（文件路径、域名等，不记录密码与文件内容）和结果，含登录成功 / 失败；可搜索、只看失败，保留 180 天
+- **远程备份存储**（面板设置 → 备份存储）：S3 兼容对象存储（AWS S3、阿里云 OSS、腾讯云 COS、Cloudflare R2、MinIO 等，SigV4 签名）、WebDAV、FTP / FTPS；计划备份完成后自动上传，远程按份数保留；可测试连接；上传失败会告警
 - **PHP 网站开箱即用**：安装 PHP 时自动安装常用扩展（mysql、gd、curl、mbstring、zip、intl 等）、启动 PHP-FPM，并自动识别其 socket 地址、放开 socket 权限（此前固定 `127.0.0.1:9000`，在 Debian/Ubuntu/RHEL 上 PHP 站点会 502）；已安装的 PHP 可在「运行环境」中一键「检查修复」
 - **站点默认加固**：上传上限 256MB、禁止访问 `.env` / `.git` 等隐藏文件、FastCGI 超时 300 秒；服务器未启用 IPv6 时不再生成 `listen [::]`（否则 nginx 无法启动）
 - **项目依赖**（运行环境 → 应用 →「安装依赖」）：Python 自动创建 `.venv` 并 `pip install -r requirements.txt`；Node 按锁文件使用 npm / pnpm / yarn 安装并执行 build；PHP 执行 `composer install`。可在应用环境变量中设置 `PIP_INDEX_URL`、`npm_config_registry` 使用镜像
   - 启动入口支持 `main.py`、`-m uvicorn main:app`、`gunicorn app:app`、`npm start`、`next start` 等写法，自动使用项目的 `.venv` 与 `node_modules/.bin`
-- **文件管理**：断点续传上传（分块上传，网络中断自动重试并从断点继续，经过 nginx 等反向代理的请求体限制也能自动适配；可上传整个文件夹或直接拖入，保留目录结构；上传的文件默认 755 可执行，可在上传菜单中关闭；新文件的属主跟随所在目录）；解压 zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz，7z / rar 需安装 7-Zip 或 unrar（防路径穿越，不跟随指向目录外的链接）；压缩为 zip / tar.gz；复制、剪切、粘贴（同名可选保留两者 / 覆盖 / 跳过），支持 Ctrl+C / X / V、Delete、F2 快捷键；逐个文件显示进度、速度，可取消与重试；可视化权限编辑（读写执行勾选、所有者 / 用户组、可应用到子目录）；记住上次浏览的目录；输入或跳转到不存在的目录时提示创建
-- **运行环境**：应用目录可一键在文件管理或终端中打开；新建应用时可浏览选择目录、目录不存在时提示创建、启动文件按语言自动提示；端口可选
+- **文件管理**：断点续传上传（分块上传，网络中断自动重试并从断点继续，经过 nginx 等反向代理的请求体限制也能自动适配；可上传整个文件夹或直接拖入，保留目录结构；上传的文件默认 755 可执行，可在上传菜单中关闭；新文件的属主跟随所在目录）；解压 zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz，7z / rar 需安装 7-Zip 或 unrar（防路径穿越，不跟随指向目录外的链接）；压缩为 zip / tar.gz；复制、剪切、粘贴（同名可选保留两者 / 覆盖 / 跳过），支持 Ctrl+C / X / V、Delete、F2 快捷键；逐个文件显示进度、速度，可取消与重试；可视化权限编辑（读写执行勾选、所有者 / 用户组、可应用到子目录）；记住上次浏览的目录；输入或跳转到不存在的目录时提示创建；拖拽移动（按住 Ctrl / Alt 复制）到文件夹或路径栏，悬停文件夹自动打开，移动后可撤销；回收站（删除移到同一磁盘的 .Recycle_bin，可恢复 / 彻底删除 / 自动清理，Shift+Delete 或勾选可直接永久删除，系统目录禁止删除）；下载由浏览器直接接管，立即弹出保存并显示进度、支持断点续传，文件夹打包为 .tar.gz 边压缩边下载；时间按浏览者的语言和时区显示；在线编辑器基于 CodeMirror 6（约 30 种语言高亮含 nginx / shell / ini / yaml、查找替换、折叠、多光标、Ctrl+S、保留 CRLF、原子保存保留权限属主、他人修改后保存会提示冲突，拒绝打开二进制和非 UTF-8 文件）
+- **运行环境**：应用目录可一键在文件管理或终端中打开；新建应用时可浏览选择目录、目录不存在时提示创建、启动文件按语言自动提示；端口可选；终端直接弹窗打开，不离开当前页面；九种语言均可「从示例新建」：生成可运行的 Web 示例，自动编译 / 安装依赖、启动并检查端口
 - **高负载下依然流畅**：外部命令改为即时等待（原先每条命令至少多等 20ms），程序查找不再启动子进程，运行环境 / 数据库版本信息缓存，文件操作移出异步线程，面板数据库写入不再逐次 fsync；面板管理的应用和长任务以普通优先级运行，不与面板争抢
 - **备份**：站点详情「备份」页可立即备份整站目录（`.tar.gz`）、下载、恢复（恢复失败自动还原原目录）；计划任务新增「备份网站 / 备份数据库」类型，可设置保留份数（底层为 `linxpanel backup site|db ... --keep N`）
 
@@ -297,14 +300,12 @@ JWT 签名密钥持久化在 `settings` 表中（`JWT_SECRET` 环境变量优先
 
 ### 生产环境就绪度
 
-已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理（含 SQLite 数据编辑与 SQL 控制台）、WordPress 等网站程序与 File Browser / frp / DDNS-GO / Gitea 等服务一键安装、网站与数据库定时备份、防火墙、计划任务、文件管理、终端。
+已具备：静态二进制一键部署与升级回滚、面板安全（安全入口 / SSL / 授权 IP / 绑定域名 / 两步验证 / 登录锁定）、主动防御（内核封禁 / 自动封禁 / 防 CC / 防爆破 / 内核加固）、网站与 SSL 自动续期、PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua 运行环境与进程守护、MySQL / PostgreSQL / Redis / MongoDB / SQLite 管理（含 SQLite 数据编辑与 SQL 控制台）、WordPress 等网站程序与 File Browser / frp / DDNS-GO / Gitea 等服务一键安装、网站与数据库定时备份（可自动上传 S3 / WebDAV / FTP）、告警通知（钉钉 / 企业微信 / 飞书 / Telegram / 邮件 / Webhook）、操作日志、防火墙、计划任务、文件管理（回收站、在线代码编辑器）、终端。
 
 与宝塔 / 1Panel 相比仍缺少（后续计划）：
 
 - Docker 与容器应用商店（1Panel 的核心能力）
 - 多 PHP 版本共存（目前使用发行版默认版本）、MySQL 版本选择
-- 资源告警通知（阈值设置已有，尚未接入邮件 / Webhook）、操作审计日志
-- 备份上传到远程存储（S3 / OSS / FTP）
 - 网站访问日志分析、规则型 WAF（SQL 注入 / XSS 特征拦截）
 - 多用户与权限管理
 
@@ -506,12 +507,15 @@ The panel detects and installs language runtimes, and supervises application pro
   - Installed list: status, address, access details (show / copy credentials), start / stop / restart, logs; upgrade to the latest or a given version with automatic rollback when the new one does not start; uninstall keeping or deleting data, and a reinstall sets old data aside
   - Any failure rolls back the database, files, process and site it created
   - A custom download URL (mirror) can be given
+- **Alert notifications** (Settings → Alerts): DingTalk (signed), WeCom, Feishu (signed), Telegram, e-mail (SSL / STARTTLS) and generic webhooks; CPU / memory above threshold for 3 minutes, disk above threshold, crashed managed apps, expiring SSL certificates, failed scheduled backups, repeated failed logins, panel logins; per-alert cooldown; test button, recent alerts with delivery results; secrets are never shown back or put on a command line
+- **Operation log** (Settings → Operation log): every change with user, IP, action, target (file paths, domains...; never passwords or file contents) and result, logins included; search, failed-only filter, kept 180 days
+- **Remote backup storage** (Settings → Backup storage): S3-compatible storage (AWS S3, Aliyun OSS, Tencent COS, Cloudflare R2, MinIO... with SigV4 signing), WebDAV, FTP / FTPS; scheduled backups are uploaded after they finish, with remote retention; connection test; failed uploads raise an alert
 - **PHP sites work out of the box**: installing PHP adds common extensions (mysql, gd, curl, mbstring, zip, intl...), starts PHP-FPM, detects its socket and opens it to nginx (the fixed `127.0.0.1:9000` used before gave every PHP site a 502 on Debian/Ubuntu/RHEL); an installed PHP can be repaired with "Check & repair" under Runtimes
 - **Hardened site defaults**: 256MB uploads, dotfiles (`.env`, `.git`) denied, 300s FastCGI timeout; no `listen [::]` on hosts without IPv6 (nginx would refuse to start)
 - **Project dependencies** (Runtimes → Apps → "Install dependencies"): Python gets a `.venv` and `pip install -r requirements.txt`; Node uses npm / pnpm / yarn per lockfile and runs the build script; PHP runs `composer install`. Set `PIP_INDEX_URL` / `npm_config_registry` in the app's environment for mirrors
   - Entries such as `main.py`, `-m uvicorn main:app`, `gunicorn app:app`, `npm start` or `next start` work, using the project's `.venv` and `node_modules/.bin`
-- **Files**: resumable uploads (sent in chunks: a dropped connection is retried and continues where it stopped; adapts to request-size limits of a reverse proxy such as nginx; whole folders by picker or drag-and-drop with their structure; uploads are 755 by default, switchable in the upload menu; new files take the owner of their folder); extract zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz, and 7z / rar with 7-Zip or unrar installed (path traversal refused, links pointing outside removed); compress to zip / tar.gz; copy, cut and paste (keep both / replace / skip on name clashes) with Ctrl+C / X / V, Delete and F2; per-file progress and speed with cancel and retry; a visual permission editor (read / write / execute boxes, owner and group, optionally recursive); the last directory is remembered; a missing directory typed or linked to is offered for creation
-- **Runtimes**: open an app's directory in the file manager or a terminal in one click; browse for the directory when creating an app, create it when missing, entry files suggested per language; the port is optional
+- **Files**: resumable uploads (sent in chunks: a dropped connection is retried and continues where it stopped; adapts to request-size limits of a reverse proxy such as nginx; whole folders by picker or drag-and-drop with their structure; uploads are 755 by default, switchable in the upload menu; new files take the owner of their folder); extract zip / tar / tar.gz / tar.xz / tar.bz2 / tar.zst / gz, and 7z / rar with 7-Zip or unrar installed (path traversal refused, links pointing outside removed); compress to zip / tar.gz; copy, cut and paste (keep both / replace / skip on name clashes) with Ctrl+C / X / V, Delete and F2; per-file progress and speed with cancel and retry; a visual permission editor (read / write / execute boxes, owner and group, optionally recursive); the last directory is remembered; a missing directory typed or linked to is offered for creation; drag and drop to move (Ctrl / Alt copies) onto folders or the path bar, folders open on hover, undo after a move; a recycle bin (items move to .Recycle_bin on their own disk; restore, delete for good, automatic expiry; Shift+Delete or the dialog option skips it; system directories cannot be deleted); downloads handed to the browser at once with progress and resume, folders streamed as .tar.gz; times in the viewer's language and time zone; a CodeMirror 6 editor (about 30 languages incl. nginx / shell / ini / yaml, find/replace, folding, multi-cursor, Ctrl+S, CRLF kept, atomic saves keeping mode and owner, a warning when the file changed on disk meanwhile; binary and non-UTF-8 files refused)
+- **Runtimes**: open an app's directory in the file manager or a terminal in one click; browse for the directory when creating an app, create it when missing, entry files suggested per language; the port is optional; the terminal opens in a dialog without leaving the page; every language can start "from a sample": a runnable web app written, built, started and checked
 - **Smooth under heavy load**: external commands are awaited exactly (each used to cost at least 20 ms more), binaries are found without spawning processes, runtime and database versions are cached, file operations run off the async workers and panel database writes no longer fsync one by one; managed apps and long jobs run at normal priority instead of competing with the panel
 - **Backups**: the site's Backups tab archives the whole directory (`.tar.gz`), downloads and restores it (a failed restore puts the old files back); cron gains "Back up website / database" job types with retention (`linxpanel backup site|db ... --keep N` underneath)
 
@@ -604,13 +608,11 @@ Runtime keys (panel settings / `settings` table / env):
 
 ### Production Readiness
 
-In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management (with a SQLite data editor and SQL console); one-click WordPress and other website programs plus File Browser / frp / DDNS-GO / Gitea services; scheduled website and database backups; firewall, cron, file manager and terminal.
+In place: static-binary install with upgrade rollback; panel security (entrance, SSL, allowed IPs, bound domain, two-factor login, login lockout); active defense (kernel bans, auto-ban, CC limits, brute-force protection, kernel hardening); sites with auto-renewing SSL; PHP / Node / Python / Java / Go / C# / Rust / Ruby / Lua runtimes with process supervision; MySQL / PostgreSQL / Redis / MongoDB / SQLite management (with a SQLite data editor and SQL console); one-click WordPress and other website programs plus File Browser / frp / DDNS-GO / Gitea services; scheduled website and database backups (uploaded to S3 / WebDAV / FTP); alert notifications (DingTalk / WeCom / Feishu / Telegram / e-mail / webhook); an operation log; firewall, cron, file manager (recycle bin, code editor) and terminal.
 
 Still missing compared with BaoTa / 1Panel (planned):
 
 - Docker and a container app store (1Panel's core)
 - Multiple PHP versions side by side (the distro's version is used), MySQL version choice
-- Alert notifications (thresholds exist but are not wired to email / webhooks), an audit log
-- Off-site backup targets (S3 / OSS / FTP)
 - Access-log analytics, a signature WAF (SQL injection / XSS rules)
 - Multiple users and roles

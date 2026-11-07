@@ -626,7 +626,56 @@ async fn backup(args: &[String]) -> Result<()> {
         }
     }
     let (pool, data_dir) = crate::open_database().await?;
-    let path = match positional.as_slice() {
+    let mut result = run_backup(&pool, &data_dir, &positional, keep).await;
+    // Off-site copy when remote storage is configured.
+    if let Ok(path) = &result {
+        let group = positional.join("-");
+        match crate::services::remote_backup::after_backup(&pool, &group, path).await {
+            Ok(Some(key)) => eprintln!(
+                "{}",
+                tr!(
+                    "已上传到远程存储：{}",
+                    "Uploaded to remote storage: {}",
+                    key
+                )
+            ),
+            Ok(None) => {}
+            Err(err) => {
+                result = Err(anyhow!(tr!(
+                    "本地备份成功，但上传远程存储失败：{}",
+                    "Local backup done, but the remote upload failed: {}",
+                    err
+                )));
+            }
+        }
+    }
+    if let Err(err) = &result {
+        let what = positional.join(" ");
+        crate::services::notify::event(
+            &pool,
+            "backup_failed",
+            format!("backup:{}", what),
+            "备份失败".into(),
+            "Backup failed".into(),
+            format!("计划备份 {} 失败：{}", what, err),
+            format!("Scheduled backup {} failed: {}", what, err),
+        )
+        .await;
+    }
+    pool.close().await;
+    println!("{}", result?.display());
+    Ok(())
+}
+
+async fn run_backup(
+    pool: &sqlx::SqlitePool,
+    data_dir: &std::path::Path,
+    positional: &[&str],
+    keep: Option<usize>,
+) -> Result<std::path::PathBuf> {
+    let pool = pool.clone();
+    let data_dir = data_dir.to_path_buf();
+    let path = match positional {
         ["site", id] => {
             let id: i64 = id
                 .parse()
@@ -657,9 +706,7 @@ async fn backup(args: &[String]) -> Result<()> {
             "Usage: backup site <ID> | backup db <ENGINE> <NAME> [--keep N]"
         )),
     };
-    pool.close().await;
-    println!("{}", path.display());
-    Ok(())
+    Ok(path)
 }
 
 fn parse_ip(raw: Option<&String>) -> Result<std::net::IpAddr> {

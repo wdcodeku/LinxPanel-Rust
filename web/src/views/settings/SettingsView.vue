@@ -8,7 +8,7 @@
       <div class="lp-page-actions">
         <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
         <!-- Security and update tabs save their own settings. -->
-        <el-button v-if="!['security', 'update'].includes(tab)" type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
+        <el-button v-if="!['security', 'update', 'audit', 'backup'].includes(tab)" type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
       </div>
     </div>
 
@@ -109,9 +109,20 @@
             </el-form>
           </div>
         </section>
+        <AlertNotify class="st-gap" />
       </el-tab-pane>
 
       <!-- ============ About ============ -->
+      <el-tab-pane name="backup" lazy>
+        <template #label><span class="st-tab"><el-icon><UploadFilled /></el-icon>{{ t('rs.tab') }}</span></template>
+        <RemoteBackup />
+      </el-tab-pane>
+
+      <el-tab-pane name="audit" lazy>
+        <template #label><span class="st-tab"><el-icon><Tickets /></el-icon>{{ t('au.tab') }}</span></template>
+        <AuditLog />
+      </el-tab-pane>
+
       <el-tab-pane name="about">
         <template #label><span class="st-tab"><el-icon><InfoFilled /></el-icon>{{ t('st.tabAbout') }}</span></template>
         <section class="lp-card">
@@ -140,7 +151,10 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { Bell, Connection, InfoFilled, Refresh, Setting } from '@element-plus/icons-vue'
+import { Bell, Connection, InfoFilled, Refresh, Setting, Tickets, UploadFilled } from '@element-plus/icons-vue'
+import RemoteBackup from './RemoteBackup.vue'
+import AlertNotify from './AlertNotify.vue'
+import AuditLog from './AuditLog.vue'
 import { getOpenRestyStatus, getSettings, saveSettingsApi } from '@/api'
 import { useI18n } from '@/i18n'
 import { useRealtimeStore } from '@/stores/realtime'
@@ -278,4 +292,5 @@ onMounted(load)
   dd { margin: 0; font-size: var(--lp-text-base); font-weight: 500; color: var(--lp-text); }
 }
 .st-tab { display: inline-flex; align-items: center; gap: 6px; }
+.st-gap { margin-top: var(--lp-4); }
 </style>

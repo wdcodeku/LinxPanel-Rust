@@ -291,7 +291,10 @@ mod tests {
             let s = sample(rt, "Demo", 18000, Some(10)).unwrap();
             assert!(!s.files.is_empty() && !s.entry.is_empty(), "{rt}");
             // Some file serves the greeting.
-            assert!(s.files.iter().any(|(_, c)| c.contains("on LinxPanel!")), "{rt}");
+            assert!(
+                s.files.iter().any(|(_, c)| c.contains("on LinxPanel!")),
+                "{rt}"
+            );
         }
         assert!(sample("dotnet", "x", 1, None).is_err());
         assert_eq!(

@@ -132,6 +132,7 @@ async fn login(
                 .defense
                 .note_weighted(ip, PanelDenied, FAILED_LOGIN_WEIGHT);
             tracing::warn!("Failed login for '{}' from {}", req.username, ip);
+            login_events(&state, &req.username, ip, false);
             return Json(ApiResponse::err("Invalid credentials"));
         }
     };
@@ -166,6 +167,7 @@ async fn login(
     }
     state.login_guard.clear(ip);
     state.defense.trust(ip);
+    login_events(&state, &user.username, ip, true);
 
     let token = match issue_token(&state, &user).await {
         Ok(token) => token,
@@ -183,6 +185,55 @@ async fn login(
     Json(ApiResponse::ok(
         serde_json::to_value(response).unwrap_or_default(),
     ))
+}
+
+/// Audit record and (when enabled) a notification for a login attempt. A
+/// failed one notifies only once it gets the address locked out.
+fn login_events(state: &Arc<AppState>, username: &str, ip: std::net::IpAddr, ok: bool) {
+    let (state, username, ip) = (
+        state.clone(),
+        username.chars().take(64).collect::<String>(),
+        ip.to_canonical(),
+    );
+    let locked = !ok && state.login_guard.locked_for(ip).is_some();
+    tokio::spawn(async move {
+        let ip_text = ip.to_string();
+        crate::services::audit::record(
+            &state.db,
+            &username,
+            &ip_text,
+            "POST",
+            "/auth/login",
+            &format!("username={}", username),
+            ok,
+            if ok { "" } else { "Invalid credentials" },
+        )
+        .await;
+        use crate::services::notify;
+        if ok {
+            notify::event(
+                &state.db,
+                "login",
+                format!("login:{}:{}", username, ip_text),
+                "面板登录".into(),
+                "Panel login".into(),
+                format!("用户 {} 从 {} 登录了面板。", username, ip_text),
+                format!("{} signed in to the panel from {}.", username, ip_text),
+            )
+            .await;
+        } else if locked {
+            notify::event(
+                &state.db,
+                "login_failed",
+                format!("login_failed:{}", ip_text),
+                "面板登录失败次数过多".into(),
+                "Repeated failed panel logins".into(),
+                format!("{} 多次登录失败（最近尝试的用户名：{}），已暂时锁定该地址。", ip_text, username),
+                format!("{} failed to sign in repeatedly (last username tried: {}) and is locked out for now.", ip_text, username),
+            )
+            .await;
+        }
+    });
 }
 
 /// Signs a session token bound to the user's current `session_version`.

@@ -318,6 +318,9 @@ async fn main() -> anyhow::Result<()> {
         state.shutdown.subscribe(),
     ));
 
+    // Alert notifications: resources, crashed apps, expiring certificates.
+    tokio::spawn(services::notify::run(state.clone(), state.shutdown.subscribe()));
+
     // Purge recycle-bin items past their retention period.
     tokio::spawn(services::recycle::run(
         state.db.clone(),
