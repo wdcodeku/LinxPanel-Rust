@@ -95,7 +95,14 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user-static ${{ matrix.extra_apt }}
+          # Newer Ubuntu / Debian dropped qemu-user-static: qemu-user is static
+          # there and qemu-user-binfmt registers it with binfmt_misc.
+          if apt-cache policy qemu-user-static | grep -q 'Candidate: [0-9]'; then
+            qemu="qemu-user-static"
+          else
+            qemu="qemu-user qemu-user-binfmt"
+          fi
+          sudo apt-get install -y -qq $qemu ${{ matrix.extra_apt }}
           mkdir -p "$RUNNER_TEMP/pkg"
           tar -xzf "dist/linxpanel-linux-${{ matrix.arch }}.tar.gz" -C "$RUNNER_TEMP/pkg"
           bash scripts/ci/smoke.sh "$RUNNER_TEMP/pkg/linxpanel"
