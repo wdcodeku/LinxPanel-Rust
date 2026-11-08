@@ -7,33 +7,33 @@
 
 :root {
   /* --- Brand ramp --- */
-  --lp-accent-50:  #eef2ff;
-  --lp-accent-100: #dbe3ff;
-  --lp-accent-200: #bccbff;
-  --lp-accent-300: #94a9fd;
-  --lp-accent-400: #6b83f8;
-  --lp-accent-500: #4f63e8;
-  --lp-accent-600: #3f4ed0;
-  --lp-accent-700: #333fa8;
+  --lp-accent-50:  #e8f1ff;
+  --lp-accent-100: #d0e2ff;
+  --lp-accent-200: #a3c5ff;
+  --lp-accent-300: #6aa1fb;
+  --lp-accent-400: #3a82f6;
+  --lp-accent-500: #0b62eb;
+  --lp-accent-600: #0050c8;
+  --lp-accent-700: #003f9e;
 
   --lp-accent: var(--lp-accent-500);
   --lp-accent-hover: var(--lp-accent-400);
   --lp-accent-active: var(--lp-accent-600);
-  --lp-accent-soft: rgba(79, 99, 232, 0.10);
-  --lp-accent-ring: rgba(79, 99, 232, 0.28);
+  --lp-accent-soft: rgba(11, 98, 235, 0.08);
+  --lp-accent-ring: rgba(11, 98, 235, 0.20);
 
   /* --- Status --- */
-  --lp-ok: #16a34a;
-  --lp-ok-soft: rgba(22, 163, 74, 0.10);
-  --lp-warn: #d97706;
-  --lp-warn-soft: rgba(217, 119, 6, 0.10);
-  --lp-danger: #dc2626;
-  --lp-danger-soft: rgba(220, 38, 38, 0.10);
-  --lp-muted: #64748b;
-  --lp-muted-soft: rgba(100, 116, 139, 0.10);
+  --lp-ok: #19a15f;
+  --lp-ok-soft: rgba(25, 161, 95, 0.10);
+  --lp-warn: #d97a0b;
+  --lp-warn-soft: rgba(217, 122, 11, 0.10);
+  --lp-danger: #e0453a;
+  --lp-danger-soft: rgba(224, 69, 58, 0.09);
+  --lp-muted: #6b7785;
+  --lp-muted-soft: rgba(107, 119, 133, 0.10);
 
   /* --- Chart series (color-blind safe, ordered by first use) --- */
-  --lp-series-1: #4f63e8;
+  --lp-series-1: #0b62eb;
   --lp-series-2: #0d9488;
   --lp-series-3: #d97706;
   --lp-series-4: #be185d;
@@ -44,27 +44,29 @@
   --lp-check-border: #98a2b3;
 
   /* --- Surfaces (light) --- */
-  --lp-canvas: #f4f6fa;
+  --lp-canvas: #f2f3f5;
   --lp-surface: #ffffff;
   --lp-surface-raised: #ffffff;
-  --lp-surface-sunken: #f2f4f8;
-  --lp-surface-hover: #f3f5f9;
+  --lp-surface-sunken: #f7f8fa;
+  --lp-surface-hover: #f5f7fa;
   --lp-nav: #ffffff;
-  --lp-nav-text: #495468;
+  --lp-nav-text: #4e5969;
   --lp-nav-text-active: var(--lp-accent-600);
   --lp-nav-active-bg: var(--lp-accent-soft);
 
   /* --- Text --- */
-  --lp-text: #101828;
-  --lp-text-soft: #475467;
-  --lp-text-dim: #8a94a6;
-  --lp-text-faint: #b4bcc9;
+  --lp-text: #1d2129;
+  --lp-text-soft: #4e5969;
+  --lp-text-dim: #86909c;
+  --lp-text-faint: #b8bec8;
   --lp-text-invert: #ffffff;
 
   /* --- Lines --- */
-  --lp-line: #e4e7ec;
-  --lp-line-soft: #eef0f3;
-  --lp-line-strong: #d0d5dd;
+  --lp-line: #e5e6eb;
+  --lp-line-soft: #eff0f3;
+  --lp-line-strong: #d2d6dc;
+  /* Cards sit flat on the canvas; the outline only shows in dark mode. */
+  --lp-card-line: transparent;
 
   /* --- Space scale (4px base) --- */
   --lp-1: 4px;
@@ -81,23 +83,23 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
   --lp-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  --lp-text-xs: 11px;
+  --lp-text-xs: 12px;
   --lp-text-sm: 12px;
-  --lp-text-base: 13px;
+  --lp-text-base: 14px;
   --lp-text-md: 14px;
   --lp-text-lg: 16px;
-  --lp-text-xl: 20px;
+  --lp-text-xl: 18px;
   --lp-text-2xl: 26px;
 
   /* --- Radius --- */
-  --lp-r-sm: 6px;
-  --lp-r: 10px;
-  --lp-r-lg: 14px;
+  --lp-r-sm: 4px;
+  --lp-r: 6px;
+  --lp-r-lg: 8px;
   --lp-r-full: 999px;
 
   /* --- Elevation --- */
-  --lp-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --lp-shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --lp-shadow-sm: none;
+  --lp-shadow: 0 2px 8px rgba(29, 33, 41, 0.06);
   --lp-shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.10), 0 4px 8px rgba(16, 24, 40, 0.05);
   --lp-shadow-xl: 0 24px 56px -12px rgba(16, 24, 40, 0.28), 0 8px 16px -8px rgba(16, 24, 40, 0.12);
   --lp-scrim: rgba(16, 24, 40, 0.42);
@@ -107,28 +109,28 @@
   --lp-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 
   /* --- Layout --- */
-  --lp-sidebar-w: 228px;
-  --lp-sidebar-w-collapsed: 68px;
-  --lp-header-h: 60px;
+  --lp-sidebar-w: 200px;
+  --lp-sidebar-w-collapsed: 64px;
+  --lp-header-h: 52px;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --lp-accent-50:  #1a1f3d;
-  --lp-accent-100: #232a52;
-  --lp-accent-200: #2f3a73;
-  --lp-accent-300: #4553a8;
-  --lp-accent-400: #6376e0;
-  --lp-accent-500: #7b8bf0;
-  --lp-accent-600: #94a2f5;
-  --lp-accent-700: #b3bdf8;
+  --lp-accent-50:  #0f1f3d;
+  --lp-accent-100: #142a55;
+  --lp-accent-200: #1b3a78;
+  --lp-accent-300: #2556ad;
+  --lp-accent-400: #2f74e8;
+  --lp-accent-500: #3d8bff;
+  --lp-accent-600: #66a3ff;
+  --lp-accent-700: #99c1ff;
 
   --lp-accent: var(--lp-accent-500);
   --lp-accent-hover: var(--lp-accent-600);
   --lp-accent-active: var(--lp-accent-400);
-  --lp-accent-soft: rgba(123, 139, 240, 0.14);
-  --lp-accent-ring: rgba(123, 139, 240, 0.32);
+  --lp-accent-soft: rgba(61, 139, 255, 0.14);
+  --lp-accent-ring: rgba(61, 139, 255, 0.30);
 
   --lp-ok: #4ade80;
   --lp-ok-soft: rgba(74, 222, 128, 0.14);
@@ -139,7 +141,7 @@
   --lp-muted: #94a3b8;
   --lp-muted-soft: rgba(148, 163, 184, 0.14);
 
-  --lp-series-1: #7b8bf0;
+  --lp-series-1: #3d8bff;
   --lp-series-2: #2dd4bf;
   --lp-series-3: #fbbf24;
   --lp-series-4: #f472b6;
@@ -147,15 +149,15 @@
   --lp-series-6: #38bdf8;
 
   --lp-check-border: #6b7586;
-  --lp-canvas: #0b0d12;
-  --lp-surface: #14171f;
-  --lp-surface-raised: #1a1e28;
-  --lp-surface-sunken: #0f1218;
-  --lp-surface-hover: #1e2330;
-  --lp-nav: #14171f;
-  --lp-nav-text: #98a2b3;
-  --lp-nav-text-active: #ffffff;
-  --lp-nav-active-bg: rgba(123, 139, 240, 0.16);
+  --lp-canvas: #0d0f13;
+  --lp-surface: #17191e;
+  --lp-surface-raised: #1d2026;
+  --lp-surface-sunken: #121418;
+  --lp-surface-hover: #1f2329;
+  --lp-nav: #17191e;
+  --lp-nav-text: #a3abb8;
+  --lp-nav-text-active: var(--lp-accent-600);
+  --lp-nav-active-bg: rgba(61, 139, 255, 0.14);
 
   --lp-text: #e7eaf0;
   --lp-text-soft: #b6bdca;
@@ -163,12 +165,13 @@
   --lp-text-faint: #58616f;
   --lp-text-invert: #0b0d12;
 
-  --lp-line: #252a35;
-  --lp-line-soft: #1c2029;
-  --lp-line-strong: #333a48;
+  --lp-line: #272b33;
+  --lp-line-soft: #1f2228;
+  --lp-line-strong: #353a44;
+  --lp-card-line: #23272e;
 
-  --lp-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --lp-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lp-shadow-sm: none;
+  --lp-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   --lp-shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55), 0 4px 8px rgba(0, 0, 0, 0.35);
   --lp-shadow-xl: 0 24px 56px -12px rgba(0, 0, 0, 0.7), 0 8px 16px -8px rgba(0, 0, 0, 0.5);
   --lp-scrim: rgba(0, 0, 0, 0.6);

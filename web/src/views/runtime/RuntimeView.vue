@@ -1,39 +1,10 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('nav.runtime') }}</h1>
-        <p class="lp-page-sub">{{ subtitle }}</p>
-      </div>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs :model-value="active" :items="langTabs" @update:model-value="(k: any) => selectLanguage(k)" />
       <div class="lp-page-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">{{ t('refresh') }}</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadAll" />
       </div>
-    </div>
-
-    <!-- One tab per language: its environment, then its applications. -->
-    <div class="langs" role="tablist">
-      <button
-        v-for="lang in languages"
-        :key="lang.key"
-        type="button"
-        role="tab"
-        class="lang"
-        :class="{ 'is-active': lang.key === active }"
-        :aria-selected="lang.key === active"
-        @click="selectLanguage(lang.key)"
-      >
-        <span class="rt-logo" :data-kind="lang.key">{{ logoText(lang.key) }}</span>
-        <span class="lang__text">
-          <span class="lang__name">{{ lang.label }}</span>
-          <span class="lang__sub">
-            <span class="dot" :class="lang.runtime?.installed ? 'dot--ok' : ''"></span>
-            {{ lang.runtime?.installed ? (lang.runtime.version || t('rt.installed')) : loaded ? t('rt.notInstalled') : '…' }}
-          </span>
-        </span>
-        <span v-if="lang.apps.length" class="lang__count" :class="{ 'is-running': lang.running > 0 }">
-          {{ lang.running }}/{{ lang.apps.length }}
-        </span>
-      </button>
     </div>
 
     <template v-if="current">
@@ -84,13 +55,12 @@
 
       <!-- Applications of this language -->
       <section v-if="loaded" class="lp-card">
-        <header class="lp-card-head">
-          <h2 class="lp-card-title">
-            {{ t('rt.appsOf', { name: current.label }) }}
-            <span class="count">{{ current.apps.length }}</span>
-          </h2>
-          <el-button type="primary" size="small" :icon="Plus" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
-        </header>
+        <div class="lp-toolbar">
+          <div class="lp-toolbar__left">
+            <el-button type="primary" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
+          </div>
+          <div class="lp-toolbar__right lp-dim">{{ t('rt.appsOf', { name: current.label }) }} · {{ current.apps.length }}</div>
+        </div>
         <div v-if="!current.apps.length" class="empty">
           <span class="rt-logo rt-logo--lg" :data-kind="current.key">{{ logoText(current.key) }}</span>
           <p class="empty__title">{{ t('rt.noAppsOf', { name: current.label }) }}</p>
@@ -394,6 +364,14 @@ const appRuntimes = computed(() => [
   { value: 'lua', label: 'Lua' },
 ])
 
+const langTabs = computed(() =>
+  languages.value.map((lang) => ({
+    name: lang.key,
+    label: lang.label,
+    dot: (lang.runtime?.installed ? 'ok' : 'off') as any,
+    badge: lang.apps.length ? `${lang.running}/${lang.apps.length}` : '',
+  })),
+)
 const languages = computed(() =>
   (Object.keys(LANG_RUNTIMES) as LangKey[]).map((key) => {
     const list = apps.value.filter((app) => LANG_RUNTIMES[key].includes(app.runtime))

@@ -276,6 +276,7 @@ defineExpose({ load })
 </script>
 
 <style scoped lang="scss">
+.pv { margin-bottom: var(--lp-3); }
 .pv-head-actions { display: flex; gap: 8px; }
 .pv-note { margin: 0; padding: 0 var(--lp-4) var(--lp-3); font-size: 12px; color: var(--lp-text-dim); }
 .pv-ver { display: flex; align-items: center; gap: 8px; }

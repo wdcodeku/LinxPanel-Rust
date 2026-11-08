@@ -5,23 +5,6 @@
         <h1 class="lp-page-title">{{ t('nav.services') }}</h1>
         <p class="lp-page-sub">{{ subtitle }}</p>
       </div>
-      <div class="lp-page-actions">
-        <el-input
-          v-model="keyword"
-          :placeholder="t('svc.searchPlaceholder')"
-          :prefix-icon="Search"
-          clearable
-          size="small"
-          class="search-input"
-        />
-        <el-select v-model="stateFilter" size="small" style="width: 130px">
-          <el-option :label="t('svc.allStates')" value="all" />
-          <el-option :label="t('svc.running')" value="active" />
-          <el-option :label="t('svc.stopped')" value="inactive" />
-          <el-option :label="t('svc.failed')" value="failed" />
-        </el-select>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
-      </div>
     </div>
 
     <el-alert
@@ -34,6 +17,26 @@
     />
 
     <div class="lp-card">
+      <div class="lp-toolbar">
+        <div class="lp-toolbar__left">
+          <el-radio-group v-model="stateFilter">
+            <el-radio-button value="all">{{ t('svc.allStates') }}</el-radio-button>
+            <el-radio-button value="active">{{ t('svc.running') }}</el-radio-button>
+            <el-radio-button value="inactive">{{ t('svc.stopped') }}</el-radio-button>
+            <el-radio-button value="failed">{{ t('svc.failed') }}</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="lp-toolbar__right">
+          <el-input
+            v-model="keyword"
+            :placeholder="t('svc.searchPlaceholder')"
+            :prefix-icon="Search"
+            clearable
+            class="lp-toolbar__search"
+          />
+          <el-button :icon="Refresh" :loading="loading" @click="load" />
+        </div>
+      </div>
       <el-table :data="filtered" v-loading="loading" size="small" :empty-text="emptyText">
         <el-table-column :label="t('svc.name')" min-width="240">
           <template #default="{ row }">

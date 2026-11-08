@@ -43,10 +43,17 @@
         <el-icon class="fm-clip__close" :title="t('cancel')" @click="clipboard = null"><Close /></el-icon>
       </div>
       <div class="fm-actions">
-        <el-tooltip :content="t('fm.newFolder')" :show-after="400"><el-button size="small" :icon="FolderAdd" @click="showMkdir = true" /></el-tooltip>
-        <el-tooltip :content="t('fm.newFile')" :show-after="400"><el-button size="small" :icon="DocumentAdd" @click="showNewFile = true" /></el-tooltip>
+        <el-dropdown trigger="click" @command="(c: string) => (c === 'folder' ? (showMkdir = true) : (showNewFile = true))">
+          <el-button type="primary" size="small" :icon="Plus">{{ t('fm.create') }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="folder"><el-icon><FolderAdd /></el-icon>{{ t('fm.newFolder') }}</el-dropdown-item>
+              <el-dropdown-item command="file"><el-icon><DocumentAdd /></el-icon>{{ t('fm.newFile') }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-dropdown trigger="click" :disabled="isVirtualDriveView" @command="onUploadCommand">
-          <el-button size="small" :icon="Upload" :loading="uploadingFiles" :disabled="isVirtualDriveView" :title="t('fm.uploadFiles')" />
+          <el-button size="small" :icon="Upload" :loading="uploadingFiles" :disabled="isVirtualDriveView">{{ t('fm.upload') }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="files"><el-icon><Document /></el-icon>{{ t('fm.uploadFiles') }}</el-dropdown-item>
@@ -62,8 +69,8 @@
         <el-tooltip :content="viewMode === 'list' ? t('gridView') : t('listView')" :show-after="400">
           <el-button size="small" @click="toggleView"><el-icon :size="14"><Grid v-if="viewMode === 'list'" /><List v-else /></el-icon></el-button>
         </el-tooltip>
-        <el-tooltip :content="t('terminal')" :show-after="400"><el-button size="small" @click="toggleTerminal"><el-icon :size="14"><Monitor /></el-icon></el-button></el-tooltip>
-        <el-tooltip v-if="!pickerMode" :content="t('rb.title')" :show-after="400"><el-button size="small" @click="openRecycleBin"><el-icon :size="14"><Delete /></el-icon></el-button></el-tooltip>
+        <el-button size="small" class="fm-act-label" :icon="Monitor" :title="t('terminal')" @click="toggleTerminal">{{ t('terminal') }}</el-button>
+        <el-button v-if="!pickerMode" size="small" class="fm-act-label" :icon="Delete" :title="t('rb.title')" @click="openRecycleBin">{{ t('rb.title') }}</el-button>
       </div>
       <input ref="uploadInputRef" class="fm-upload-input" type="file" multiple @change="onUploadInputChange" />
       <input ref="folderInputRef" class="fm-upload-input" type="file" webkitdirectory multiple @change="onFolderInputChange" />
@@ -441,7 +448,7 @@ import { defineAsyncComponent } from 'vue'
 const FileEditor = defineAsyncComponent(() => import('@/components/editor/FileEditor.vue'))
 import RecycleBin from './RecycleBin.vue'
 import { formatFullTime, formatRelative, formatShortTime } from '@/utils/format'
-import { RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
+import { Plus, ArrowDown, Monitor, RefreshRight, FolderAdd, DocumentAdd, Upload, UploadFilled, Back, Right, Top, ArrowRight, Close, CopyDocument, Grid, List, Delete, Lock, InfoFilled, Select, View, Hide, Download, CaretTop, CaretBottom } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t } = useI18n()
@@ -619,7 +626,7 @@ const rootPath = computed(() => {
 const rootLabel = computed(() => {
   if (isVirtualDriveView.value) return t('fm.allDrives')
   if (useWindowsPathStyle.value) return rootPath.value
-  return ''
+  return '/'
 })
 const showRootLabel = computed(() => rootLabel.value.trim().length > 0)
 const currentDriveRoot = computed(() => {
@@ -2346,15 +2353,17 @@ onUnmounted(() => {
   padding: var(--lp-4) var(--lp-5);
   display: flex; flex-direction: column; user-select: none;
 }
-@media (max-width: 768px) { .file-manager { padding: var(--lp-2); } }
+@media (max-width: 768px) {
+  .file-manager { padding: var(--lp-2); }
+}
 .fm-toolbar {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; background: var(--lp-card-bg);
+  padding: 10px 16px; background: var(--lp-surface);
   border-radius: var(--lp-radius-lg); margin-bottom: 8px;
-  box-shadow: var(--lp-shadow-sm); flex-shrink: 0;
-  border: 1px solid var(--lp-border-light);
+  flex-shrink: 0;
+  border: 1px solid var(--lp-card-line);
   /* Toolbar buttons are quiet icons until hovered; disabled ones fade out. */
-  :deep(.el-button) {
+  .fm-nav :deep(.el-button) {
     background: transparent !important;
     border-color: transparent !important;
     color: var(--lp-text-soft) !important;
@@ -2474,7 +2483,7 @@ onUnmounted(() => {
 .fm-list {
   flex: 1; background: var(--lp-card-bg); border-radius: var(--lp-radius-lg);
   box-shadow: var(--lp-shadow-sm); display: flex; flex-direction: column; min-height: 0;
-  border: 1px solid var(--lp-border-light);
+  border: 1px solid var(--lp-card-line);
 }
 .fm-list-header {
   display: flex; padding: 10px 18px; font-size: 11px; font-weight: 600;
@@ -2709,4 +2718,18 @@ onUnmounted(() => {
   &:focus { border-color: var(--lp-primary); }
 }
 .fm-editor-info { float: left; font-size: 12px; color: var(--lp-text-secondary); line-height: 32px; }
+
+@media (max-width: 768px) {
+  /* Phone: navigation and actions on one row, the path on its own row,
+     and only the columns that matter (name, size, time). */
+  .fm-toolbar { flex-wrap: wrap; padding: 8px 10px; }
+  .fm-path-bar { order: 3; flex: 1 1 100%; }
+  .fm-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+  .fm-actions .el-divider { display: none; }
+  .fm-col-owner, .fm-col-perm { display: none !important; }
+  .fm-col-time { width: 104px; }
+  .fm-col-size { width: 64px; }
+  .fm-act-label > span { display: none; }
+  .fm-act-label { padding: 0 8px; }
+}
 </style>

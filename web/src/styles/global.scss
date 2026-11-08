@@ -76,50 +76,68 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   font-feature-settings: 'tnum';
 }
 
-/* Page scaffolding shared by every view. */
+/* Page scaffolding shared by every view: a header bar (title or the
+   module's sub-pages as buttons, actions on the right), then flat white
+   content cards on the grey canvas. */
 .lp-page {
-  padding: var(--lp-6);
-  max-width: 1640px;
+  padding: var(--lp-4) var(--lp-5) var(--lp-6);
+  max-width: 1680px;
   margin: 0 auto;
 }
 @media (max-width: 768px) {
-  .lp-page { padding: var(--lp-4) var(--lp-3); }
+  .lp-page { padding: var(--lp-3); }
 }
 
 .lp-page-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--lp-4);
-  margin-bottom: var(--lp-5);
+  gap: var(--lp-3) var(--lp-4);
+  min-height: 52px;
+  margin-bottom: var(--lp-3);
+  padding: var(--lp-2) var(--lp-5);
   flex-wrap: wrap;
+  background: var(--lp-surface);
+  border: 1px solid var(--lp-card-line);
+  border-radius: var(--lp-r-lg);
+}
+/* Title and description on one line. */
+.lp-page-head > div:first-child:not(.lp-page-actions) {
+  display: flex;
+  align-items: baseline;
+  gap: 4px var(--lp-3);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .lp-page-title {
-  font-size: var(--lp-text-xl);
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: var(--lp-text-lg);
+  font-weight: 600;
   color: var(--lp-text);
+  white-space: nowrap;
 }
 .lp-page-sub {
-  margin-top: 2px;
-  font-size: var(--lp-text-base);
+  font-size: var(--lp-text-sm);
   color: var(--lp-text-dim);
 }
 .lp-page-actions { display: flex; align-items: center; gap: var(--lp-2); flex-wrap: wrap; }
+@media (max-width: 768px) {
+  .lp-page-head { padding: var(--lp-2) var(--lp-3); }
+  .lp-page-sub { display: none; }
+}
 
 /* Card primitive. */
 .lp-card {
   background: var(--lp-surface);
-  border: 1px solid var(--lp-line);
+  border: 1px solid var(--lp-card-line);
   border-radius: var(--lp-r-lg);
-  box-shadow: var(--lp-shadow-sm);
 }
 .lp-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--lp-3);
-  padding: var(--lp-4) var(--lp-5);
+  min-height: 52px;
+  padding: var(--lp-2) var(--lp-5);
   border-bottom: 1px solid var(--lp-line-soft);
 }
 .lp-card-title {
@@ -130,6 +148,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   font-weight: 600;
   color: var(--lp-text);
 }
+.lp-card-title .el-icon { color: var(--lp-text-dim); }
 .lp-card-body { padding: var(--lp-5); }
 .lp-card-body--flush { padding: 0; }
 
@@ -138,11 +157,11 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 21px;
+  height: 22px;
   padding: 0 8px;
   border-radius: var(--lp-r-full);
   font-size: var(--lp-text-xs);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   white-space: nowrap;
   background: var(--lp-muted-soft);
@@ -224,7 +243,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   --el-mask-color: color-mix(in srgb, var(--lp-surface) 72%, transparent);
   --el-overlay-color-lighter: var(--lp-scrim);
   --el-box-shadow: var(--lp-shadow);
-  --el-box-shadow-light: var(--lp-shadow-sm);
+  --el-box-shadow-light: var(--lp-shadow);
   --el-box-shadow-lighter: var(--lp-shadow-sm);
   --el-font-size-base: var(--lp-text-base);
   --el-transition-duration: 200ms;
@@ -237,32 +256,42 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 /* --- Component nudges that variables alone cannot express --- */
 
 .el-button {
-  font-weight: 500;
+  font-weight: 400;
   border-radius: var(--lp-r-sm);
 }
-.el-button--primary { --el-button-text-color: #ffffff; }
-[data-theme='dark'] .el-button--primary { --el-button-text-color: #0b0d12; }
+.el-button + .el-button { margin-left: var(--lp-2); }
+.el-button.is-link { font-weight: 400; }
+.el-button--small { --el-button-size: 28px; }
+/* Solid primary buttons carry white text in both themes; link, text and
+   plain primary buttons keep the primary colour. */
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain) { --el-button-text-color: #ffffff; }
 
 .el-card {
   border-radius: var(--lp-r-lg);
-  border-color: var(--lp-line);
-  box-shadow: var(--lp-shadow-sm);
+  border-color: var(--lp-card-line);
+  box-shadow: none;
+  --el-card-padding: var(--lp-5);
 }
+.el-card.is-hover-shadow:hover,
+.el-card.is-always-shadow { box-shadow: none; }
 
 .el-table {
   --el-table-border-color: var(--lp-line-soft);
   --el-table-header-bg-color: var(--lp-surface-sunken);
-  --el-table-header-text-color: var(--lp-text-dim);
+  --el-table-header-text-color: var(--lp-text-soft);
   --el-table-row-hover-bg-color: var(--lp-surface-hover);
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
   font-size: var(--lp-text-base);
 }
 .el-table th.el-table__cell {
-  font-weight: 600;
-  font-size: var(--lp-text-sm);
+  font-weight: 500;
+  font-size: var(--lp-text-base);
 }
-.el-table .el-table__cell { padding: 9px 0; }
+.el-table .el-table__cell { padding: 11px 0; }
+.el-table th.el-table__cell { padding: 9px 0; }
+.el-table--small .el-table__cell { padding: 7px 0; }
+.el-table--small th.el-table__cell { font-size: var(--lp-text-sm); }
 .el-table .el-table__row:last-child > .el-table__cell { border-bottom: 0; }
 .el-table__empty-text { color: var(--lp-text-faint); }
 /* A table that is still waiting for its first rows must not say "no data":
@@ -284,7 +313,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .el-select__wrapper:hover { box-shadow: 0 0 0 1px var(--lp-text-faint) inset; }
 .el-input__wrapper.is-focus,
 .el-select__wrapper.is-focused {
-  box-shadow: 0 0 0 1px var(--lp-accent) inset, 0 0 0 3px var(--lp-accent-ring);
+  box-shadow: 0 0 0 1px var(--lp-accent) inset;
 }
 
 .el-dialog {
@@ -301,7 +330,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   cursor: move;
   user-select: none;
 }
-.el-dialog__title { font-size: var(--lp-text-md); font-weight: 600; color: var(--lp-text); }
+.el-dialog__title { font-size: var(--lp-text-lg); font-weight: 600; color: var(--lp-text); }
 .el-dialog__headerbtn { top: var(--lp-3); right: var(--lp-3); width: 30px; height: 30px; border-radius: var(--lp-r-sm); }
 .el-dialog__headerbtn:hover { background: var(--lp-surface-hover); }
 .el-dialog__body { padding: var(--lp-5); }
@@ -350,7 +379,24 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   border-color: transparent;
 }
 
-.el-tabs__item { font-size: var(--lp-text-base); font-weight: 500; }
+.el-tabs__item { font-size: var(--lp-text-base); font-weight: 400; }
+.el-tabs__item.is-active { font-weight: 500; }
+
+/* Drawers: forms and details slide in from the right. */
+.el-drawer { background: var(--lp-surface-raised); }
+.el-drawer__header {
+  margin: 0;
+  padding: var(--lp-4) var(--lp-5);
+  border-bottom: 1px solid var(--lp-line-soft);
+  color: var(--lp-text);
+}
+.el-drawer__title { font-size: var(--lp-text-lg); font-weight: 600; color: var(--lp-text); }
+.el-drawer__body { padding: var(--lp-5); }
+.el-drawer__footer { padding: var(--lp-3) var(--lp-5); border-top: 1px solid var(--lp-line-soft); }
+
+.el-form-item__label { color: var(--lp-text-soft); }
+.el-radio-button__inner { font-weight: 400; }
+.el-segmented { --el-segmented-item-selected-color: #fff; }
 .el-tabs__nav-wrap::after { background: var(--lp-line); }
 
 .el-switch { --el-switch-on-color: var(--lp-accent); }
@@ -370,3 +416,49 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 }
 .el-loading-mask.el-loading-fade-leave-active { animation: none; }
 @keyframes lp-reveal { to { opacity: 1; } }
+
+/* Tabbed pages: the sub-pages are buttons in the header bar (PageTabs), so
+   the el-tabs below only holds the panes. */
+.lp-page-head--tabs { padding-left: var(--lp-2); padding-right: var(--lp-3); }
+.lp-page-head--tabs .page-tabs { flex: 1 1 auto; }
+.lp-tabs-headless > .el-tabs__header { display: none; }
+.lp-tabs-headless > .el-tabs__content { overflow: visible; }
+
+/* Content card toolbar: actions on the left, search / refresh on the right;
+   the table below keeps the card's side padding. */
+.lp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lp-3);
+  flex-wrap: wrap;
+  padding: var(--lp-4) var(--lp-5) var(--lp-3);
+}
+.lp-toolbar__left,
+.lp-toolbar__right { display: flex; align-items: center; gap: var(--lp-2); flex-wrap: wrap; }
+.lp-toolbar__left .el-button + .el-button,
+.lp-toolbar__right .el-button + .el-button { margin-left: 0; }
+.lp-toolbar__search { width: 240px; }
+.lp-toolbar ~ .el-table {
+  width: calc(100% - 2 * var(--lp-5));
+  margin: 0 var(--lp-5) var(--lp-4);
+}
+.lp-toolbar ~ .lp-pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--lp-5) var(--lp-4);
+}
+@media (max-width: 768px) {
+  .lp-toolbar { padding: var(--lp-3); }
+  .lp-toolbar__search { width: 100%; }
+  .lp-toolbar__right { width: 100%; flex-wrap: nowrap; }
+  .lp-toolbar ~ .el-table { width: calc(100% - 2 * var(--lp-3)); margin: 0 var(--lp-3) var(--lp-3); }
+}
+
+/* Alerts are opaque: a translucent tint looks muddy on the grey canvas. */
+.el-alert.is-light { border: 1px solid transparent; }
+.el-alert--success.is-light { background: color-mix(in srgb, var(--lp-ok) 9%, var(--lp-surface)); border-color: color-mix(in srgb, var(--lp-ok) 22%, var(--lp-surface)); }
+.el-alert--warning.is-light { background: color-mix(in srgb, var(--lp-warn) 9%, var(--lp-surface)); border-color: color-mix(in srgb, var(--lp-warn) 24%, var(--lp-surface)); }
+.el-alert--error.is-light { background: color-mix(in srgb, var(--lp-danger) 8%, var(--lp-surface)); border-color: color-mix(in srgb, var(--lp-danger) 22%, var(--lp-surface)); }
+.el-alert--info.is-light { background: var(--lp-surface); border-color: var(--lp-line); }
+.el-alert--primary.is-light { background: color-mix(in srgb, var(--lp-accent) 7%, var(--lp-surface)); border-color: color-mix(in srgb, var(--lp-accent) 20%, var(--lp-surface)); }

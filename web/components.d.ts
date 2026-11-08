@@ -8,6 +8,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AppStatus: typeof import('./src/components/AppStatus.vue')['default']
     CodeEditor: typeof import('./src/components/editor/CodeEditor.vue')['default']
     CommandPalette: typeof import('./src/components/CommandPalette.vue')['default']
     DirPicker: typeof import('./src/components/DirPicker.vue')['default']
@@ -59,6 +60,7 @@ declare module 'vue' {
     Layout: typeof import('./src/components/Layout.vue')['default']
     MetricChart: typeof import('./src/components/MetricChart.vue')['default']
     OperationLogDialog: typeof import('./src/components/OperationLogDialog.vue')['default']
+    PageTabs: typeof import('./src/components/PageTabs.vue')['default']
     PermissionDialog: typeof import('./src/components/PermissionDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

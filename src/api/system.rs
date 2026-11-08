@@ -11,6 +11,50 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/system/info", get(system_info))
         .route("/system/overview", get(system_overview))
+        .route("/system/counts", get(counts))
+}
+
+#[derive(serde::Serialize, Default)]
+struct Counts {
+    sites: i64,
+    sites_running: i64,
+    databases: i64,
+    cron_jobs: i64,
+    /// Website programs and service apps from the app store, and managed
+    /// applications under Runtimes.
+    apps: i64,
+}
+
+/// What the dashboard's overview card counts. Cheap: the panel's own
+/// records plus the crontab, never the database servers themselves.
+async fn counts(State(state): State<Arc<AppState>>) -> Json<ApiResponse<Counts>> {
+    let count = |sql: &'static str| {
+        let db = state.db.clone();
+        async move {
+            sqlx::query_as::<_, (i64,)>(sql)
+                .fetch_one(&db)
+                .await
+                .map(|(n,)| n)
+                .unwrap_or(0)
+        }
+    };
+    let cron_jobs = tokio::task::spawn_blocking(|| {
+        crate::services::cron::list()
+            .map(|jobs| jobs.len() as i64)
+            .unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0);
+    Json(ApiResponse::ok(Counts {
+        sites: count("SELECT COUNT(*) FROM sites").await,
+        sites_running: count("SELECT COUNT(*) FROM sites WHERE status = 'running'").await,
+        databases: count("SELECT COUNT(*) FROM databases").await,
+        cron_jobs,
+        apps: count(
+            "SELECT (SELECT COUNT(*) FROM app_installs) + (SELECT COUNT(*) FROM service_installs) + (SELECT COUNT(*) FROM apps)",
+        )
+        .await,
+    }))
 }
 
 /// Static host facts plus the most recent sample — the REST equivalent of the WS snapshot.

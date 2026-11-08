@@ -5,29 +5,31 @@
         <h1 class="lp-page-title">{{ t('nav.processes') }}</h1>
         <p class="lp-page-sub">{{ t('proc.subtitle', { total }) }}</p>
       </div>
-      <div class="lp-page-actions">
-        <el-input
-          v-model="keyword"
-          :placeholder="t('proc.searchPlaceholder')"
-          :prefix-icon="Search"
-          clearable
-          size="small"
-          class="search-input"
-          @input="onSearchInput"
-        />
-        <el-select v-model="autoRefresh" size="small" style="width: 120px" @change="restartTimer">
-          <el-option :label="t('proc.paused')" :value="0" />
-          <el-option label="2s" :value="2000" />
-          <el-option label="5s" :value="5000" />
-          <el-option label="10s" :value="10000" />
-        </el-select>
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="fetchRows">
-          {{ t('refresh') }}
-        </el-button>
-      </div>
     </div>
 
     <div class="lp-card">
+      <div class="lp-toolbar">
+        <div class="lp-toolbar__left">
+          <el-select v-model="autoRefresh" style="width: 130px" @change="restartTimer">
+            <template #prefix><el-icon><Timer /></el-icon></template>
+            <el-option :label="t('proc.paused')" :value="0" />
+            <el-option label="2s" :value="2000" />
+            <el-option label="5s" :value="5000" />
+            <el-option label="10s" :value="10000" />
+          </el-select>
+        </div>
+        <div class="lp-toolbar__right">
+          <el-input
+            v-model="keyword"
+            :placeholder="t('proc.searchPlaceholder')"
+            :prefix-icon="Search"
+            clearable
+            class="lp-toolbar__search"
+            @input="onSearchInput"
+          />
+          <el-button :icon="Refresh" :loading="loading" @click="fetchRows" />
+        </div>
+      </div>
       <el-table
         :data="rows"
         v-loading="loading && !rows.length"

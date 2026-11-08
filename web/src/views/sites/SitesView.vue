@@ -1,24 +1,28 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('si.title') }}</h1>
-        <p class="lp-page-sub">{{ t('si.pageSub') }}</p>
-      </div>
-      <div class="lp-page-actions">
-        <el-button
-          v-if="activeCategory === 'sites'"
-          type="primary"
-          :icon="Plus"
-          :disabled="!canManageSites"
-          @click="openCreate"
-        >{{ t('si.addSite') }}</el-button>
-      </div>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs :model-value="activeCategory" :items="pageTabs" @update:model-value="(name: any) => setActiveCategory(name)" />
     </div>
 
-    <el-tabs :model-value="activeCategory" class="tabs" @tab-change="(name: any) => setActiveCategory(name)">
+    <el-tabs :model-value="activeCategory" class="tabs lp-tabs-headless">
       <!-- ============ Sites ============ -->
       <el-tab-pane :label="t('si.tabSite')" name="sites">
+        <AppStatus
+          v-if="openrestyStatus.installed"
+          name="OpenResty"
+          logo="OR"
+          kind="openresty"
+          :version="openrestyVersion"
+          :state="openrestyStatus.running ? 'running' : 'stopped'"
+        >
+          <el-button v-if="!openrestyStatus.running" link type="primary" :loading="orBusy === 'start'" @click="orControl('start')">{{ t('ui.start') }}</el-button>
+          <template v-else>
+            <el-button link type="primary" :loading="orBusy === 'reload'" @click="orControl('reload')">{{ t('ui.reload') }}</el-button>
+            <el-button link type="primary" :loading="orBusy === 'restart'" @click="orControl('restart')">{{ t('ui.restart') }}</el-button>
+            <el-button link type="primary" :loading="orBusy === 'stop'" @click="orControl('stop')">{{ t('ui.stop') }}</el-button>
+          </template>
+          <el-button link type="primary" @click="setActiveCategory('openresty')">{{ t('ui.settings') }}</el-button>
+        </AppStatus>
         <!-- OpenResty missing: say what to do, with one button. -->
         <section v-if="!canManageSites && statusChecked" class="lp-card guard">
           <div class="guard__icon"><el-icon :size="26"><WarningFilled /></el-icon></div>
@@ -38,21 +42,22 @@
         </section>
 
         <section v-else class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title">
-              <el-icon><Connection /></el-icon>{{ t('si.tabSite') }}
-              <span v-if="sitesLoaded" class="count">{{ sites.length }}</span>
-            </h2>
-            <el-input
-              v-if="sites.length"
-              v-model="keyword"
-              :prefix-icon="Search"
-              size="small"
-              clearable
-              :placeholder="t('si.search')"
-              class="search"
-            />
-          </header>
+          <div class="lp-toolbar">
+            <div class="lp-toolbar__left">
+              <el-button type="primary" :disabled="!canManageSites" @click="openCreate">{{ t('si.addSite') }}</el-button>
+              <el-button @click="router.push('/appstore')">{{ t('si.fromAppStore') }}</el-button>
+            </div>
+            <div class="lp-toolbar__right">
+              <el-input
+                v-model="keyword"
+                :prefix-icon="Search"
+                clearable
+                :placeholder="t('si.search')"
+                class="lp-toolbar__search"
+              />
+              <el-button :icon="Refresh" :loading="loading" @click="loadSites" />
+            </div>
+          </div>
 
           <div v-if="!sitesLoaded" class="lp-card-body"><el-skeleton animated :rows="4" /></div>
 
@@ -400,6 +405,7 @@ import {
   getSettings,
   saveSettingsApi,
   getOpenRestyStatus,
+  controlOpenResty,
   quickInstallOpenResty,
   setDefaultSite,
   getApps,
@@ -408,7 +414,7 @@ import {
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, FolderOpened, Setting, WarningFilled, Lock, Search, Connection, ArrowRight, ArrowDown,
+  Plus, FolderOpened, Setting, Refresh, WarningFilled, Lock, Search, Connection, ArrowRight, ArrowDown,
   Document, Files, Position, Cpu,
 } from '@element-plus/icons-vue'
 
@@ -448,6 +454,32 @@ const openrestyStatus = ref<any>({
   message: '',
 })
 const canManageSites = computed(() => Boolean(openrestyStatus.value?.installed))
+const pageTabs = computed(() => [
+  { name: 'sites', label: t('si.tabSite'), badge: sitesLoaded.value ? sites.value.length : '' },
+  { name: 'certs', label: t('si.tabCert') },
+  { name: 'openresty', label: t('si.tabOpenresty'), dot: (openrestyStatus.value.installed ? (openrestyStatus.value.running ? 'ok' : 'warn') : 'off') as any },
+])
+/** "openresty/1.27.1.2" -> "1.27.1.2" */
+const openrestyVersion = computed(() => String(openrestyStatus.value.version || '').replace(/^[a-z]+\//i, ''))
+const orBusy = ref('')
+async function orControl(action: 'start' | 'stop' | 'restart' | 'reload') {
+  if (action === 'stop') {
+    try {
+      await ElMessageBox.confirm(t('ui.stopOpenrestyConfirm'), t('ui.stop'), { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  orBusy.value = action
+  try {
+    const res: any = await controlOpenResty(action)
+    if (res.success) ElMessage.success(t('ui.done'))
+    else ElMessage.error(res.message)
+  } finally {
+    orBusy.value = ''
+    loadOpenRestyStatus()
+  }
+}
 
 const openrestyForm = reactive({
   openresty_enabled: false,
@@ -1513,7 +1545,7 @@ usePage(async () => {
 
 <style scoped lang="scss">
 /* ---------- Redesigned list ---------- */
-.tabs { margin-top: calc(var(--lp-2) * -1); }
+.tabs { margin-top: 0; }
 .count {
   margin-left: 6px;
   padding: 0 7px;

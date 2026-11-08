@@ -17,6 +17,7 @@ export const login = (data: { username: string; password: string; code?: string 
 // System
 export const getSystemInfo = () => request.get('/system/info')
 export const getSystemOverview = () => request.get('/system/overview')
+export const getSystemCounts = () => request.get('/system/counts')
 export const getRealtimeSnapshot = () => request.get('/realtime/snapshot')
 
 // Processes
@@ -380,6 +381,8 @@ export const changeUsernameApi = (data: { username: string; password: string }) 
 export const changePasswordApi = (data: { username: string; old_password: string; new_password: string }) =>
   request.post('/settings/password', data)
 export const getOpenRestyStatus = () => request.get('/settings/openresty/status')
+export const controlOpenResty = (action: 'start' | 'stop' | 'restart' | 'reload') =>
+  request.post('/settings/openresty/control', { action })
 export const setDefaultSite = (data: { mode: 'page' | 'close'; html: string }) =>
   request.post('/settings/openresty/default-site', data)
 export const quickInstallOpenResty = () =>

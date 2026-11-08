@@ -1,17 +1,14 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('nav.appstore') }}</h1>
-        <p class="lp-page-sub">{{ t('as.subtitle') }}</p>
-      </div>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs v-model="tab" :items="pageTabs" />
       <div class="lp-page-actions">
-        <el-input v-model="keyword" size="small" clearable :prefix-icon="Search" :placeholder="t('as.search')" class="as-search" />
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
+        <el-input v-model="keyword" clearable :prefix-icon="Search" :placeholder="t('as.search')" class="as-search" />
+        <el-button :icon="Refresh" :loading="loading" @click="load" />
       </div>
     </div>
 
-    <el-tabs v-model="tab">
+    <el-tabs v-model="tab" class="lp-tabs-headless">
       <!-- Catalog -->
       <el-tab-pane :label="t('as.apps')" name="apps">
         <div class="as-cats">
@@ -373,6 +370,10 @@ const CATEGORIES = ['all', 'site', 'tools', 'network', 'dev'] as const
 const { t, locale } = useI18n()
 const router = useRouter()
 const tab = ref('apps')
+const pageTabs = computed(() => [
+  { name: 'apps', label: t('as.apps') },
+  { name: 'installed', label: t('as.installed'), badge: services.value.length + installed.value.length || '' },
+])
 const loading = ref(false)
 const catalog = ref<Catalog | null>(null)
 const installed = ref<any[]>([])

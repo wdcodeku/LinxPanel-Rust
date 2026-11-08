@@ -5,12 +5,6 @@
         <h1 class="lp-page-title">{{ t('nav.cron') }}</h1>
         <p class="lp-page-sub">{{ t('cron.subtitle', { total: rows.length }) }}</p>
       </div>
-      <div class="lp-page-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
-        <el-button type="primary" size="small" :icon="Plus" :disabled="!available" @click="openCreate">
-          {{ t('cron.newJob') }}
-        </el-button>
-      </div>
     </div>
 
     <el-alert
@@ -23,7 +17,15 @@
     />
 
     <div class="lp-card">
-      <el-table :data="rows" v-loading="loading" size="small" :empty-text="t('cron.empty')">
+      <div class="lp-toolbar">
+        <div class="lp-toolbar__left">
+          <el-button type="primary" :disabled="!available" @click="openCreate">{{ t('cron.newJob') }}</el-button>
+        </div>
+        <div class="lp-toolbar__right">
+          <el-button :icon="Refresh" :loading="loading" @click="load" />
+        </div>
+      </div>
+      <el-table :data="rows" v-loading="loading" :empty-text="t('cron.empty')">
         <el-table-column width="56">
           <template #default="{ row }">
             <el-switch
@@ -150,7 +152,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { usePage } from '@/utils/page'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormRules } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import {
   createCronJob, deleteCronJob, getBackupCronPrefix, getCronBackend, getCronJobs, getSites,

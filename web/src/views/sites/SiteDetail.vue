@@ -23,61 +23,19 @@
       </div>
     </el-card>
     <template v-else>
-    <div class="detail-header">
-      <div class="title-row">
+    <div class="lp-page-head lp-page-head--tabs detail-bar">
+      <div class="detail-bar__title">
         <el-button :icon="ArrowLeft" text class="back-btn" @click="$router.push('/sites')" />
-        <h2 class="site-name">{{ site.name || '-' }}</h2>
-        <el-tag :type="site.status === 'running' ? 'success' : 'danger'" size="small" effect="light">
-          {{ site.status === 'running' ? t('si.running') : t('si.stopped') }}
-        </el-tag>
+        <span class="site-name">{{ site.name || '-' }}</span>
+        <span class="lp-pill" :class="site.status === 'running' ? 'lp-pill--ok' : 'lp-pill--danger'">
+          <span class="lp-pill__dot"></span>{{ site.status === 'running' ? t('si.running') : t('si.stopped') }}
+        </span>
       </div>
-      <div class="header-actions">
-        <el-button v-if="site.status==='stopped'" type="success" @click="handleStart">{{ t('si.start') }}</el-button>
-        <el-button v-else type="warning" @click="handleStop">{{ t('si.stop') }}</el-button>
+      <PageTabs v-model="activeTab" :items="detailTabs" />
+      <div class="lp-page-actions">
+        <el-button v-if="site.status==='stopped'" type="success" plain @click="handleStart">{{ t('si.start') }}</el-button>
+        <el-button v-else type="warning" plain @click="handleStop">{{ t('si.stop') }}</el-button>
       </div>
-    </div>
-
-    <div class="section-nav">
-      <button
-        type="button"
-        class="section-item"
-        :class="{ active: activeTab === 'info' }"
-        @click="activeTab = 'info'"
-      >
-        {{ t('si.detailInfoTab') }}
-      </button>
-      <button
-        type="button"
-        class="section-item"
-        :class="{ active: activeTab === 'domains' }"
-        @click="activeTab = 'domains'"
-      >
-        {{ t('si.detailDomainTab') }}
-      </button>
-      <button
-        type="button"
-        class="section-item"
-        :class="{ active: activeTab === 'config' }"
-        @click="activeTab = 'config'"
-      >
-        {{ t('si.detailConfigTab') }}
-      </button>
-      <button
-        type="button"
-        class="section-item"
-        :class="{ active: activeTab === 'backup' }"
-        @click="activeTab = 'backup'"
-      >
-        {{ t('sb.tab') }}
-      </button>
-      <button
-        type="button"
-        class="section-item"
-        :class="{ active: activeTab === 'logs' }"
-        @click="activeTab = 'logs'"
-      >
-        {{ t('al.tab') }}
-      </button>
     </div>
 
     <el-card v-if="activeTab === 'info'" shadow="hover" class="detail-card">
@@ -267,7 +225,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from '@/i18n'
 import {
@@ -296,6 +254,13 @@ const { t } = useI18n()
 const siteId = Number(route.params.id)
 const loading = ref(false)
 const activeTab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'info')
+const detailTabs = computed(() => [
+  { name: 'info', label: t('si.detailInfoTab') },
+  { name: 'domains', label: t('si.detailDomainTab') },
+  { name: 'config', label: t('si.detailConfigTab') },
+  { name: 'backup', label: t('sb.tab') },
+  { name: 'logs', label: t('al.tab') },
+])
 const site = ref<any>({})
 const domains = ref<any[]>([])
 const newDomain = ref('')
@@ -742,9 +707,9 @@ async function handleRemoveDomain(id: number) {
   }
 }
 .detail-card {
-  background: var(--lp-card-bg);
-  border: 1px solid var(--lp-border-light);
-  border-radius: var(--lp-radius-lg);
+  background: var(--lp-surface);
+  border: 1px solid var(--lp-card-line);
+  border-radius: var(--lp-r-lg);
   :deep(.el-card__body) { padding: 20px; }
 }
 .info-form {
@@ -917,6 +882,19 @@ async function handleRemoveDomain(id: number) {
 
 <style scoped lang="scss">
 /* Same page frame and tab style as the rest of the panel. */
+.detail-bar__title {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--lp-2) !important;
+  padding-right: var(--lp-3);
+  margin-right: var(--lp-1);
+  border-right: 1px solid var(--lp-line);
+}
+.detail-bar__title .site-name { font-size: var(--lp-text-lg); font-weight: 600; white-space: nowrap; }
+.detail-bar .page-tabs { flex: 1 1 auto; }
+@media (max-width: 768px) {
+  .detail-bar__title { border-right: 0; width: 100%; }
+}
 .site-detail.lp-page { gap: var(--lp-4); }
 .site-detail .detail-header {
   padding: 0;

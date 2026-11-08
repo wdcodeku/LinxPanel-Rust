@@ -1,44 +1,15 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('nav.databases') }}</h1>
-        <p class="lp-page-sub">{{ t('dbm.subtitle') }}</p>
-      </div>
-      <div class="lp-page-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">{{ t('refresh') }}</el-button>
-      </div>
-    </div>
-
-    <!-- Engine switcher -->
-    <div class="engines" role="tablist">
-      <template v-if="loaded">
-        <button
-          v-for="item in engineCards"
-          :key="item.engine"
-          type="button"
-          role="tab"
-          class="engine"
-          :class="{ 'is-active': item.engine === engine }"
-          :aria-selected="item.engine === engine"
-          @click="selectEngine(item.engine)"
-        >
-          <span class="engine__logo" :data-engine="item.engine">{{ logo(item.engine) }}</span>
-          <span class="engine__text">
-            <span class="engine__name">{{ item.display_name }}</span>
-            <span class="engine__sub">
-              <span class="dot" :class="item.running ? 'dot--ok' : item.installed ? 'dot--warn' : ''"></span>
-              <template v-if="item.engine === 'sqlite'">{{ t('sql.cardSub') }}</template>
-              <template v-else>{{ item.running ? shortVersion(item) : item.installed ? t('dbm.stopped') : t('dbm.notInstalled') }}</template>
-            </span>
-          </span>
-        </button>
-      </template>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs v-if="loaded" :model-value="engine" :items="engineTabs" @update:model-value="(k: any) => selectEngine(k)" />
       <el-skeleton v-else animated class="engines__skeleton">
         <template #template>
-          <el-skeleton-item v-for="i in 5" :key="i" variant="rect" class="engine-skel" />
+          <el-skeleton-item v-for="i in 5" :key="i" variant="button" class="engine-skel" />
         </template>
       </el-skeleton>
+      <div class="lp-page-actions">
+        <el-button :icon="Refresh" :loading="loading" @click="loadAll" />
+      </div>
     </div>
 
     <SqlitePanel v-if="sqliteSeen" v-show="engine === 'sqlite'" />
@@ -90,12 +61,25 @@
 
       <template v-else>
         <!-- Status -->
-        <section class="lp-card status">
-          <div class="status__main">
-            <span class="lp-pill" :class="current.running ? 'lp-pill--ok' : 'lp-pill--warn'">
-              <span class="lp-pill__dot"></span>{{ current.running ? t('dbm.running') : t('dbm.stopped') }}
-            </span>
-            <span class="status__item"><span class="lp-dim">{{ t('dbm.version') }}</span> <span class="lp-mono">{{ shortVersion(current) }}</span></span>
+        <AppStatus
+          :name="current.display_name"
+          :logo="logo(current.engine)"
+          :kind="current.engine"
+          :version="shortVersion(current)"
+          :state="current.running ? 'running' : 'stopped'"
+        >
+          <el-button v-if="!current.running" link type="primary" :loading="busy === `start-${current.engine}`" @click="startEngine(current.engine)">{{ t('dbm.start') }}</el-button>
+          <template v-else>
+            <el-button link type="primary" :loading="busy === `restart-${current.engine}`" @click="restart(current.engine)">{{ t('dbm.restart') }}</el-button>
+            <el-button link type="primary" :loading="busy === `stop-${current.engine}`" @click="stopEngine(current.engine)">{{ t('dbs.stop') }}</el-button>
+          </template>
+          <el-button link type="primary" :disabled="!current.running" @click="openSettings()">{{ t('dbs.settings') }}</el-button>
+          <el-button
+            v-if="hasAdmin(current.engine) && current.running && !current.manageable"
+            link type="warning" @click="openAdmin"
+          >{{ t('dbm.connect') }}</el-button>
+          <el-button link type="danger" @click="openUninstall()">{{ t('dbs.uninstall') }}</el-button>
+          <template #extra>
             <span class="status__item"><span class="lp-dim">{{ t('dbm.port') }}</span> <span class="lp-mono">{{ current.port }}</span></span>
             <button
               v-if="current.running && network"
@@ -106,30 +90,8 @@
             >
               <el-icon><Connection /></el-icon>{{ network.public ? t('dbs.remoteOnShort') : t('dbs.remoteOffShort') }}
             </button>
-          </div>
-          <div class="status__actions">
-            <el-button
-              v-if="hasAdmin(current.engine) && current.running && !current.manageable"
-              size="small" type="warning" plain @click="openAdmin"
-            >{{ t('dbm.connect') }}</el-button>
-            <el-button v-if="!current.running" size="small" type="primary" plain :loading="busy === `start-${current.engine}`" @click="startEngine(current.engine)">
-              {{ t('dbm.start') }}
-            </el-button>
-            <template v-else>
-              <el-button size="small" :loading="busy === `restart-${current.engine}`" @click="restart(current.engine)">{{ t('dbm.restart') }}</el-button>
-              <el-button size="small" :loading="busy === `stop-${current.engine}`" @click="stopEngine(current.engine)">{{ t('dbs.stop') }}</el-button>
-            </template>
-            <el-button size="small" type="primary" :icon="Setting" :disabled="!current.running" @click="openSettings()">{{ t('dbs.settings') }}</el-button>
-            <el-dropdown trigger="click" @command="(c: string) => c === 'uninstall' && openUninstall()">
-              <el-button size="small" :icon="MoreFilled" />
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="uninstall" class="danger-item">{{ t('dbs.uninstall') }}</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-        </section>
+          </template>
+        </AppStatus>
 
         <el-alert
           v-if="!current.manageable"
@@ -142,16 +104,14 @@
 
         <!-- Databases -->
         <section v-if="current.engine !== 'redis' && current.manageable" class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title">
-              <el-icon><Coin /></el-icon>{{ t('dbm.databases') }}
-              <span v-if="!listLoading" class="count">{{ rows.length }}</span>
-            </h2>
-            <div class="head-tools">
-              <el-input v-model="keyword" :prefix-icon="Search" size="small" clearable :placeholder="t('dbm.search')" class="search" />
-              <el-button type="primary" size="small" :icon="Plus" @click="openCreate">{{ t('dbm.create') }}</el-button>
+          <div class="lp-toolbar">
+            <div class="lp-toolbar__left">
+              <el-button type="primary" @click="openCreate">{{ t('dbm.create') }}</el-button>
             </div>
-          </header>
+            <div class="lp-toolbar__right">
+              <el-input v-model="keyword" :prefix-icon="Search" clearable :placeholder="t('dbm.search')" class="lp-toolbar__search" />
+            </div>
+          </div>
           <div v-if="listLoading" class="lp-card-body">
             <el-skeleton animated :rows="4" />
           </div>
@@ -540,6 +500,13 @@ const shown = reactive<Record<string, boolean>>({})
 
 const current = computed(() => engines.value.find((e) => e.engine === engine.value))
 // SQLite has no server: its databases are files, managed on their own panel.
+const engineTabs = computed(() =>
+  engineCards.value.map((item) => ({
+    name: item.engine,
+    label: item.display_name,
+    dot: (item.engine === 'sqlite' ? '' : item.running ? 'ok' : item.installed ? 'warn' : 'off') as any,
+  })),
+)
 const engineCards = computed<EngineInfo[]>(() => [
   ...engines.value,
   { engine: 'sqlite', display_name: 'SQLite', installed: true, version: '', running: true, port: 0, manageable: true, message: '' },

@@ -15,6 +15,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/settings/password", post(change_password))
         .route("/settings/openresty/status", get(get_openresty_status))
         .route("/settings/openresty/install", post(quick_install_openresty))
+        .route("/settings/openresty/control", post(control_openresty))
         .route("/settings/openresty/default-site", post(set_default_site))
 }
 
@@ -154,6 +155,21 @@ async fn get_openresty_status(
 ) -> Json<ApiResponse<openresty::OpenRestyStatus>> {
     match openresty::get_status(state.as_ref()).await {
         Ok(status) => Json(ApiResponse::ok(status)),
+        Err(e) => Json(ApiResponse::err(&e.to_string())),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ControlRequest {
+    action: String,
+}
+
+async fn control_openresty(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ControlRequest>,
+) -> Json<ApiResponse<()>> {
+    match openresty::control(state.as_ref(), &req.action).await {
+        Ok(()) => Json(ApiResponse::ok_msg("Done")),
         Err(e) => Json(ApiResponse::err(&e.to_string())),
     }
 }

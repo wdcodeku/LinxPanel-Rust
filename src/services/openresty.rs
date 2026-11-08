@@ -45,6 +45,9 @@ pub struct OpenRestyStatus {
     pub sites_dir: String,
     pub version: Option<String>,
     pub message: String,
+    /// An nginx master process is running.
+    #[serde(default)]
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1819,7 +1822,60 @@ fn to_public_status(inspection: RuntimeInspection) -> OpenRestyStatus {
         sites_dir: inspection.runtime.sites_dir.to_string_lossy().to_string(),
         version: inspection.detected_version,
         message,
+        running: master_running(),
     }
+}
+
+/// Whether an nginx master process is running.
+fn master_running() -> bool {
+    super::shell::run("pgrep", &["-f", "nginx: master process"])
+        .map(|o| o.ok())
+        .unwrap_or(false)
+}
+
+/// start | stop | restart | reload, through the service when there is one
+/// (so the init system keeps supervising it).
+pub async fn control(state: &AppState, action: &str) -> Result<()> {
+    let _guard = state.openresty_lock.lock().await;
+    let runtime = load_runtime(&state.db).await?;
+    let action = action.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let service = super::sysservice::exists("openresty");
+        match action.as_str() {
+            "start" if master_running() => Ok(()),
+            "start" => start_openresty(&runtime),
+            "reload" => {
+                test_openresty(&runtime)?;
+                reload_openresty(&runtime)
+            }
+            "stop" if service => super::sysservice::stop("openresty", false)
+                .map(|_| ())
+                .map_err(|e| anyhow!(e)),
+            "stop" => match run_openresty(&runtime, ["-s", "quit"].as_slice()) {
+                Err(err) if not_running(&err.to_string()) => Ok(()),
+                other => other,
+            },
+            "restart" => {
+                test_openresty(&runtime)?;
+                if service {
+                    return super::sysservice::enable_and_restart("openresty")
+                        .map(|_| ())
+                        .map_err(|e| anyhow!(e));
+                }
+                let _ = run_openresty(&runtime, ["-s", "quit"].as_slice());
+                for _ in 0..50 {
+                    if !master_running() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                start_openresty(&runtime)
+            }
+            _ => Err(anyhow!("Unknown action")),
+        }
+    })
+    .await
+    .map_err(|e| anyhow!(e.to_string()))?
 }
 
 fn resolve_nginx_bin(preferred: &str) -> Option<PathBuf> {

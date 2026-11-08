@@ -1,18 +1,15 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('settings') }}</h1>
-        <p class="lp-page-sub">{{ t('st.subtitle') }}</p>
-      </div>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs v-model="tab" :items="pageTabs" />
       <div class="lp-page-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ t('refresh') }}</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="load" />
         <!-- Security and update tabs save their own settings. -->
-        <el-button v-if="!['security', 'update', 'audit', 'backup'].includes(tab)" type="primary" size="small" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
+        <el-button v-if="!['security', 'update', 'audit', 'backup'].includes(tab)" type="primary" :loading="saving" @click="save">{{ t('st.saveSettings') }}</el-button>
       </div>
     </div>
 
-    <el-tabs v-model="tab">
+    <el-tabs v-model="tab" class="lp-tabs-headless">
       <!-- ============ General ============ -->
       <el-tab-pane name="general">
         <template #label><span class="st-tab"><el-icon><Setting /></el-icon>{{ t('st.tabGeneral') }}</span></template>
@@ -170,6 +167,15 @@ const { staticInfo: info } = storeToRefs(realtime)
 const route = useRoute()
 // ?tab=update opens a tab directly (the header's update badge links there).
 const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'general')
+const pageTabs = computed(() => [
+  { name: 'general', label: t('st.tabGeneral'), icon: 'Setting' },
+  { name: 'security', label: t('st.tabSecurity'), icon: 'Lock' },
+  { name: 'update', label: t('upd.tab'), icon: 'Promotion' },
+  { name: 'alerts', label: t('st.tabAlerts'), icon: 'Bell' },
+  { name: 'backup', label: t('rs.tab'), icon: 'UploadFilled' },
+  { name: 'audit', label: t('au.tab'), icon: 'Tickets' },
+  { name: 'about', label: t('st.tabAbout'), icon: 'InfoFilled' },
+])
 // The page stays alive between visits: follow ?tab= links on later visits too.
 watch(() => route.query.tab, (value) => {
   if (typeof value === 'string' && value) tab.value = value

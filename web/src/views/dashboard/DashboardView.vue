@@ -1,222 +1,211 @@
 <template>
-  <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('dashboard') }}</h1>
-        <p class="lp-page-sub">{{ subtitle }}</p>
-      </div>
-      <div class="lp-page-actions">
-        <el-radio-group v-model="range" size="small">
-          <el-radio-button v-for="option in rangeOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </el-radio-button>
-        </el-radio-group>
-      </div>
-    </div>
-
-    <!-- Waiting only shows before the first frame; after that the page is always live. -->
-    <div v-if="!latest" class="dash-skeleton">
-      <el-skeleton :rows="6" animated />
-    </div>
-
-    <template v-else>
-      <section class="tile-grid">
-        <StatTile
-          :label="t('db.cpu')"
-          :value="latest.cpu_percent.toFixed(1)"
-          unit="%"
-          :percent="latest.cpu_percent"
-          :spark="cpuSpark"
-          :sub="`${staticInfo?.logical_cores || 0} ${t('db.cores')} · ${t('db.load')} ${loadText}`"
-          :badge="cpuBadge.text"
-          :badge-level="cpuBadge.level"
-        />
-        <StatTile
-          :label="t('db.memory')"
-          :value="latest.mem_percent.toFixed(1)"
-          unit="%"
-          :percent="latest.mem_percent"
-          :spark="memSpark"
-          :sub="`${formatBytes(latest.mem_used)} / ${formatBytes(latest.mem_total)}`"
-          :badge="swapBadge"
-          badge-level="muted"
-        />
-        <StatTile
-          :label="t('db.disk')"
-          :value="diskOverall.percent.toFixed(1)"
-          unit="%"
-          :percent="diskOverall.percent"
-          :sub="`${formatBytes(diskOverall.used)} / ${formatBytes(diskOverall.total)}`"
-          :badge="`${disks.length} ${t('db.volumes')}`"
-          badge-level="muted"
-        />
-        <StatTile
-          :label="t('db.network')"
-          :value="formatRateShort(latest.net_rx_rate + latest.net_tx_rate)"
-          unit="/s"
-          :spark="netSpark"
-          tone="accent"
-          :sub="`↓ ${formatRate(latest.net_rx_rate)}  ↑ ${formatRate(latest.net_tx_rate)}`"
-          :badge="`${processCount} ${t('db.processes')}`"
-          badge-level="muted"
-        />
-      </section>
-
-      <section class="chart-grid">
-        <article class="lp-card">
+  <div class="lp-page dash">
+    <div class="dash-grid">
+      <div class="dash-main">
+        <!-- Overview: what the panel manages -->
+        <section class="lp-card">
           <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Cpu /></el-icon>{{ t('db.cpuTrend') }}</h2>
-            <span class="chart-now lp-num">{{ latest.cpu_percent.toFixed(1) }}%</span>
+            <h2 class="lp-card-title">{{ t('ui.overview') }}</h2>
+            <span class="lp-dim head-note">{{ subtitle }}</span>
           </header>
-          <div class="lp-card-body">
-            <MetricChart :series="cpuSeries" :height="188" percent />
+          <div class="overview">
+            <router-link v-for="item in overview" :key="item.to" :to="item.to" class="overview__item">
+              <span class="overview__label">{{ item.label }}</span>
+              <span class="overview__value lp-num">{{ item.value }}</span>
+              <span v-if="item.note" class="overview__note">{{ item.note }}</span>
+            </router-link>
           </div>
-        </article>
+        </section>
 
-        <article class="lp-card">
+        <!-- Status gauges -->
+        <section class="lp-card">
           <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Coin /></el-icon>{{ t('db.memTrend') }}</h2>
-            <span class="chart-now lp-num">{{ formatBytes(latest.mem_used) }}</span>
+            <h2 class="lp-card-title">{{ t('ui.status') }}</h2>
           </header>
-          <div class="lp-card-body">
-            <MetricChart :series="memSeries" :height="188" percent />
-          </div>
-        </article>
-
-        <article class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Connection /></el-icon>{{ t('db.netTrend') }}</h2>
-            <span class="chart-now lp-num">↓{{ formatRateShort(latest.net_rx_rate) }} ↑{{ formatRateShort(latest.net_tx_rate) }}</span>
-          </header>
-          <div class="lp-card-body">
-            <MetricChart :series="netSeries" :height="188" :formatter="formatRateShort" show-legend />
-          </div>
-        </article>
-
-        <article class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Files /></el-icon>{{ t('db.diskIoTrend') }}</h2>
-            <span class="chart-now lp-num">R{{ formatRateShort(latest.disk_read_rate) }} W{{ formatRateShort(latest.disk_write_rate) }}</span>
-          </header>
-          <div class="lp-card-body">
-            <MetricChart :series="diskIoSeries" :height="188" :formatter="formatRateShort" show-legend />
-          </div>
-        </article>
-      </section>
-
-      <section class="detail-grid">
-        <article class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Cpu /></el-icon>{{ t('db.perCore') }}</h2>
-            <span class="lp-dim">{{ t('db.avg') }} {{ latest.cpu_percent.toFixed(1) }}%</span>
-          </header>
-          <div class="lp-card-body">
-            <div class="core-grid">
-              <div v-for="(usage, index) in latest.cpu_cores" :key="index" class="core">
-                <div class="core__track">
-                  <div class="core__fill" :style="{ height: Math.max(2, usage) + '%', background: levelVar(usage) }"></div>
-                </div>
-                <span class="core__label lp-num">{{ index }}</span>
+          <div v-if="!latest" class="lp-card-body"><el-skeleton :rows="3" animated /></div>
+          <div v-else class="gauges">
+            <el-tooltip
+              v-for="gauge in gauges"
+              :key="gauge.key"
+              :disabled="!gauge.tip"
+              placement="bottom"
+              :show-after="200"
+            >
+              <template #content><div class="gauge-tip">{{ gauge.tip }}</div></template>
+              <div class="gauge">
+                <el-progress
+                  type="dashboard"
+                  :percentage="Math.min(100, Math.round(gauge.percent * 10) / 10)"
+                  :width="128"
+                  :stroke-width="9"
+                  :color="levelColor(gauge.percent)"
+                >
+                  <template #default>
+                    <span class="gauge__pct lp-num">{{ gauge.percent.toFixed(1) }}<small>%</small></span>
+                    <span class="gauge__name">{{ gauge.label }}</span>
+                  </template>
+                </el-progress>
+                <div class="gauge__sub lp-truncate">{{ gauge.sub }}</div>
               </div>
+            </el-tooltip>
+          </div>
+        </section>
+
+        <!-- Monitor: one chart, switchable -->
+        <section class="lp-card">
+          <header class="lp-card-head monitor-head">
+            <h2 class="lp-card-title">{{ t('ui.monitor') }}</h2>
+            <div class="monitor-tools">
+              <el-radio-group v-model="metric" size="small">
+                <el-radio-button value="net">{{ t('ui.traffic') }}</el-radio-button>
+                <el-radio-button value="io">{{ t('ui.diskIo') }}</el-radio-button>
+                <el-radio-button value="cpu">CPU</el-radio-button>
+                <el-radio-button value="mem">{{ t('ui.memory') }}</el-radio-button>
+              </el-radio-group>
+              <el-select v-model="range" size="small" class="range">
+                <el-option v-for="option in rangeOptions" :key="option.value" :value="option.value" :label="option.label" />
+              </el-select>
             </div>
-            <dl class="spec">
-              <div><dt>{{ t('db.model') }}</dt><dd class="lp-truncate">{{ staticInfo?.cpu_model || '-' }}</dd></div>
-              <div><dt>{{ t('db.physCores') }}</dt><dd>{{ staticInfo?.physical_cores }} / {{ staticInfo?.logical_cores }}</dd></div>
-              <div><dt>{{ t('db.frequency') }}</dt><dd>{{ frequencyText }}</dd></div>
-              <div><dt>{{ t('db.kernel') }}</dt><dd class="lp-truncate">{{ staticInfo?.kernel_version || '-' }}</dd></div>
-            </dl>
-          </div>
-        </article>
-
-        <article class="lp-card">
-          <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Files /></el-icon>{{ t('db.diskDetail') }}</h2>
           </header>
-          <div class="lp-card-body lp-card-body--flush">
-            <el-table :data="disks" size="small" :empty-text="t('db.noDisks')">
-              <el-table-column :label="t('db.device')" min-width="130">
-                <template #default="{ row }">
-                  <div class="cell-stack">
-                    <span class="lp-truncate">{{ row.name }}</span>
-                    <span class="lp-dim lp-truncate">{{ row.mount_point }}</span>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column :label="t('db.fsType')" prop="fs_type" width="90" />
-              <el-table-column :label="t('db.capacity')" width="150">
-                <template #default="{ row }">
-                  <span class="lp-num">{{ formatBytes(row.used) }} / {{ formatBytes(row.total) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column :label="t('db.usage')" min-width="150">
-                <template #default="{ row }">
-                  <div class="usage">
-                    <div class="usage__track">
-                      <div class="usage__fill" :style="{ width: row.usage_percent + '%', background: levelVar(row.usage_percent) }"></div>
-                    </div>
-                    <span class="usage__pct lp-num">{{ row.usage_percent.toFixed(1) }}%</span>
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
+          <div v-if="latest" class="monitor-stats">
+            <template v-if="metric === 'net'">
+              <span><i class="sw" style="background: var(--lp-series-3)"></i>{{ t('ui.up') }} <b class="lp-num">{{ formatRate(latest.net_tx_rate) }}</b></span>
+              <span><i class="sw" style="background: var(--lp-series-1)"></i>{{ t('ui.down') }} <b class="lp-num">{{ formatRate(latest.net_rx_rate) }}</b></span>
+              <span>{{ t('ui.sent') }} <b class="lp-num">{{ formatBytes(netTotals.tx) }}</b></span>
+              <span>{{ t('ui.received') }} <b class="lp-num">{{ formatBytes(netTotals.rx) }}</b></span>
+            </template>
+            <template v-else-if="metric === 'io'">
+              <span><i class="sw" style="background: var(--lp-series-6)"></i>{{ t('ui.read') }} <b class="lp-num">{{ formatRate(latest.disk_read_rate) }}</b></span>
+              <span><i class="sw" style="background: var(--lp-series-4)"></i>{{ t('ui.write') }} <b class="lp-num">{{ formatRate(latest.disk_write_rate) }}</b></span>
+            </template>
+            <template v-else-if="metric === 'cpu'">
+              <span><i class="sw" style="background: var(--lp-series-1)"></i>CPU <b class="lp-num">{{ latest.cpu_percent.toFixed(1) }}%</b></span>
+              <span>{{ t('ui.load') }} <b class="lp-num">{{ loadText }}</b></span>
+            </template>
+            <template v-else>
+              <span><i class="sw" style="background: var(--lp-series-2)"></i>{{ t('ui.memory') }} <b class="lp-num">{{ latest.mem_percent.toFixed(1) }}%</b></span>
+              <span>{{ t('ui.used') }} <b class="lp-num">{{ formatBytes(latest.mem_used) }}</b></span>
+              <span>{{ t('ui.total') }} <b class="lp-num">{{ formatBytes(latest.mem_total) }}</b></span>
+            </template>
           </div>
-        </article>
+          <div class="monitor-chart">
+            <MetricChart
+              :series="monitorSeries"
+              :height="280"
+              :percent="metric === 'cpu' || metric === 'mem'"
+              :formatter="metric === 'net' || metric === 'io' ? formatRateShort : undefined"
+            />
+          </div>
+        </section>
+      </div>
 
-        <article class="lp-card">
+      <aside class="dash-side">
+        <!-- System information -->
+        <section class="lp-card">
           <header class="lp-card-head">
-            <h2 class="lp-card-title"><el-icon><Connection /></el-icon>{{ t('db.interfaces') }}</h2>
+            <h2 class="lp-card-title">{{ t('ui.systemInfo') }}</h2>
           </header>
-          <div class="lp-card-body lp-card-body--flush">
-            <el-table :data="activeInterfaces" size="small" :empty-text="t('db.noInterfaces')">
-              <el-table-column :label="t('db.interface')" min-width="120">
-                <template #default="{ row }">
-                  <div class="cell-stack">
-                    <span>{{ row.name }}</span>
-                    <span class="lp-dim lp-truncate">{{ row.ip_addresses[0] || row.mac_address || '-' }}</span>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column :label="t('db.rxRate')" width="110" align="right">
-                <template #default="{ row }"><span class="lp-num rx">↓ {{ formatRateShort(row.rx_rate) }}</span></template>
-              </el-table-column>
-              <el-table-column :label="t('db.txRate')" width="110" align="right">
-                <template #default="{ row }"><span class="lp-num tx">↑ {{ formatRateShort(row.tx_rate) }}</span></template>
-              </el-table-column>
-              <el-table-column :label="t('db.total')" width="150" align="right">
-                <template #default="{ row }">
-                  <span class="lp-num lp-dim">{{ formatBytes(row.rx_bytes) }} / {{ formatBytes(row.tx_bytes) }}</span>
-                </template>
-              </el-table-column>
-            </el-table>
+          <dl class="info">
+            <div><dt>{{ t('ui.hostname') }}</dt><dd class="lp-truncate">{{ staticInfo?.hostname || '—' }}</dd></div>
+            <div><dt>{{ t('ui.os') }}</dt><dd class="lp-truncate">{{ staticInfo?.os_version || staticInfo?.os_name || '—' }}</dd></div>
+            <div><dt>{{ t('ui.kernel') }}</dt><dd class="lp-truncate">{{ staticInfo?.kernel_version || '—' }}</dd></div>
+            <div><dt>{{ t('ui.arch') }}</dt><dd>{{ staticInfo?.arch || staticInfo?.platform || '—' }}</dd></div>
+            <div><dt>CPU</dt><dd class="lp-truncate" :title="staticInfo?.cpu_model">{{ staticInfo?.cpu_model || '—' }}</dd></div>
+            <div><dt>{{ t('db.physCores') }}</dt><dd>{{ staticInfo?.physical_cores || '—' }} / {{ staticInfo?.logical_cores || '—' }}<span v-if="frequencyText !== '-'" class="lp-dim"> · {{ frequencyText }}</span></dd></div>
+            <div><dt>{{ t('ui.bootTime') }}</dt><dd>{{ bootText }}</dd></div>
+            <div><dt>{{ t('ui.uptime') }}</dt><dd>{{ latest ? formatDuration(latest.uptime) : '—' }}</dd></div>
+            <div><dt>LinxPanel</dt><dd>v{{ staticInfo?.panel_version || '—' }}</dd></div>
+          </dl>
+        </section>
+
+        <!-- Disks -->
+        <section class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title">{{ t('ui.disk') }}</h2>
+            <span class="lp-dim head-note">{{ formatBytes(diskOverall.used) }} / {{ formatBytes(diskOverall.total) }}</span>
+          </header>
+          <div class="bars">
+            <div v-for="disk in disks" :key="disk.name + disk.mount_point" class="bar">
+              <div class="bar__top">
+                <span class="lp-truncate bar__name" :title="disk.name">{{ disk.mount_point }}</span>
+                <span class="lp-dim lp-num">{{ formatBytes(disk.used) }} / {{ formatBytes(disk.total) }}</span>
+              </div>
+              <div class="bar__track"><div class="bar__fill" :style="{ width: disk.usage_percent + '%', background: levelColor(disk.usage_percent) }"></div></div>
+            </div>
+            <p v-if="!disks.length" class="lp-dim">{{ t('db.noDisks') }}</p>
           </div>
-        </article>
-      </section>
-    </template>
+        </section>
+
+        <!-- Network interfaces -->
+        <section class="lp-card">
+          <header class="lp-card-head">
+            <h2 class="lp-card-title">{{ t('db.interfaces') }}</h2>
+          </header>
+          <ul class="ifaces">
+            <li v-for="item in activeInterfaces" :key="item.name" class="iface">
+              <div class="iface__main">
+                <span class="iface__name">{{ item.name }}</span>
+                <span class="lp-dim lp-truncate lp-mono iface__ip">{{ item.ip_addresses[0] || item.mac_address || '' }}</span>
+              </div>
+              <div class="iface__rates lp-num">
+                <span class="rx">↓ {{ formatRateShort(item.rx_rate) }}</span>
+                <span class="tx">↑ {{ formatRateShort(item.tx_rate) }}</span>
+              </div>
+            </li>
+            <li v-if="!activeInterfaces.length" class="lp-dim">{{ t('db.noInterfaces') }}</li>
+          </ul>
+        </section>
+      </aside>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Coin, Connection, Cpu, Files } from '@element-plus/icons-vue'
 import MetricChart, { type Series } from '@/components/MetricChart.vue'
-import StatTile from '@/components/StatTile.vue'
+import { getSystemCounts } from '@/api'
 import { useRealtimeStore } from '@/stores/realtime'
 import { useI18n } from '@/i18n'
-import { formatBytes, formatDuration, formatRate, formatRateShort } from '@/utils/format'
+import { usePage } from '@/utils/page'
+import { formatBytes, formatDuration, formatFullTime, formatRate, formatRateShort } from '@/utils/format'
 
 const { t } = useI18n()
 const realtime = useRealtimeStore()
 const { latest, staticInfo, detail, history } = storeToRefs(realtime)
 
 /** Window of history to plot, in seconds. */
-const range = ref(120)
+const range = ref(300)
 const rangeOptions = [
   { value: 60, label: '1m' },
   { value: 120, label: '2m' },
   { value: 300, label: '5m' },
   { value: 600, label: '10m' },
 ]
+const metric = ref<'net' | 'io' | 'cpu' | 'mem'>('net')
+
+const counts = ref<{ sites: number; sites_running: number; databases: number; cron_jobs: number; apps: number } | null>(null)
+async function loadCounts() {
+  try {
+    const res: any = await getSystemCounts()
+    if (res.success) counts.value = res.data
+  } catch {
+    /* the card keeps its last numbers */
+  }
+}
+onMounted(loadCounts)
+usePage(loadCounts)
+
+const overview = computed(() => {
+  const c = counts.value
+  const n = (v: number | undefined) => (c ? String(v ?? 0) : '—')
+  return [
+    { to: '/sites', label: t('ui.sites'), value: n(c?.sites), note: c && c.sites ? `${c.sites_running} ${t('ui.running')}` : '' },
+    { to: '/databases', label: t('ui.databases'), value: n(c?.databases), note: '' },
+    { to: '/cron', label: t('ui.cronJobs'), value: n(c?.cron_jobs), note: '' },
+    { to: '/appstore', label: t('ui.apps'), value: n(c?.apps), note: '' },
+  ]
+})
 
 const windowed = computed(() => {
   const points = history.value
@@ -235,25 +224,24 @@ function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
-const cpuSeries = computed<Series[]>(() => [
-  { name: t('db.cpu'), color: cssVar('--lp-series-1'), data: seriesOf((s) => s.cpu_percent) },
-])
-const memSeries = computed<Series[]>(() => [
-  { name: t('db.memory'), color: cssVar('--lp-series-2'), data: seriesOf((s) => s.mem_percent) },
-])
-const netSeries = computed<Series[]>(() => [
-  { name: t('db.rx'), color: cssVar('--lp-series-1'), data: seriesOf((s) => s.net_rx_rate) },
-  { name: t('db.tx'), color: cssVar('--lp-series-3'), data: seriesOf((s) => s.net_tx_rate) },
-])
-const diskIoSeries = computed<Series[]>(() => [
-  { name: t('db.read'), color: cssVar('--lp-series-6'), data: seriesOf((s) => s.disk_read_rate) },
-  { name: t('db.write'), color: cssVar('--lp-series-4'), data: seriesOf((s) => s.disk_write_rate) },
-])
-
-/** Sparklines use a short tail so the tile reflects the last ~40s, not the whole window. */
-const cpuSpark = computed(() => history.value.slice(-40).map((s) => s.cpu_percent))
-const memSpark = computed(() => history.value.slice(-40).map((s) => s.mem_percent))
-const netSpark = computed(() => history.value.slice(-40).map((s) => s.net_rx_rate + s.net_tx_rate))
+const monitorSeries = computed<Series[]>(() => {
+  switch (metric.value) {
+    case 'cpu':
+      return [{ name: 'CPU', color: cssVar('--lp-series-1'), data: seriesOf((s) => s.cpu_percent) }]
+    case 'mem':
+      return [{ name: t('ui.memory'), color: cssVar('--lp-series-2'), data: seriesOf((s) => s.mem_percent) }]
+    case 'io':
+      return [
+        { name: t('ui.read'), color: cssVar('--lp-series-6'), data: seriesOf((s) => s.disk_read_rate) },
+        { name: t('ui.write'), color: cssVar('--lp-series-4'), data: seriesOf((s) => s.disk_write_rate) },
+      ]
+    default:
+      return [
+        { name: t('ui.up'), color: cssVar('--lp-series-3'), data: seriesOf((s) => s.net_tx_rate) },
+        { name: t('ui.down'), color: cssVar('--lp-series-1'), data: seriesOf((s) => s.net_rx_rate) },
+      ]
+  }
+})
 
 const disks = computed(() => {
   const rows = detail.value?.disks || []
@@ -280,29 +268,63 @@ const activeInterfaces = computed(() =>
   (detail.value?.interfaces || [])
     .filter((item) => item.rx_bytes > 0 || item.tx_bytes > 0)
     .sort((a, b) => b.rx_rate + b.tx_rate - (a.rx_rate + a.tx_rate))
-    .slice(0, 8),
+    .slice(0, 6),
 )
 
-const processCount = computed(() => detail.value?.process_count ?? 0)
+const netTotals = computed(() =>
+  (detail.value?.interfaces || [])
+    .filter((item) => item.name !== 'lo')
+    .reduce((sum, item) => ({ rx: sum.rx + item.rx_bytes, tx: sum.tx + item.tx_bytes }), { rx: 0, tx: 0 }),
+)
 
 const loadText = computed(() => {
   const load = latest.value?.load_avg || [0, 0, 0]
   return load.map((value) => value.toFixed(2)).join(' / ')
 })
 
-const cpuBadge = computed(() => {
-  const cores = staticInfo.value?.logical_cores || 1
-  const one = latest.value?.load_avg?.[0] ?? 0
-  const ratio = one / cores
-  if (ratio >= 1) return { text: t('db.saturated'), level: 'danger' as const }
-  if (ratio >= 0.7) return { text: t('db.busy'), level: 'warn' as const }
-  return { text: t('db.healthy'), level: 'ok' as const }
-})
+const cores = computed(() => staticInfo.value?.logical_cores || 1)
 
-const swapBadge = computed(() => {
+/** Load, CPU, memory, then the largest volumes. */
+const gauges = computed(() => {
   const sample = latest.value
-  if (!sample || !sample.swap_total) return ''
-  return `Swap ${formatBytes(sample.swap_used)}`
+  if (!sample) return []
+  const load1 = sample.load_avg?.[0] ?? 0
+  const loadPercent = Math.min(100, (load1 / cores.value) * 100)
+  const level =
+    loadPercent >= 90 ? 'full' : loadPercent >= 70 ? 'high' : loadPercent >= 30 ? 'mid' : 'low'
+  const list = [
+    {
+      key: 'load',
+      label: t('ui.load'),
+      percent: loadPercent,
+      sub: t(`ui.loadLevel.${level}`),
+      tip: `${t('ui.load')} (1 / 5 / 15 min): ${loadText.value}`,
+    },
+    {
+      key: 'cpu',
+      label: 'CPU',
+      percent: sample.cpu_percent,
+      sub: t('ui.cores', { n: cores.value }),
+      tip: (sample.cpu_cores || []).map((v, i) => `CPU${i}: ${v.toFixed(1)}%`).join('\n'),
+    },
+    {
+      key: 'mem',
+      label: t('ui.memory'),
+      percent: sample.mem_percent,
+      sub: `${formatBytes(sample.mem_used)} / ${formatBytes(sample.mem_total)}`,
+      tip: sample.swap_total ? `Swap: ${formatBytes(sample.swap_used)} / ${formatBytes(sample.swap_total)}` : '',
+    },
+  ]
+  for (const disk of disks.value.slice(0, 1)) {
+    list.push({
+      key: `disk-${disk.mount_point}`,
+      label: disk.mount_point,
+      percent: disk.usage_percent,
+      sub: `${formatBytes(disk.used)} / ${formatBytes(disk.total)}`,
+      tip: `${disk.name} · ${disk.fs_type}`,
+    })
+  }
+  return list
 })
 
 const frequencyText = computed(() => {
@@ -311,102 +333,123 @@ const frequencyText = computed(() => {
   return mhz >= 1000 ? `${(mhz / 1000).toFixed(2)} GHz` : `${mhz} MHz`
 })
 
+const bootText = computed(() => (staticInfo.value?.boot_time ? formatFullTime(staticInfo.value.boot_time) : '—'))
+
 const subtitle = computed(() => {
   const info = staticInfo.value
   if (!info) return ''
-  const uptime = latest.value ? formatDuration(latest.value.uptime) : '—'
-  return `${info.os_version || info.os_name} · ${info.platform} · ${t('nav.uptime')} ${uptime}`
+  return `${info.os_version || info.os_name} · ${info.platform}`
 })
 
-function levelVar(percent: number) {
-  if (percent >= 88) return 'var(--lp-danger)'
-  if (percent >= 70) return 'var(--lp-warn)'
-  return 'var(--lp-accent)'
+function levelColor(percent: number) {
+  if (percent >= 88) return cssVar('--lp-danger')
+  if (percent >= 70) return cssVar('--lp-warn')
+  return cssVar('--lp-accent')
 }
 </script>
 
 <style scoped lang="scss">
-.dash-skeleton { padding: var(--lp-6); background: var(--lp-surface); border: 1px solid var(--lp-line); border-radius: var(--lp-r-lg); }
-
-.tile-grid {
+.dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: var(--lp-4);
-}
-
-.chart-grid,
-.detail-grid {
-  display: grid;
-  gap: var(--lp-4);
-  margin-top: var(--lp-4);
-}
-/* Four charts read best as a 2x2 block; auto-fit would leave a lone card on wide screens. */
-.chart-grid { grid-template-columns: 1fr; }
-@media (min-width: 1000px) {
-  .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-.detail-grid { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); }
-
-.chart-now {
-  font-size: var(--lp-text-sm);
-  font-weight: 600;
-  color: var(--lp-text-soft);
-}
-
-/* Per-core bars */
-.core-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(22px, 1fr));
-  gap: 6px;
-  margin-bottom: var(--lp-4);
-}
-.core { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.core__track {
-  position: relative;
-  width: 100%;
-  max-width: 26px;
-  height: 56px;
-  border-radius: var(--lp-r-sm);
-  background: var(--lp-surface-sunken);
-  overflow: hidden;
-}
-.core__fill {
-  position: absolute;
-  inset: auto 0 0 0;
-  border-radius: inherit;
-  transition: height 700ms cubic-bezier(0.4, 0, 0.2, 1), background var(--lp-base);
-}
-.core__label { font-size: 10px; color: var(--lp-text-faint); }
-
-/* Spec list */
-.spec {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: var(--lp-3);
+  align-items: start;
+}
+.dash-main,
+.dash-side { display: flex; flex-direction: column; gap: var(--lp-3); min-width: 0; }
+@media (max-width: 1100px) {
+  .dash-grid { grid-template-columns: 1fr; }
+}
+.head-note { font-size: var(--lp-text-sm); }
+
+/* Overview */
+.overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: var(--lp-4) var(--lp-2);
+}
+.overview__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--lp-2) var(--lp-5);
+  color: inherit;
+  text-decoration: none;
+  border-left: 1px solid var(--lp-line-soft);
+  &:first-child { border-left: 0; }
+  &:hover .overview__value { color: var(--lp-accent); }
+}
+.overview__label { font-size: var(--lp-text-sm); color: var(--lp-text-dim); }
+.overview__value { font-size: 28px; font-weight: 600; line-height: 1.3; color: var(--lp-text); transition: color var(--lp-fast); }
+.overview__note { font-size: var(--lp-text-xs); color: var(--lp-ok); }
+@media (max-width: 640px) {
+  .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--lp-3); }
+  .overview__item:nth-child(3) { border-left: 0; }
+}
+
+/* Gauges */
+.gauges {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--lp-4);
+  padding: var(--lp-5);
+}
+.gauge { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; cursor: default; }
+.gauge :deep(.el-progress__text) { display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--lp-text); }
+.gauge :deep(.el-progress-circle__track) { stroke: var(--lp-line-soft); }
+.gauge__pct { font-size: 22px; font-weight: 600; small { font-size: 12px; margin-left: 1px; color: var(--lp-text-dim); } }
+.gauge__name { font-size: var(--lp-text-sm); color: var(--lp-text-soft); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gauge__sub { font-size: var(--lp-text-xs); color: var(--lp-text-dim); max-width: 100%; }
+.gauge-tip { white-space: pre-line; font-family: var(--lp-font-mono); font-size: 12px; }
+
+@media (max-width: 640px) {
+  .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Monitor */
+.monitor-head { flex-wrap: wrap; }
+.monitor-tools { display: flex; align-items: center; gap: var(--lp-2); flex-wrap: wrap; }
+.range { width: 80px; }
+.monitor-stats {
+  display: flex;
+  gap: var(--lp-2) var(--lp-6);
+  flex-wrap: wrap;
+  padding: var(--lp-3) var(--lp-5) 0;
+  font-size: var(--lp-text-sm);
+  color: var(--lp-text-dim);
+  b { color: var(--lp-text); font-weight: 600; margin-left: 4px; }
+}
+.sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.monitor-chart { padding: var(--lp-2) var(--lp-4) var(--lp-4); }
+
+/* Side cards */
+.info {
   margin: 0;
-  padding-top: var(--lp-4);
-  border-top: 1px solid var(--lp-line-soft);
-
-  div { min-width: 0; }
-  dt { font-size: var(--lp-text-xs); color: var(--lp-text-dim); margin-bottom: 2px; }
-  dd { margin: 0; font-size: var(--lp-text-base); color: var(--lp-text); font-weight: 500; }
+  padding: var(--lp-3) var(--lp-5) var(--lp-4);
+  div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--lp-3); padding: 6px 0; font-size: var(--lp-text-sm); }
+  dt { color: var(--lp-text-dim); }
+  dd { margin: 0; color: var(--lp-text); }
 }
-
-.cell-stack { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
-.cell-stack .lp-dim { font-size: var(--lp-text-xs); }
-
-.usage { display: flex; align-items: center; gap: var(--lp-2); }
-.usage__track {
-  flex: 1;
-  height: 5px;
-  min-width: 48px;
-  border-radius: var(--lp-r-full);
-  background: var(--lp-surface-sunken);
-  overflow: hidden;
+.bars { display: flex; flex-direction: column; gap: var(--lp-3); padding: var(--lp-4) var(--lp-5); }
+.bar__top { display: flex; justify-content: space-between; gap: var(--lp-3); font-size: var(--lp-text-sm); margin-bottom: 6px; }
+.bar__name { color: var(--lp-text); }
+.bar__track { height: 6px; border-radius: 3px; background: var(--lp-line-soft); overflow: hidden; }
+.bar__fill { height: 100%; border-radius: 3px; transition: width var(--lp-base); }
+.ifaces { padding: var(--lp-2) var(--lp-5) var(--lp-3); }
+.iface {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lp-3);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--lp-line-soft);
+  font-size: var(--lp-text-sm);
+  &:last-child { border-bottom: 0; }
 }
-.usage__fill { height: 100%; border-radius: inherit; transition: width 600ms cubic-bezier(0.4, 0, 0.2, 1); }
-.usage__pct { font-size: var(--lp-text-xs); color: var(--lp-text-soft); min-width: 42px; text-align: right; }
-
+.iface__main { display: flex; flex-direction: column; min-width: 0; }
+.iface__name { color: var(--lp-text); font-weight: 500; }
+.iface__ip { font-size: 11px; }
+.iface__rates { display: flex; flex-direction: column; align-items: flex-end; font-size: var(--lp-text-xs); }
 .rx { color: var(--lp-series-1); }
 .tx { color: var(--lp-series-3); }
 </style>

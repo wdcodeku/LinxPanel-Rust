@@ -1,16 +1,13 @@
 <template>
   <div class="lp-page">
-    <div class="lp-page-head">
-      <div>
-        <h1 class="lp-page-title">{{ t('nav.security') }}</h1>
-        <p class="lp-page-sub">{{ subtitle }}</p>
-      </div>
+    <div class="lp-page-head lp-page-head--tabs">
+      <PageTabs v-model="tab" :items="pageTabs" />
       <div class="lp-page-actions">
-        <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">{{ t('refresh') }}</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadAll" />
       </div>
     </div>
 
-    <el-tabs v-model="tab" class="tabs">
+    <el-tabs v-model="tab" class="tabs lp-tabs-headless">
       <el-tab-pane :label="t('sec.defense')" name="defense">
         <DefensePanel ref="defenseRef" />
       </el-tab-pane>
@@ -179,6 +176,11 @@ type ListeningPort = { protocol: string; address: string; port: number; pid: num
 const { t } = useI18n()
 
 const tab = ref('defense')
+const pageTabs = computed(() => [
+  { name: 'defense', label: t('sec.defense') },
+  { name: 'firewall', label: t('sec.firewall') },
+  { name: 'ports', label: t('sec.ports') },
+])
 const defenseRef = ref<InstanceType<typeof DefensePanel>>()
 const loading = ref(false)
 const status = ref<FirewallStatus | null>(null)
@@ -357,7 +359,7 @@ usePage(loadAll)
 </script>
 
 <style scoped lang="scss">
-.tabs { margin-top: calc(var(--lp-2) * -1); }
+.tabs { margin-top: 0; }
 .stack { display: flex; flex-direction: column; gap: var(--lp-4); }
 
 .status-row {
