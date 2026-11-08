@@ -1487,10 +1487,7 @@ async fn render_site_config(
         }
 
         // Never serve dotfiles (.env, .git, .htaccess...) - except ACME challenges.
-        if !matches!(
-            site.site_type.as_str(),
-            "proxy" | "node" | "python" | "java" | "go" | "binary"
-        ) {
+        if site.site_type != "proxy" && !is_app_site_type(&site.site_type) {
             blocks.push_str("    location ~ /\\.(?!well-known/) {\n");
             blocks.push_str("        deny all;\n");
             blocks.push_str("    }\n");
@@ -1506,7 +1503,7 @@ async fn render_site_config(
 
         match site.site_type.as_str() {
             // Application runtimes are served by reverse-proxying to the managed process.
-            "node" | "python" | "java" | "go" | "binary" => {
+            kind if is_app_site_type(kind) => {
                 let port = app_port.ok_or_else(|| {
                     anyhow!("This site type requires a linked application with a port")
                 })?;
@@ -2339,9 +2336,29 @@ fn default_index_files_by_type(site_type: &str) -> &'static str {
     match site_type {
         "php" => "index.php index.html index.htm",
         // Proxied types never serve files directly, so the index list is unused.
-        "proxy" | "node" | "python" | "java" | "go" | "binary" => "index.html index.htm",
+        "proxy" => "index.html index.htm",
+        kind if is_app_site_type(kind) => "index.html index.htm",
         _ => "index.html index.htm index.php",
     }
+}
+
+/// Site types served by a managed application (reverse proxy to its port).
+/// "phpapp" is a resident PHP program (Workerman, Swoole...), as opposed to
+/// "php", which is served by PHP-FPM.
+pub fn is_app_site_type(site_type: &str) -> bool {
+    matches!(
+        site_type,
+        "node"
+            | "python"
+            | "java"
+            | "go"
+            | "binary"
+            | "dotnet"
+            | "rust"
+            | "ruby"
+            | "lua"
+            | "phpapp"
+    )
 }
 
 /// Validates and indents user-supplied rewrite directives.

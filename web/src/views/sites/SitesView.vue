@@ -285,8 +285,10 @@
         </el-form-item>
 
         <el-form-item v-if="siteKind === 'app'" :label="t('si.runtime')">
-          <el-radio-group v-model="createForm.site_type">
-            <el-radio-button v-for="r in appRuntimes" :key="r.value" :value="r.value">{{ r.label }}</el-radio-button>
+          <el-radio-group v-model="createForm.site_type" class="runtime-grid" @change="createForm.app_id = undefined">
+            <el-radio v-for="r in appRuntimes" :key="r.value" :value="r.value" border>
+              {{ r.label }}<span v-if="appCount(r.value)" class="runtime-grid__count">{{ appCount(r.value) }}</span>
+            </el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="siteKind === 'app'" :label="t('si.linkedApp')" required>
@@ -510,11 +512,21 @@ const siteTypeOptions = computed(() => [
   { value: 'python', label: 'Python' },
   { value: 'java', label: 'Java' },
   { value: 'go', label: 'Go' },
+  { value: 'dotnet', label: 'C# / .NET' },
+  { value: 'rust', label: 'Rust' },
+  { value: 'ruby', label: 'Ruby' },
+  { value: 'lua', label: 'Lua' },
+  { value: 'phpapp', label: t('si.typePhpApp') },
   { value: 'binary', label: t('si.typeBinary') },
   { value: 'proxy', label: t('si.typeProxy') },
 ])
 
-const APP_SITE_TYPES = ['node', 'python', 'java', 'go', 'binary']
+/** Site types backed by an application under Runtimes; "phpapp" uses PHP (CLI) apps. */
+const APP_SITE_TYPES = ['node', 'python', 'java', 'go', 'dotnet', 'rust', 'ruby', 'lua', 'phpapp', 'binary']
+const appRuntimeOf = (siteType: string) => (siteType === 'phpapp' ? 'php' : siteType)
+/** Applications with a port that a site of this type can proxy to. */
+const appCount = (siteType: string) =>
+  appOptions.value.filter((app) => app.runtime === appRuntimeOf(siteType) && app.port > 0).length
 
 const siteKinds = computed(() => [
   { value: 'static' as SiteKind, label: t('si.kindStatic'), desc: t('si.kindStaticDesc'), icon: Document },
@@ -583,7 +595,7 @@ const isAppSiteType = computed(() => APP_SITE_TYPES.includes(createForm.site_typ
 
 /** Only offer applications whose runtime matches the chosen site type. */
 const matchingApps = computed(() =>
-  appOptions.value.filter((app) => app.runtime === createForm.site_type && app.port > 0),
+  appOptions.value.filter((app) => app.runtime === appRuntimeOf(createForm.site_type) && app.port > 0),
 )
 
 const siteTypeTip = computed(() => {
@@ -1545,6 +1557,24 @@ usePage(async () => {
 
 <style scoped lang="scss">
 /* ---------- Redesigned list ---------- */
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  width: 100%;
+  :deep(.el-radio) { margin: 0; width: 100%; height: 34px; }
+  :deep(.el-radio__label) { display: inline-flex; align-items: center; gap: 6px; }
+}
+.runtime-grid__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--lp-r-full);
+  background: var(--lp-ok-soft);
+  color: var(--lp-ok);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
 .tabs { margin-top: 0; }
 .count {
   margin-left: 6px;

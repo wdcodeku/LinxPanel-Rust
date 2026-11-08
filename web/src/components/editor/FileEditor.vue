@@ -237,7 +237,9 @@ async function requestClose(done?: () => void) {
     }
   }
   if (done) done()
-  else emit('update:modelValue', false)
+  // Always tell the parent: with only done() its v-model stayed true, and
+  // opening a file again changed nothing until the page was reloaded.
+  emit('update:modelValue', false)
 }
 </script>
 

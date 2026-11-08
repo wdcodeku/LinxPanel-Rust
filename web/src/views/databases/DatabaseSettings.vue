@@ -65,6 +65,46 @@
           </div>
         </div>
 
+        <!-- MySQL: root over the network is a separate, explicit choice -->
+        <template v-if="engine === 'mysql'">
+          <div class="row">
+            <div class="row__text">
+              <div class="row__title">{{ t('dbs.rootRemote') }}</div>
+              <div class="row__desc">
+                <template v-if="s.root_remote_hosts?.length">{{ t('dbs.rootRemoteOn', { hosts: s.root_remote_hosts.map((h) => `root@${h}`).join(', ') }) }}</template>
+                <template v-else>{{ t('dbs.rootRemoteDesc') }}</template>
+              </div>
+            </div>
+            <el-switch
+              :model-value="!!s.root_remote_hosts?.length"
+              :loading="busy === 'root-remote'"
+              :disabled="!s.root_remote_hosts?.length && !s.superuser_password"
+              @change="(v: string | number | boolean) => toggleRootRemote(v === true)"
+            />
+          </div>
+          <el-alert
+            v-if="!s.root_remote_hosts?.length && !s.superuser_password"
+            :title="t('dbs.rootRemoteNeedsPassword')"
+            type="info"
+            :closable="false"
+            show-icon
+            class="block"
+          />
+          <div v-if="rootAsk" class="ask">
+            <div class="ask__label">{{ t('dbs.rootRemoteFrom') }}</div>
+            <div class="inline-row">
+              <el-input v-model="rootFrom" class="lp-mono" placeholder="%" />
+              <el-button v-if="network?.your_ip" @click="rootFrom = network.your_ip">{{ t('dbs.useMyIp') }}</el-button>
+              <el-button @click="rootFrom = '%'">{{ t('dbs.anyHost') }}</el-button>
+            </div>
+            <p class="hint">{{ t('dbs.rootRemoteHint') }}</p>
+            <div class="ask__actions">
+              <el-button @click="rootAsk = false">{{ t('cancel') }}</el-button>
+              <el-button type="primary" :loading="busy === 'root-remote'" :disabled="!rootFrom.trim()" @click="submitRootRemote(true)">{{ t('dbs.rootRemoteEnable') }}</el-button>
+            </div>
+          </div>
+        </template>
+
         <h3 class="section">{{ t('dbs.diagnosis') }}</h3>
         <ul v-if="network" class="checks">
           <li v-for="check in checks" :key="check.key" class="check">
@@ -206,7 +246,7 @@ import {
 } from '@element-plus/icons-vue'
 import {
   applyDbSettings, clearDbLog, getDbConfig, getDbLog, getDbNetwork, getDbSettings, purgeBinlogs,
-  saveDbConfig, setDbRemote, setDbSuperuserPassword,
+  saveDbConfig, setDbRemote, setDbSuperuserPassword, setMysqlRootRemote,
 } from '@/api'
 import { useI18n } from '@/i18n'
 import { formatBytes } from '@/utils/format'
@@ -221,6 +261,7 @@ interface Settings {
   data_dir: string | null; data_size: number | null
   remote: { enabled: boolean; needs_password: boolean }
   superuser: string; superuser_password: string | null
+  root_remote_hosts?: string[]
   params: Param[]; logs: LogInfo[]
 }
 interface NetworkInfo {
@@ -330,6 +371,42 @@ async function submitRemote(enabled: boolean) {
       ElMessage.success(enabled ? t('dbm.remoteOn') : t('dbm.remoteOff'))
     }
     await reload()
+  } catch {
+    // Interceptor reports it.
+  } finally {
+    busy.value = ''
+  }
+}
+
+// ----- root over the network (MySQL) -----
+const rootAsk = ref(false)
+const rootFrom = ref('')
+
+function toggleRootRemote(on: boolean) {
+  if (on) {
+    rootFrom.value = network.value?.your_ip || '%'
+    rootAsk.value = true
+  } else {
+    void submitRootRemote(false)
+  }
+}
+
+async function submitRootRemote(enabled: boolean) {
+  if (!enabled) {
+    try {
+      await ElMessageBox.confirm(t('dbs.rootRemoteOffConfirm'), t('dbs.rootRemote'), { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  busy.value = 'root-remote'
+  try {
+    const res: any = await setMysqlRootRemote({ enabled, host: rootFrom.value.trim() })
+    if (res.success) {
+      rootAsk.value = false
+      ElMessage.success(enabled ? t('dbs.rootRemoteOnDone') : t('dbs.rootRemoteOffDone'))
+      await reload()
+    }
   } catch {
     // Interceptor reports it.
   } finally {

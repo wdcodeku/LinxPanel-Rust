@@ -57,6 +57,7 @@ declare module 'vue' {
     ElTimeSelect: typeof import('element-plus/es')['ElTimeSelect']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     FileEditor: typeof import('./src/components/editor/FileEditor.vue')['default']
+    GearIcon: typeof import('./src/components/icons/GearIcon.vue')['default']
     Layout: typeof import('./src/components/Layout.vue')['default']
     MetricChart: typeof import('./src/components/MetricChart.vue')['default']
     OperationLogDialog: typeof import('./src/components/OperationLogDialog.vue')['default']

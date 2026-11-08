@@ -234,6 +234,8 @@ export const getDbVersions = (engine: string) => request.get(`/databases/engines
 export const getDbNetwork = (engine: string) => request.get(`/databases/engines/${engine}/network`)
 export const setDbRemote = (engine: string, data: { enabled: boolean; allow_from: string }) =>
   request.post(`/databases/engines/${engine}/remote`, data, { timeout: 180000 })
+export const setMysqlRootRemote = (data: { enabled: boolean; host: string }) =>
+  request.post('/databases/engines/mysql/root-remote', data)
 // Settings changes restart the server (and roll back if it does not come up).
 const RESTART = { timeout: 300000 }
 export const getDbSettings = (engine: string) =>
@@ -318,6 +320,11 @@ export const restoreDatabase = (engine: string, name: string, file: string) =>
   request.post(`/databases/${engine}/${name}/restore`, { file }, LONG)
 export const deleteDatabaseBackup = (engine: string, name: string, file: string) =>
   request.post(`/databases/${engine}/${name}/backups/delete`, { file })
+/** The folder the import dialog uploads into (the database's backup folder). */
+export const getDbImportDir = (engine: string, name: string) => request.get(`/databases/${engine}/${name}/import-dir`)
+/** Imports a dump file on the server into a database (background task with a log). */
+export const importDatabase = (engine: string, name: string, path: string) =>
+  runTask(t('dbm.importTask', { name }), () => request.post(`/databases/${engine}/${name}/import`, { path }))
 
 /** pip / npm / composer install in the app's directory; `build` also runs the npm build script. */
 export const installAppDeps = (id: number, build = false) =>

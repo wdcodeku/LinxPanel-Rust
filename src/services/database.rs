@@ -1667,32 +1667,6 @@ fn dump_to_gzip(mut producer: Command, target: &Path) -> Result<(), String> {
 }
 
 /// Pipes `gunzip -c source` into `consumer`'s stdin.
-fn restore_from_gzip(mut consumer: Command, source: &Path) -> Result<(), String> {
-    let mut gunzip = Command::new("gzip")
-        .args(["-dc"])
-        .arg(source)
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Cannot run gzip: {}", e))?;
-    let sql = gunzip.stdout.take().ok_or("gzip has no stdout")?;
-    let mut client = consumer
-        .stdin(Stdio::from(sql))
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Cannot run client: {}", e))?;
-    let status = wait_with_timeout(&mut client, DUMP_TIMEOUT)?;
-    let _ = gunzip.wait();
-    if !status.success() {
-        let mut err = String::new();
-        if let Some(mut stderr) = client.stderr.take() {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut err);
-        }
-        return Err(format!("Restore failed: {}", err.trim()));
-    }
-    Ok(())
-}
 
 fn wait_with_timeout(
     child: &mut std::process::Child,
@@ -1803,26 +1777,159 @@ pub fn restore(
     if !source.is_file() {
         return Err("Backup file not found".into());
     }
+    import_file(engine, name, &source, admin)
+}
+
+/// Dump files import accepts: SQL (MySQL / PostgreSQL) or a mongodump
+/// archive (MongoDB), plain, gzip-compressed, or the first matching entry
+/// of a zip.
+pub fn import_supported(engine: Engine, file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    match engine {
+        Engine::Mysql | Engine::Postgresql => {
+            lower.ends_with(".sql")
+                || lower.ends_with(".sql.gz")
+                || lower.ends_with(".zip")
+                || lower.ends_with(".gz")
+        }
+        Engine::Mongodb => {
+            lower.ends_with(".archive") || lower.ends_with(".gz") || lower.ends_with(".zip")
+        }
+        Engine::Redis => false,
+    }
+}
+
+/// Opens a dump for reading, uncompressing gzip and zip.
+fn open_dump(engine: Engine, source: &Path) -> Result<Box<dyn std::io::Read + Send>, String> {
+    use std::io::Read;
+    let lower = source.to_string_lossy().to_ascii_lowercase();
+    let file = std::fs::File::open(source).map_err(|e| format!("{}: {}", source.display(), e))?;
+    if lower.ends_with(".zip") {
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| format!("Not a zip file: {}", e))?;
+        let wanted = |n: &str| {
+            let n = n.to_ascii_lowercase();
+            match engine {
+                Engine::Mongodb => n.ends_with(".archive") || n.ends_with(".gz"),
+                _ => n.ends_with(".sql") || n.ends_with(".sql.gz"),
+            }
+        };
+        let index = (0..archive.len())
+            .find(|&i| {
+                archive
+                    .by_index(i)
+                    .map(|f| f.is_file() && wanted(f.name()))
+                    .unwrap_or(false)
+            })
+            .ok_or("The zip file contains no dump (.sql / .sql.gz)")?;
+        // A zip entry borrows its archive: copy it out to a temporary file.
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        let gz = entry.name().to_ascii_lowercase().ends_with(".gz");
+        let mut tmp = tempfile_in_dir(source)?;
+        std::io::copy(&mut entry, &mut tmp.0).map_err(|e| e.to_string())?;
+        drop(entry);
+        let reopened = std::fs::File::open(&tmp.1).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&tmp.1); // the open handle keeps the data
+        let reader: Box<dyn Read + Send> = if gz {
+            Box::new(flate2::read::MultiGzDecoder::new(reopened))
+        } else {
+            Box::new(reopened)
+        };
+        return Ok(reader);
+    }
+    let mut head = [0u8; 2];
+    let gz = std::fs::File::open(source)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .map(|_| head == [0x1f, 0x8b])
+        .unwrap_or(false);
+    Ok(if gz {
+        Box::new(flate2::read::MultiGzDecoder::new(std::io::BufReader::new(
+            file,
+        )))
+    } else {
+        Box::new(std::io::BufReader::new(file))
+    })
+}
+
+/// A scratch file next to `near` (same disk), returned open with its path.
+fn tempfile_in_dir(near: &Path) -> Result<(std::fs::File, PathBuf), String> {
+    let dir = near.parent().unwrap_or(Path::new("/tmp"));
+    let path = dir.join(format!(".import-{}", uuid::Uuid::new_v4().simple()));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    Ok((file, path))
+}
+
+/// Feeds a dump file into the database `name`.
+pub fn import_file(
+    engine: Engine,
+    name: &str,
+    source: &Path,
+    admin: Option<&MysqlAdmin>,
+) -> Result<(), String> {
+    validate_name(name, "Database name")?;
+    let reader = open_dump(engine, source)?;
     match engine {
         Engine::Mysql => {
             let admin = admin.ok_or("MySQL is not set up for the panel")?;
             let defaults = MysqlDefaults::new(admin)?;
             let mut command = Command::new(mysql_client());
-            command.arg(defaults.arg()).arg(name);
-            restore_from_gzip(command, &source)
+            command
+                .arg(defaults.arg())
+                .arg("--default-character-set=utf8mb4")
+                .arg(name);
+            let result = pipe_into(command, reader);
+            drop(defaults);
+            result
         }
         Engine::Postgresql => {
             let mut command = postgres_command("psql");
             command.args(["-v", "ON_ERROR_STOP=0", "-q", "-d", name]);
-            restore_from_gzip(command, &source)
+            pipe_into(command, reader)
         }
         Engine::Redis => Err("Redis backups are not supported".into()),
         Engine::Mongodb => {
             let admin = admin.ok_or("MongoDB is not set up for the panel")?;
             let auth = super::mongo::ToolAuth::new(admin)?;
-            restore_from_gzip(super::mongo::restore_command(&auth, admin, name), &source)
+            pipe_into(super::mongo::restore_command(&auth, admin, name), reader)
         }
     }
+}
+
+/// Streams `reader` into the stdin of `consumer`; its stderr is collected on
+/// a thread so a chatty client cannot block on a full pipe.
+fn pipe_into(
+    mut consumer: Command,
+    mut reader: Box<dyn std::io::Read + Send>,
+) -> Result<(), String> {
+    use std::io::Read;
+    let mut client = consumer
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot run client: {}", e))?;
+    let mut stderr = client.stderr.take().ok_or("client has no stderr")?;
+    let errors = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
+    let mut stdin = client.stdin.take().ok_or("client has no stdin")?;
+    let copied = std::io::copy(&mut reader, &mut stdin);
+    drop(stdin);
+    let status = wait_with_timeout(&mut client, DUMP_TIMEOUT)?;
+    let err = errors.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("Import failed: {}", err.trim()));
+    }
+    if let Err(e) = copied {
+        return Err(format!("Import failed while reading the file: {}", e));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -46,6 +46,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(clear_log),
         )
         .route("/databases/engines/mysql/binlog/purge", post(purge_binlogs))
+        .route(
+            "/databases/engines/mysql/root-remote",
+            post(set_root_remote),
+        )
         .route("/databases/engines/{engine}/restart", post(restart))
         .route("/databases/engines/{engine}/admin", post(set_admin))
         .route(
@@ -63,6 +67,8 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(list_backups).post(create_backup),
         )
         .route("/databases/{engine}/{name}/restore", post(restore))
+        .route("/databases/{engine}/{name}/import-dir", get(import_dir))
+        .route("/databases/{engine}/{name}/import", post(import))
         .route(
             "/databases/{engine}/{name}/backups/delete",
             post(delete_backup),
@@ -237,6 +243,35 @@ async fn set_remote(
     .await;
     match result {
         Ok(Ok(log)) => Json(ApiResponse::ok(log)),
+        Ok(Err(err)) => Json(ApiResponse::err(&err)),
+        Err(err) => Json(ApiResponse::err(&err.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct RootRemoteRequest {
+    enabled: bool,
+    /// Where root may log in from: %, an IP, or a pattern (192.168.1.%).
+    #[serde(default)]
+    host: String,
+}
+
+async fn set_root_remote(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RootRemoteRequest>,
+) -> Json<ApiResponse<()>> {
+    let admin = database::load_mysql_admin(&state.db).await;
+    let password = crate::db::get_setting(&state.db, dbconf::SETTING_MYSQL_ROOT_PASSWORD)
+        .await
+        .ok()
+        .flatten();
+    let host = req.host.trim().to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        dbconf::mysql_set_root_remote(admin.as_ref(), req.enabled, &host, password.as_deref())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Json(ApiResponse::ok_msg("Saved")),
         Ok(Err(err)) => Json(ApiResponse::err(&err)),
         Err(err) => Json(ApiResponse::err(&err.to_string())),
     }
@@ -518,6 +553,102 @@ async fn restore(
         Ok(Err(err)) => Json(ApiResponse::err(&err)),
         Err(err) => Json(ApiResponse::err(&err.to_string())),
     }
+}
+
+#[derive(Serialize)]
+struct ImportDir {
+    /// Where the import dialog uploads files (the database's backup folder,
+    /// so an imported file can be restored again later).
+    dir: String,
+}
+
+async fn import_dir(
+    State(state): State<Arc<AppState>>,
+    Path((engine, name)): Path<(String, String)>,
+) -> Json<ApiResponse<ImportDir>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    if let Err(err) = database::validate_name(&name, "Database name") {
+        return Json(ApiResponse::err(&err));
+    }
+    let dir = database::backup_dir(&state.data_dir, engine, &name);
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        return Json(ApiResponse::err(&err.to_string()));
+    }
+    Json(ApiResponse::ok(ImportDir {
+        dir: dir.to_string_lossy().to_string(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ImportRequest {
+    /// A dump on this server (uploaded by the dialog, or anywhere else).
+    path: String,
+}
+
+/// Imports a dump file into a database, as a background task with a log.
+async fn import(
+    State(state): State<Arc<AppState>>,
+    Path((engine, name)): Path<(String, String)>,
+    Json(req): Json<ImportRequest>,
+) -> Json<ApiResponse<tasks::Started>> {
+    let engine = match Engine::parse(&engine) {
+        Ok(engine) => engine,
+        Err(err) => return Json(ApiResponse::err(&err)),
+    };
+    if let Err(err) = database::validate_name(&name, "Database name") {
+        return Json(ApiResponse::err(&err));
+    }
+    let source = std::path::PathBuf::from(req.path.trim());
+    let file_name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !source.is_absolute() || !source.is_file() {
+        return Json(ApiResponse::err("File not found on the server"));
+    }
+    if !database::import_supported(engine, &file_name) {
+        return Json(ApiResponse::err(match engine {
+            Engine::Mongodb => "Choose a mongodump archive (.archive, .gz or .zip)",
+            _ => "Choose a .sql, .sql.gz or .zip file",
+        }));
+    }
+    let admin = admin(&state, engine).await;
+    let title = format!("Import {} into {}", file_name, name);
+    Json(ApiResponse::ok(state.tasks.start(
+        "db-import",
+        &title,
+        async move {
+            let size = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
+            tasks::note(&format!(
+                "[LinxPanel] Importing {} ({} bytes) into {}\n",
+                source.display(),
+                size,
+                name
+            ));
+            let started = std::time::Instant::now();
+            let result = tasks::blocking(move || {
+                database::import_file(engine, &name, &source, admin.as_ref())
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => ApiResponse::ok(LogResult {
+                    success: true,
+                    log: format!(
+                        "[LinxPanel] Import finished in {:.1}s\n",
+                        started.elapsed().as_secs_f64()
+                    ),
+                }),
+                Ok(Err(err)) => ApiResponse::ok(LogResult {
+                    success: false,
+                    log: format!("[LinxPanel] {}\n", err),
+                }),
+                Err(err) => ApiResponse::err(&err.to_string()),
+            }
+        },
+    )))
 }
 
 async fn delete_backup(

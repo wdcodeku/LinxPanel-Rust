@@ -166,11 +166,12 @@
                 <span v-else class="lp-mono">{{ row.host || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('actions')" width="320" align="right">
+            <el-table-column :label="t('actions')" width="360" align="right">
               <template #default="{ row }">
                 <el-button v-if="!row.managed" link type="primary" size="small" @click="openAdopt(row)">{{ t('dbm.adopt') }}</el-button>
                 <el-button link type="primary" size="small" @click="openConnection(row)">{{ t('dbm.connInfo') }}</el-button>
                 <el-button link type="primary" size="small" @click="openBackups(row)">{{ t('dbm.backups') }}</el-button>
+                <el-button link type="primary" size="small" @click="openImport(row)">{{ t('dbm.import') }}</el-button>
                 <el-button v-if="row.managed" link type="primary" size="small" @click="resetPassword(row)">{{ t('dbm.changePassword') }}</el-button>
                 <el-button link type="danger" size="small" @click="remove(row)">{{ t('delete') }}</el-button>
               </template>
@@ -404,6 +405,7 @@
     <el-drawer v-model="backupDrawer" :title="`${t('dbm.backups')} · ${backupTarget?.name || ''}`" size="560px" append-to-body>
       <div class="drawer-actions">
         <el-button type="primary" size="small" :loading="busy === 'backup'" @click="backupNow">{{ t('dbm.backupNow') }}</el-button>
+        <el-button size="small" @click="backupTarget && openImport(backupTarget)">{{ t('dbm.import') }}</el-button>
         <span class="hint hint--inline">{{ t('dbm.backupHint') }}</span>
       </div>
       <el-table :data="backups" :empty-text="t('dbm.noBackups')" size="small">
@@ -422,6 +424,38 @@
         </el-table-column>
       </el-table>
     </el-drawer>
+
+    <!-- Import a dump into a database -->
+    <el-dialog v-model="importVisible" :title="t('dbm.importTitle', { name: importTarget?.name || '' })" width="560px" append-to-body :close-on-click-modal="!importBusy">
+      <el-radio-group v-model="importSource" class="import-source" :disabled="importBusy">
+        <el-radio-button value="upload">{{ t('dbm.importUpload') }}</el-radio-button>
+        <el-radio-button value="server">{{ t('dbm.importServer') }}</el-radio-button>
+      </el-radio-group>
+
+      <template v-if="importSource === 'upload'">
+        <label class="import-drop" :class="{ 'is-busy': importBusy }">
+          <input type="file" :accept="importAccept" :disabled="importBusy" @change="onImportFile" />
+          <el-icon :size="26"><UploadFilled /></el-icon>
+          <span v-if="importFile" class="lp-mono">{{ importFile.name }} · {{ formatBytes(importFile.size) }}</span>
+          <span v-else>{{ t('dbm.importPick') }}</span>
+          <span class="lp-dim import-formats">{{ importFormats }}</span>
+        </label>
+        <el-progress v-if="importUpload" :percentage="importUploadPercent" :status="importUpload.status === 'failed' ? 'exception' : undefined" class="import-progress" />
+      </template>
+      <template v-else>
+        <el-input v-model="importPath" class="lp-mono" :disabled="importBusy" placeholder="/root/backup.sql.gz" />
+        <p class="hint">{{ t('dbm.importServerHint') }} {{ importFormats }}</p>
+      </template>
+
+      <el-checkbox v-model="importBackupFirst" :disabled="importBusy" class="import-check">{{ t('dbm.importBackupFirst') }}</el-checkbox>
+      <el-alert :title="t('dbm.importWarn')" type="warning" :closable="false" show-icon />
+      <template #footer>
+        <el-button :disabled="importBusy" @click="importVisible = false">{{ t('cancel') }}</el-button>
+        <el-button type="primary" :loading="importBusy" :disabled="importSource === 'upload' ? !importFile : !importPath.trim()" @click="runImport">
+          {{ t('dbm.importStart') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -437,8 +471,9 @@ import {
   backupDatabase, changeDatabaseHost, changeDatabasePassword, createDatabase, deleteDatabase,
   deleteDatabaseBackup, downloadFileApi, getDbEngines, getDbNetwork, getDbVersions, installDbEngine,
   listDatabaseBackups, listDatabases, restartDbEngine, getDatabaseTables, adoptDatabase, restoreDatabase, setDbAdmin,
-  startDbEngine, stopDbEngine, uninstallDbEngine,
+  startDbEngine, stopDbEngine, uninstallDbEngine, getDbImportDir, importDatabase,
 } from '@/api'
+import { createUploader } from '@/utils/uploader'
 import { useI18n } from '@/i18n'
 import { formatBytes } from '@/utils/format'
 import DatabaseSettings from './DatabaseSettings.vue'
@@ -1025,6 +1060,86 @@ async function restore(row: any) {
   if (res?.success) ElMessage.success(t('dbm.restored'))
 }
 
+// ----- Import -----
+const importVisible = ref(false)
+const importTarget = ref<DbRow | null>(null)
+const importSource = ref<'upload' | 'server'>('upload')
+const importFile = ref<File | null>(null)
+const importPath = ref('')
+const importBackupFirst = ref(true)
+const importBusy = ref(false)
+const importUploader = createUploader(() => {})
+const importUpload = computed(() => importUploader.queue[importUploader.queue.length - 1] || null)
+const importUploadPercent = computed(() => {
+  const item = importUpload.value
+  if (!item) return 0
+  if (item.status === 'done') return 100
+  return item.file.size ? Math.min(99, Math.floor((item.loaded / item.file.size) * 100)) : 0
+})
+const importAccept = computed(() => (engine.value === 'mongodb' ? '.archive,.gz,.zip' : '.sql,.gz,.zip'))
+const importFormats = computed(() => (engine.value === 'mongodb' ? t('dbm.importFormatsMongo') : t('dbm.importFormatsSql')))
+
+function openImport(row: DbRow) {
+  importTarget.value = row
+  importFile.value = null
+  importPath.value = ''
+  importBackupFirst.value = true
+  importUploader.clearFinished()
+  importVisible.value = true
+}
+
+function onImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  importFile.value = input.files?.[0] || null
+}
+
+/** Uploads the file (resumable chunks) and resolves with its path on the server. */
+async function uploadImportFile(name: string): Promise<string> {
+  const dirRes: any = await getDbImportDir(engine.value, name)
+  if (!dirRes?.success) throw new Error(dirRes?.message || 'upload')
+  const dir = dirRes.data.dir as string
+  const file = importFile.value as File
+  // A name the backup list accepts (letters, digits, . _ -), never an existing file.
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+  const safe = file.name.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '')
+  const uploadName = `import_${stamp}_${safe}`
+  importUploader.add([{ file, name: uploadName }], dir, '644')
+  await new Promise<void>((resolve, reject) => {
+    const stop = watch(
+      () => importUpload.value?.status,
+      (status) => {
+        if (status === 'done') { stop(); resolve() }
+        else if (status === 'failed' || status === 'canceled') { stop(); reject(new Error(importUpload.value?.error || 'upload')) }
+      },
+      { immediate: true },
+    )
+  })
+  return `${dir.replace(/\/$/, '')}/${uploadName}`
+}
+
+async function runImport() {
+  const target = importTarget.value
+  if (!target) return
+  importBusy.value = true
+  try {
+    if (importBackupFirst.value) {
+      const res: any = await backupDatabase(engine.value, target.name).catch(() => null)
+      if (!res?.success) return
+    }
+    const path = importSource.value === 'upload' ? await uploadImportFile(target.name) : importPath.value.trim()
+    const result: any = await importDatabase(engine.value, target.name, path)
+    if (result?.success && result.data?.success !== false) {
+      ElMessage.success(t('dbm.imported'))
+      importVisible.value = false
+      if (backupDrawer.value) await loadBackups()
+    }
+  } catch {
+    ElMessage.error(t('dbm.importUploadFailed'))
+  } finally {
+    importBusy.value = false
+  }
+}
+
 async function removeBackup(row: any) {
   if (!backupTarget.value) return
   try {
@@ -1041,6 +1156,29 @@ usePage(loadAll)
 </script>
 
 <style scoped lang="scss">
+/* ---------- Import ---------- */
+.import-source { margin-bottom: var(--lp-4); }
+.import-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--lp-6) var(--lp-4);
+  border: 1px dashed var(--lp-line-strong);
+  border-radius: var(--lp-r-lg);
+  background: var(--lp-surface-sunken);
+  color: var(--lp-text-soft);
+  cursor: pointer;
+  text-align: center;
+  &:hover { border-color: var(--lp-accent); color: var(--lp-accent); }
+  &.is-busy { cursor: default; opacity: 0.7; }
+  input { position: absolute; inset: 0; opacity: 0; cursor: inherit; }
+}
+.import-formats { font-size: var(--lp-text-xs); }
+.import-progress { margin-top: var(--lp-3); }
+.import-check { margin: var(--lp-3) 0; }
+
 /* ---------- Engine switcher ---------- */
 .engines {
   display: grid;

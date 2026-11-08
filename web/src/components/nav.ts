@@ -2,8 +2,9 @@
 
 import { markRaw, type Component } from 'vue'
 import {
-  AlarmClock, Bell, Box, Coin, Connection, FolderOpened, Histogram, InfoFilled, Lock, Monitor, Odometer, SetUp, Setting, Shop, Upload,
+  AlarmClock, Bell, Box, Coin, Connection, FolderOpened, Histogram, InfoFilled, Lock, Monitor, Odometer, SetUp, Shop, Upload,
 } from '@element-plus/icons-vue'
+import GearIcon from './icons/GearIcon.vue'
 
 /** Icons are the components themselves, not names looked up at run time. */
 const icon = (c: Component) => markRaw(c)
@@ -49,7 +50,7 @@ export const navGroups: NavGroup[] = [
   {
     key: 'system',
     titleKey: 'nav.groupSystem',
-    items: [{ path: '/settings', titleKey: 'settings', icon: icon(Setting) }],
+    items: [{ path: '/settings', titleKey: 'settings', icon: icon(GearIcon) }],
   },
 ]
 

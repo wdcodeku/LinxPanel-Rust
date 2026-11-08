@@ -487,8 +487,5 @@ async fn stop_site(
 
 /// Site types whose traffic is reverse-proxied rather than served from disk.
 fn is_proxied_site_type(site_type: &str) -> bool {
-    matches!(
-        site_type,
-        "proxy" | "node" | "python" | "java" | "go" | "binary"
-    )
+    site_type == "proxy" || crate::services::openresty::is_app_site_type(site_type)
 }

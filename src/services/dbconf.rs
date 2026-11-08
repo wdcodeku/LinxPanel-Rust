@@ -74,6 +74,8 @@ pub struct EngineSettings {
     pub superuser_password: Option<String>,
     pub params: Vec<Param>,
     pub logs: Vec<LogInfo>,
+    /// MySQL: hosts other than this machine that root may log in from.
+    pub root_remote_hosts: Vec<String>,
 }
 
 // ===== Helpers =====
@@ -374,6 +376,10 @@ fn mysql_settings(admin: Option<&MysqlAdmin>, mut base: EngineSettings) -> Engin
     if let Some(port) = vars.get("port").and_then(|p| p.parse().ok()) {
         base.port = port;
     }
+    base.root_remote_hosts = mysql_root_hosts(admin)
+        .into_iter()
+        .filter(|h| !is_local_host(h))
+        .collect();
     let datadir = vars.get("datadir").cloned();
     base.data_size = datadir.as_deref().and_then(dir_size);
     base.data_dir = datadir;
@@ -530,8 +536,88 @@ pub fn mysql_purge_binlogs(admin: Option<&MysqlAdmin>) -> Result<u64, String> {
     Ok(before.saturating_sub(binlog_total(admin)))
 }
 
+/// Hosts the root account exists for ('localhost', '%', '203.0.113.7', ...).
+fn mysql_root_hosts(admin: &MysqlAdmin) -> Vec<String> {
+    mysql_query(admin, "SELECT Host FROM mysql.user WHERE User = 'root';")
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+fn is_local_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// A MySQL account host: '%', an IP, or a pattern such as '192.168.1.%'.
+pub fn valid_account_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 60
+        && host
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | ':' | '%' | '_' | '/'))
+}
+
+/// Lets root log in from `host` (created with the root password) or, when
+/// `enabled` is false, removes every root account that is not this machine.
+pub fn mysql_set_root_remote(
+    admin: Option<&MysqlAdmin>,
+    enabled: bool,
+    host: &str,
+    password: Option<&str>,
+) -> Result<(), String> {
+    let admin = admin.ok_or("MySQL is not set up for the panel")?;
+    if enabled {
+        let password = password
+            .filter(|p| !p.is_empty())
+            .ok_or("Set the root password first (Root password tab)")?;
+        if !valid_account_host(host) || is_local_host(host) {
+            return Err("Enter %, an IP address, or a pattern such as 192.168.1.%".into());
+        }
+        let sql = format!(
+            "CREATE USER IF NOT EXISTS 'root'@'{host}' IDENTIFIED BY '{pw}';\n\
+             ALTER USER 'root'@'{host}' IDENTIFIED BY '{pw}';\n\
+             GRANT ALL PRIVILEGES ON *.* TO 'root'@'{host}' WITH GRANT OPTION;\n\
+             FLUSH PRIVILEGES;\n",
+            host = host,
+            pw = password
+        );
+        mysql_query(admin, &sql).map(|_| ())
+    } else {
+        let mut sql = String::new();
+        for h in mysql_root_hosts(admin).iter().filter(|h| !is_local_host(h)) {
+            if valid_account_host(h) {
+                sql.push_str(&format!("DROP USER IF EXISTS 'root'@'{}';\n", h));
+            }
+        }
+        if sql.is_empty() {
+            return Ok(());
+        }
+        sql.push_str("FLUSH PRIVILEGES;\n");
+        mysql_query(admin, &sql).map(|_| ())
+    }
+}
+
 fn mysql_set_root_password(admin: Option<&MysqlAdmin>, password: &str) -> Result<(), String> {
     let admin = admin.ok_or("MySQL is not set up for the panel")?;
+    mysql_set_local_root_password(admin, password)?;
+    // root accounts for other hosts (remote root) take the same password.
+    for host in mysql_root_hosts(admin).iter().filter(|h| !is_local_host(h)) {
+        if valid_account_host(host) {
+            mysql_query(
+                admin,
+                &format!(
+                    "ALTER USER 'root'@'{}' IDENTIFIED BY '{}';\nFLUSH PRIVILEGES;\n",
+                    host, password
+                ),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn mysql_set_local_root_password(admin: &MysqlAdmin, password: &str) -> Result<(), String> {
     let vars = mysql_vars(admin);
     let sql = if is_mariadb(&vars) {
         // Keeps root's socket login (what recovery tools use) next to the password.
@@ -1231,6 +1317,7 @@ pub async fn settings(pool: &SqlitePool, engine: Engine) -> EngineSettings {
             superuser_password: stored,
             params: Vec::new(),
             logs: Vec::new(),
+            root_remote_hosts: Vec::new(),
         };
         if !status.running {
             return base;
@@ -1264,6 +1351,7 @@ fn unreachable_settings(engine: Engine) -> EngineSettings {
         superuser_password: None,
         params: Vec::new(),
         logs: Vec::new(),
+        root_remote_hosts: Vec::new(),
     }
 }
 
