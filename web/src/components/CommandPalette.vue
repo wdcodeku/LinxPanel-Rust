@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { Right, Search } from '@element-plus/icons-vue'
 import { useI18n } from '@/i18n'
@@ -63,7 +63,7 @@ const inputRef = ref<HTMLInputElement>()
 const listRef = ref<HTMLElement>()
 
 const entries = computed(() => {
-  const list: Array<{ path: string; label: string; group: string; icon: string }> = []
+  const list: Array<{ path: string; label: string; group: string; icon: Component }> = []
   for (const group of navGroups) {
     for (const item of group.items) {
       list.push({ path: item.path, label: t(item.titleKey), group: t(group.titleKey), icon: item.icon })

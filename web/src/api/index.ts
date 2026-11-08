@@ -18,6 +18,7 @@ export const login = (data: { username: string; password: string; code?: string 
 export const getSystemInfo = () => request.get('/system/info')
 export const getSystemOverview = () => request.get('/system/overview')
 export const getSystemCounts = () => request.get('/system/counts')
+export const getPublicIp = () => request.get('/system/ip', { timeout: 30000 })
 export const getRealtimeSnapshot = () => request.get('/realtime/snapshot')
 
 // Processes

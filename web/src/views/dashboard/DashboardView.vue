@@ -107,6 +107,20 @@
           </header>
           <dl class="info">
             <div><dt>{{ t('ui.hostname') }}</dt><dd class="lp-truncate">{{ staticInfo?.hostname || '—' }}</dd></div>
+            <div>
+              <dt>{{ t('ui.publicIp') }}</dt>
+              <dd>
+                <button v-if="publicIp" type="button" class="ip lp-mono" :title="t('ui.clickCopy')" @click="copy(publicIp)">{{ publicIp }}</button>
+                <span v-else class="lp-dim">{{ publicIpLoaded ? t('ui.ipUnknown') : '…' }}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t('ui.localIp') }}</dt>
+              <dd class="ips">
+                <button v-for="ip in localIps" :key="ip" type="button" class="ip lp-mono" :title="t('ui.clickCopy')" @click="copy(ip)">{{ ip }}</button>
+                <span v-if="!localIps.length" class="lp-dim">—</span>
+              </dd>
+            </div>
             <div><dt>{{ t('ui.os') }}</dt><dd class="lp-truncate">{{ staticInfo?.os_version || staticInfo?.os_name || '—' }}</dd></div>
             <div><dt>{{ t('ui.kernel') }}</dt><dd class="lp-truncate">{{ staticInfo?.kernel_version || '—' }}</dd></div>
             <div><dt>{{ t('ui.arch') }}</dt><dd>{{ staticInfo?.arch || staticInfo?.platform || '—' }}</dd></div>
@@ -164,7 +178,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import MetricChart, { type Series } from '@/components/MetricChart.vue'
-import { getSystemCounts } from '@/api'
+import { ElMessage } from 'element-plus'
+import { getPublicIp, getSystemCounts } from '@/api'
 import { useRealtimeStore } from '@/stores/realtime'
 import { useI18n } from '@/i18n'
 import { usePage } from '@/utils/page'
@@ -193,8 +208,46 @@ async function loadCounts() {
     /* the card keeps its last numbers */
   }
 }
-onMounted(loadCounts)
-usePage(loadCounts)
+const publicIp = ref('')
+const publicIpLoaded = ref(false)
+async function loadPublicIp() {
+  try {
+    const res: any = await getPublicIp()
+    if (res.success) publicIp.value = res.data.ip || ''
+  } catch {
+    /* shown as unknown */
+  } finally {
+    publicIpLoaded.value = true
+  }
+}
+onMounted(() => {
+  loadCounts()
+  loadPublicIp()
+})
+usePage(() => {
+  loadCounts()
+  loadPublicIp()
+})
+
+/** The server's own addresses: IPv4 first, without loopback and link-local. */
+const localIps = computed(() => {
+  const all = (detail.value?.interfaces || [])
+    .filter((item) => item.name !== 'lo')
+    .flatMap((item) => item.ip_addresses || [])
+    .map((ip) => ip.split('/')[0])
+    .filter((ip) => ip && !ip.startsWith('127.') && ip !== '::1' && !ip.toLowerCase().startsWith('fe80'))
+  const unique = [...new Set(all)]
+  return [...unique.filter((ip) => !ip.includes(':')), ...unique.filter((ip) => ip.includes(':'))].slice(0, 4)
+})
+
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(t('ui.copied'))
+  } catch {
+    ElMessage.info(text)
+  }
+}
 
 const overview = computed(() => {
   const c = counts.value
@@ -429,6 +482,18 @@ function levelColor(percent: number) {
   div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: var(--lp-3); padding: 6px 0; font-size: var(--lp-text-sm); }
   dt { color: var(--lp-text-dim); }
   dd { margin: 0; color: var(--lp-text); }
+}
+.ips { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.ip {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--lp-text);
+  font-size: var(--lp-text-sm);
+  cursor: copy;
+  text-align: left;
+  word-break: break-all;
+  &:hover { color: var(--lp-accent); }
 }
 .bars { display: flex; flex-direction: column; gap: var(--lp-3); padding: var(--lp-4) var(--lp-5); }
 .bar__top { display: flex; justify-content: space-between; gap: var(--lp-3); font-size: var(--lp-text-sm); margin-bottom: 6px; }

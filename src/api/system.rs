@@ -12,6 +12,57 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/system/info", get(system_info))
         .route("/system/overview", get(system_overview))
         .route("/system/counts", get(counts))
+        .route("/system/ip", get(public_ip))
+}
+
+#[derive(serde::Serialize, Clone, Default)]
+struct PublicIp {
+    /// The server's address as seen from the internet; empty when no
+    /// lookup service answered.
+    ip: String,
+}
+
+/// Lookup services, domestic first; each answers with the bare address.
+const IP_SERVICES: &[&str] = &[
+    "https://4.ipw.cn",
+    "https://api.ipify.org",
+    "https://ifconfig.me/ip",
+    "https://ip.3322.net",
+];
+
+fn lookup_public_ip() -> String {
+    for url in IP_SERVICES {
+        let Ok(output) = crate::services::shell::run_with_timeout(
+            "curl",
+            &["-fsS", "--connect-timeout", "3", "--max-time", "5", url],
+            std::time::Duration::from_secs(7),
+        ) else {
+            continue;
+        };
+        let text = output.stdout.trim();
+        if output.ok() && text.parse::<std::net::IpAddr>().is_ok() {
+            return text.to_string();
+        }
+    }
+    String::new()
+}
+
+/// The public address, looked up at most every 30 minutes (5 after a miss).
+async fn public_ip() -> Json<ApiResponse<PublicIp>> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+    if let Some((at, ip)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        let ttl = if ip.is_empty() { 300 } else { 1800 };
+        if at.elapsed() < Duration::from_secs(ttl) {
+            return Json(ApiResponse::ok(PublicIp { ip }));
+        }
+    }
+    let ip = tokio::task::spawn_blocking(lookup_public_ip)
+        .await
+        .unwrap_or_default();
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), ip.clone()));
+    Json(ApiResponse::ok(PublicIp { ip }))
 }
 
 #[derive(serde::Serialize, Default)]

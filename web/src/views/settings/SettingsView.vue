@@ -145,10 +145,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, markRaw, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { Bell, Connection, InfoFilled, Refresh, Setting, Tickets, UploadFilled } from '@element-plus/icons-vue'
+import { Bell, Connection, InfoFilled, Lock, Promotion, Refresh, Setting, Tickets, UploadFilled } from '@element-plus/icons-vue'
 import RemoteBackup from './RemoteBackup.vue'
 import AlertNotify from './AlertNotify.vue'
 import AuditLog from './AuditLog.vue'
@@ -168,13 +168,13 @@ const route = useRoute()
 // ?tab=update opens a tab directly (the header's update badge links there).
 const tab = ref(typeof route.query.tab === 'string' ? route.query.tab : 'general')
 const pageTabs = computed(() => [
-  { name: 'general', label: t('st.tabGeneral'), icon: 'Setting' },
-  { name: 'security', label: t('st.tabSecurity'), icon: 'Lock' },
-  { name: 'update', label: t('upd.tab'), icon: 'Promotion' },
-  { name: 'alerts', label: t('st.tabAlerts'), icon: 'Bell' },
-  { name: 'backup', label: t('rs.tab'), icon: 'UploadFilled' },
-  { name: 'audit', label: t('au.tab'), icon: 'Tickets' },
-  { name: 'about', label: t('st.tabAbout'), icon: 'InfoFilled' },
+  { name: 'general', label: t('st.tabGeneral'), icon: markRaw(Setting) },
+  { name: 'security', label: t('st.tabSecurity'), icon: markRaw(Lock) },
+  { name: 'update', label: t('upd.tab'), icon: markRaw(Promotion) },
+  { name: 'alerts', label: t('st.tabAlerts'), icon: markRaw(Bell) },
+  { name: 'backup', label: t('rs.tab'), icon: markRaw(UploadFilled) },
+  { name: 'audit', label: t('au.tab'), icon: markRaw(Tickets) },
+  { name: 'about', label: t('st.tabAbout'), icon: markRaw(InfoFilled) },
 ])
 // The page stays alive between visits: follow ?tab= links on later visits too.
 watch(() => route.query.tab, (value) => {
