@@ -12,6 +12,15 @@
       <section v-if="!loaded" class="lp-card env">
         <el-skeleton animated :rows="2" />
       </section>
+      <section v-else-if="current.key === 'binary'" class="lp-card env">
+        <div class="env__main">
+          <span class="rt-logo rt-logo--lg" data-kind="binary">bin</span>
+          <div class="env__text">
+            <div class="env__title">{{ t('rt.binary') }}</div>
+            <p class="env__desc">{{ t('rt.langDesc.binary') }}</p>
+          </div>
+        </div>
+      </section>
       <section v-else class="lp-card env" :class="{ 'env--off': !current.runtime?.installed }">
         <div class="env__main">
           <span class="rt-logo rt-logo--lg" :data-kind="current.key">{{ logoText(current.key) }}</span>
@@ -57,15 +66,15 @@
       <section v-if="loaded" class="lp-card">
         <div class="lp-toolbar">
           <div class="lp-toolbar__left">
-            <el-button type="primary" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
+            <el-button type="primary" @click="openCreate()">{{ current.key === 'binary' ? t('rt.newStandalone') : t('rt.newAppOf', { name: current.label }) }}</el-button>
           </div>
-          <div class="lp-toolbar__right lp-dim">{{ t('rt.appsOf', { name: current.label }) }} · {{ current.apps.length }}</div>
+          <div class="lp-toolbar__right lp-dim">{{ current.key === 'binary' ? t('rt.binary') : t('rt.appsOf', { name: current.label }) }} · {{ current.apps.length }}</div>
         </div>
         <div v-if="!current.apps.length" class="empty">
           <span class="rt-logo rt-logo--lg" :data-kind="current.key">{{ logoText(current.key) }}</span>
-          <p class="empty__title">{{ t('rt.noAppsOf', { name: current.label }) }}</p>
+          <p class="empty__title">{{ current.key === 'binary' ? t('rt.noStandalone') : t('rt.noAppsOf', { name: current.label }) }}</p>
           <p class="empty__hint">{{ t(`rt.appHint.${current.key}`) }}</p>
-          <el-button type="primary" :icon="Plus" @click="openCreate()">{{ t('rt.newAppOf', { name: current.label }) }}</el-button>
+          <el-button type="primary" :icon="Plus" @click="openCreate()">{{ current.key === 'binary' ? t('rt.newStandalone') : t('rt.newAppOf', { name: current.label }) }}</el-button>
         </div>
         <el-table v-else :data="current.apps" size="small">
           <el-table-column :label="t('rt.appName')" min-width="190">
@@ -83,7 +92,7 @@
           <el-table-column :label="t('rt.entry')" min-width="170">
             <template #default="{ row }">
               <code class="lp-mono lp-truncate entry">{{ row.entry }} {{ row.args }}</code>
-              <span v-if="current.key === 'go'" class="lp-dim kind-note">{{ runtimeLabel(row.runtime) }}</span>
+              <span v-if="current.key === 'go'" class="lp-dim kind-note">{{ isGoSource(row.entry) ? t('rt.goFromSource') : t('rt.goBuilt') }}</span>
             </template>
           </el-table-column>
           <el-table-column :label="t('rt.port')" width="80">
@@ -290,22 +299,24 @@ type AppRow = {
 
 const { t } = useI18n()
 
-type LangKey = 'php' | 'node' | 'python' | 'java' | 'go' | 'dotnet' | 'rust' | 'ruby' | 'lua'
+type LangKey = 'php' | 'node' | 'python' | 'java' | 'go' | 'dotnet' | 'rust' | 'ruby' | 'lua' | 'binary'
 const LANG_RUNTIMES: Record<LangKey, string[]> = {
   php: ['php'],
   node: ['node'],
   python: ['python'],
   java: ['java'],
-  // Compiled Go programs and any other binary run the same way.
-  go: ['go', 'binary'],
+  // Go: a built program or the source (compiled on start).
+  go: ['go'],
   dotnet: ['dotnet'],
   rust: ['rust'],
   ruby: ['ruby'],
   lua: ['lua'],
+  // Standalone programs: any already-compiled executable, whatever its language.
+  binary: ['binary'],
 }
 const LANG_LABELS: Record<LangKey, string> = {
   php: 'PHP', node: 'Node.js', python: 'Python', java: 'Java', go: 'Go',
-  dotnet: 'C# / .NET', rust: 'Rust', ruby: 'Ruby', lua: 'Lua',
+  dotnet: 'C# / .NET', rust: 'Rust', ruby: 'Ruby', lua: 'Lua', binary: '',
 }
 /** Runtimes whose dependency step builds the app (vs. only fetching packages). */
 const BUILD_RUNTIMES = ['dotnet', 'rust']
@@ -355,7 +366,7 @@ const appRuntimes = computed(() => [
   { value: 'node', label: 'Node.js' },
   { value: 'python', label: 'Python' },
   { value: 'java', label: 'Java (jar)' },
-  { value: 'go', label: t('rt.goBinary') },
+  { value: 'go', label: 'Go' },
   { value: 'binary', label: t('rt.binary') },
   { value: 'php', label: 'PHP (CLI)' },
   { value: 'dotnet', label: 'C# / .NET' },
@@ -368,7 +379,7 @@ const langTabs = computed(() =>
   languages.value.map((lang) => ({
     name: lang.key,
     label: lang.label,
-    dot: (lang.runtime?.installed ? 'ok' : 'off') as any,
+    dot: (lang.key === 'binary' ? '' : lang.runtime?.installed ? 'ok' : 'off') as any,
     badge: lang.apps.length ? `${lang.running}/${lang.apps.length}` : '',
   })),
 )
@@ -377,7 +388,7 @@ const languages = computed(() =>
     const list = apps.value.filter((app) => LANG_RUNTIMES[key].includes(app.runtime))
     return {
       key,
-      label: LANG_LABELS[key],
+      label: key === 'binary' ? t('rt.binary') : LANG_LABELS[key],
       runtime: runtimes.value.find((r) => r.kind === key),
       apps: list,
       running: list.filter((app) => app.running).length,
@@ -391,12 +402,14 @@ const formRuntimes = computed(() => {
   return appRuntimes.value.filter((kind) => own.includes(kind.value) || kind.value === form.runtime)
 })
 
-function runtimeLabel(kind: string) {
-  return appRuntimes.value.find((item) => item.value === kind)?.label || kind
+/** A Go entry naming source: ".", a .go file, or a ./dir of the project. */
+function isGoSource(entry: string) {
+  const e = (entry || '').trim()
+  return e === '.' || e.endsWith('.go') || e.startsWith('./cmd/')
 }
 
 function logoText(kind: string) {
-  return ({ php: 'php', node: 'js', python: 'py', java: 'jv', go: 'go', dotnet: 'C#', rust: 'rs', ruby: 'rb', lua: 'lua' } as Record<string, string>)[kind] || kind.slice(0, 2)
+  return ({ php: 'php', node: 'js', python: 'py', java: 'jv', go: 'go', dotnet: 'C#', rust: 'rs', ruby: 'rb', lua: 'lua', binary: 'bin' } as Record<string, string>)[kind] || kind.slice(0, 2)
 }
 
 function uptimeOf(row: AppRow) {
@@ -487,9 +500,9 @@ const form = reactive({
 })
 
 const entryLabel = computed(() =>
-  form.runtime === 'java' ? t('rt.entryJar') : form.runtime === 'go' || form.runtime === 'binary'
+  form.runtime === 'java' ? t('rt.entryJar') : form.runtime === 'binary'
     ? t('rt.entryBinary')
-    : t('rt.entry'),
+    : form.runtime === 'go' ? t('rt.entryGo') : t('rt.entry'),
 )
 const entryHint = computed(() =>
   ({
@@ -499,6 +512,8 @@ const entryHint = computed(() =>
     rust: t('rt.entryHintRust'),
     ruby: t('rt.entryHintRuby'),
     lua: t('rt.entryHintLua'),
+    go: t('rt.entryHintGo'),
+    binary: t('rt.entryHintBinary'),
   } as Record<string, string>)[form.runtime] || '',
 )
 
@@ -538,7 +553,7 @@ const entryPlaceholder = computed(
       node: 'server.js',
       python: 'main.py',
       java: 'app.jar',
-      go: './server',
+      go: '. / main.go / ./server',
       binary: './myapp',
       php: 'worker.php',
       dotnet: 'publish/MyApp.dll',
@@ -1019,6 +1034,7 @@ onUnmounted(() => {
   &[data-kind='go'] { background: rgba(0, 173, 216, 0.16); color: #00add8; }
   &[data-kind='dotnet'] { background: rgba(81, 43, 212, 0.14); color: #6a45e0; }
   &[data-kind='rust'] { background: rgba(183, 65, 14, 0.14); color: #b7410e; }
+  &[data-kind='binary'] { background: rgba(71, 85, 105, 0.14); color: #475569; }
   &[data-kind='ruby'] { background: rgba(204, 52, 45, 0.14); color: #cc342d; }
   &[data-kind='lua'] { background: rgba(0, 0, 128, 0.12); color: #3b4cc0; }
 }

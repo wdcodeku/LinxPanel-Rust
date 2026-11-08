@@ -347,6 +347,80 @@ fn python_for(work_dir: &std::path::Path) -> String {
     runtime::interpreter_path("python").unwrap_or_else(|| "python3".into())
 }
 
+/// Where a Go app given as source is compiled to (inside its directory),
+/// one file per app so apps sharing a directory never overwrite each other.
+fn go_build_output(record: &AppRecord) -> String {
+    format!(".linxpanel/app-{}", record.id)
+}
+
+/// A Go entry naming source rather than a built program: ".", a .go file,
+/// or a directory of the project (./cmd/server).
+fn go_source_entry(work_dir: &std::path::Path, entry: &str) -> bool {
+    let entry = entry.trim();
+    if entry == "." || entry.ends_with(".go") {
+        return true;
+    }
+    let path = work_dir.join(entry);
+    path.is_dir()
+        && std::fs::read_dir(&path)
+            .map(|mut items| {
+                items.any(|e| {
+                    e.map(|e| e.file_name().to_string_lossy().ends_with(".go"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+}
+
+/// Compiles a Go app given as source (`go build -o .linxpanel/app <entry>`),
+/// writing the compiler output to the app's log. Blocking.
+fn build_go_source(record: &AppRecord, log_file: &std::path::Path) -> Result<(), String> {
+    let work_dir = std::path::Path::new(&record.work_dir);
+    let go = runtime::interpreter_path("go")
+        .or_else(|| shell::which("go").map(|p| p.to_string_lossy().to_string()))
+        .ok_or("Go is not installed (Runtimes > Go)")?;
+    let output_name = go_build_output(record);
+    let out = work_dir.join(&output_name);
+    if let Some(dir) = out.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let entry = record.entry.trim();
+    append_log(
+        log_file,
+        &format!("[LinxPanel] go build -o {} {}\n", output_name, entry),
+    );
+    let mut command = std::process::Command::new(&go);
+    command
+        .args(["build", "-o", output_name.as_str(), entry])
+        .current_dir(work_dir);
+    // A service started without HOME has no Go build cache otherwise.
+    if std::env::var_os("HOME").is_none() {
+        command.env("HOME", "/root");
+    }
+    for (key, value) in parse_env(&record.env) {
+        command.env(key, value);
+    }
+    let output = shell::run_command(command, None, std::time::Duration::from_secs(900))?;
+    let text = format!("{}{}", output.stdout, output.stderr);
+    if !text.trim().is_empty() {
+        append_log(log_file, &text);
+    }
+    if !output.ok() {
+        let detail: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(8)
+            .collect();
+        return Err(format!("go build failed:\n{}", detail.join("\n")));
+    }
+    let run_user = normalized_user(&record.run_user);
+    if !run_user.is_empty() {
+        chown_to(&run_user, &work_dir.join(".linxpanel"));
+    }
+    append_log(log_file, "[LinxPanel] Build finished\n");
+    Ok(())
+}
+
 /// Builds the command line for an app. Returns (program, args).
 ///
 /// Besides a script/jar/binary path, the entry may be a command line:
@@ -410,6 +484,14 @@ fn build_command(record: &AppRecord) -> Result<(String, Vec<String>), String> {
                 .filter(|cargo| std::path::Path::new(cargo).exists())
                 .unwrap_or_else(|| "cargo".into()),
             rest,
+        ),
+        // Go source (".", main.go, ./cmd/server) was compiled by `start`.
+        "go" if go_source_entry(work_dir, &entry) => (
+            work_dir
+                .join(go_build_output(record))
+                .to_string_lossy()
+                .to_string(),
+            Vec::new(),
         ),
         // A bare name like "app" means the file in the project, not one on PATH.
         "go" | "binary" | "rust" => {
@@ -777,13 +859,24 @@ pub async fn start(
         return Err("Application is already running".into());
     }
     let record = get(&pool, id).await?;
-    let (program, args) = build_command(&record)?;
-
     let log_file = log_path(&data_dir, id);
     if let Some(parent) = log_file.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     rotate_if_needed(&log_file);
+
+    // Go given as source is compiled on every (re)start from the panel; a
+    // crash restart by the supervisor reuses the last build.
+    if record.runtime == "go"
+        && go_source_entry(std::path::Path::new(&record.work_dir), &record.entry)
+    {
+        let build_record = record.clone();
+        let build_log = log_file.clone();
+        tokio::task::spawn_blocking(move || build_go_source(&build_record, &build_log))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    let (program, args) = build_command(&record)?;
 
     let (stop_tx, stop_rx) = oneshot::channel();
     // Spawn once synchronously so the caller learns about bad commands immediately.

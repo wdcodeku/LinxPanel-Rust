@@ -115,8 +115,9 @@ pub fn sample(
                     text = page("Go")
                 )),
             ],
-            entry: "app".into(),
-            build: true,
+            // Source: the panel compiles it with `go build` when it starts.
+            entry: ".".into(),
+            build: false,
         },
         "java" => Sample {
             files: vec![s("Main.java", format!(
